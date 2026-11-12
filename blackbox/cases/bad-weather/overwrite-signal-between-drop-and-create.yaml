@@ -1,0 +1,19 @@
+description: SIGINT after --overwrite dropped the database, while its CREATE DATABASE is held 6 s on the way to the server, does not lose the database; the create finishes, the run is exit 130 and says the database was recreated and left empty
+proxy:
+  - {query: "^CREATE DATABASE", do: {delay: 6}}
+project:
+  files:
+    deploy.sql: CREATE TABLE marker (n int);
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - sql: CREATE TABLE old_marker (n int)
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}", --overwrite, --force]
+    signal: {name: SIGINT, after: 3}
+    timeout: 30
+    expect:
+      exit: 130
+      stderr: ["recreated database \"{db}\", left empty"]
+      sql:
+        - query: SELECT to_regclass('old_marker') IS NULL, to_regclass('marker') IS NULL
+          rows: [[true, true]]

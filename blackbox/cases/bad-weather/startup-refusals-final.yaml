@@ -1,0 +1,25 @@
+description: a FATAL startup refusal outside class 08, 53300 and 57P03 (here 57P01 admin shutdown and 25006 read-only) is exit 11 at once with no retry; four 53300 refusals end with the max_connections hint
+proxy:
+  - {at: startup, do: {error: "57P01"}, step: 1}
+  - {at: startup, do: {error: "25006", message: "cannot connect in a read-only transaction"}, step: 2}
+  - {at: startup, do: {error: "53300"}, step: 3}
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ["terminating connection due to administrator command \\(SQLSTATE 57P01\\)"]
+      stderr_not: ["retrying", "ERROR:"]
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ["cannot connect in a read-only transaction \\(SQLSTATE 25006\\)"]
+      stderr_not: ["retrying"]
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ["too many", "max_connections"]

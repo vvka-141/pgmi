@@ -1,6 +1,8 @@
+import re
+
 import pytest
 
-from pgmi_blackbox.case import CaseError, Dir, Fifo, Symlink, Until, implementation, parse_case
+from pgmi_blackbox.case import CaseError, Dir, Fault, Fifo, Symlink, Until, implementation, parse_case
 
 MINIMAL = {
     "description": "deploy succeeds",
@@ -184,3 +186,55 @@ def test_stdin_until_holds_a_regex_and_refuses_bad_ones():
             parse_case("cases/x.yaml", {**MINIMAL, "steps": [{"pgmi": ["serve"], "stdin": [bad], "expect": {"exit": 0}}]})
     with pytest.raises(CaseError):
         parse_case("cases/x.yaml", {**MINIMAL, "steps": [{"pgmi": ["serve"], "tty": True, "stdin": [{"until": "x"}], "expect": {"exit": 0}}]})
+
+
+def _plan(*rules):
+    return parse_case("cases/x.yaml", {**MINIMAL, "proxy": list(rules)}).proxy
+
+
+def test_a_proxy_plan_lists_faults():
+    assert parse_case("cases/x.yaml", MINIMAL).proxy is None
+    assert _plan() == ()
+    assert _plan(
+        {"at": "accept", "do": "reset", "times": 3},
+        {"query": "pg_sleep", "do": "freeze", "after": 0.5, "step": 1},
+        {"at": "close", "do": {"delay": 3}},
+        {"at": "startup", "do": {"error": "57P03"}},
+        {"query": "INSERT", "do": {"error": "25006", "severity": "ERROR", "message": "read only"}},
+    ) == (
+        Fault("accept", "reset", times=3),
+        Fault("query", "freeze", "pg_sleep", after=0.5, step=1),
+        Fault("close", "delay", seconds=3.0),
+        Fault("startup", "error", sqlstate="57P03"),
+        Fault("query", "error", "INSERT", sqlstate="25006", severity="ERROR", message="read only"),
+    )
+
+
+@pytest.mark.parametrize(
+    ("rule", "field"),
+    [
+        ({"do": "reset"}, "proxy[0]"),
+        ({"at": "accept", "query": "x", "do": "reset"}, "proxy[0]"),
+        ({"at": "connect", "do": "reset"}, "proxy[0].at"),
+        ({"query": "(", "do": "reset"}, "proxy[0].query"),
+        ({"at": "accept", "do": "drop"}, "proxy[0].do"),
+        ({"at": "accept", "do": {"delay": 1}, "after": 1}, "proxy[0].after"),
+        ({"at": "accept", "do": {"delay": 1, "x": 2}}, "proxy[0].do.x"),
+        ({"at": "accept", "do": {"error": "57P01"}}, "proxy[0].do"),
+        ({"at": "startup", "do": {"error": 57}}, "proxy[0].do.error"),
+        ({"at": "startup", "do": {"error": "57P01", "severity": "LOG"}}, "proxy[0].do.severity"),
+        ({"at": "startup", "do": {"error": "25006", "severity": "ERROR"}}, "proxy[0].do.severity"),
+        ({"query": "x", "do": {"error": "25006", "severity": "ERROR"}, "after": 1}, "proxy[0].do.severity"),
+        ({"at": "accept", "do": "reset", "times": 0}, "proxy[0].times"),
+        ({"at": "accept", "do": "reset", "step": -1}, "proxy[0].step"),
+        ({"at": "accept", "do": "reset", "when": 1}, "proxy[0].when"),
+    ],
+)
+def test_a_bad_fault_is_refused_by_field(rule, field):
+    with pytest.raises(CaseError, match=rf"{re.escape(field)}:"):
+        _plan(rule)
+
+
+def test_a_proxy_plan_is_a_list():
+    with pytest.raises(CaseError, match="proxy: must be a list"):
+        parse_case("cases/x.yaml", {**MINIMAL, "proxy": {"at": "accept"}})

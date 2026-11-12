@@ -1,0 +1,31 @@
+description: a deploy that deadlocks with another session and is chosen as the victim (it waits last, so its deadlock check finds the cycle) is exit 13 with SQLSTATE 40P01; its transaction is rolled back and the other session commits
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS a (n int);
+      CREATE TABLE IF NOT EXISTS b (n int);
+      CREATE TABLE IF NOT EXISTS done (who text);
+      DO $$
+      BEGIN
+          IF current_setting('pgmi.setup', true) IS NULL THEN
+              LOCK TABLE b IN ACCESS EXCLUSIVE MODE;
+              PERFORM pg_sleep(7);
+              LOCK TABLE a IN ACCESS EXCLUSIVE MODE;
+              INSERT INTO done VALUES ('pgmi');
+          END IF;
+      END $$;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env: {PGMI_PARAM_SETUP: "true"}
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    background: true
+    timeout: 30
+    expect:
+      exit: 13
+      stderr: ["deadlock detected", "40P01"]
+      sql:
+        - query: SELECT string_agg(who, ',') FROM done
+          rows: [["other"]]
+  - sql: BEGIN; LOCK TABLE a IN ACCESS EXCLUSIVE MODE; SELECT pg_sleep(3); LOCK TABLE b IN ACCESS EXCLUSIVE MODE; INSERT INTO done VALUES ('other'); COMMIT;
+    delay: 1

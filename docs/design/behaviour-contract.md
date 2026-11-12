@@ -404,7 +404,7 @@ it is and to name an existing one (the connection string's database or
 closed early to check `pg_isready` (never a TLS hint). A server error keeps
 its own severity (`FATAL:`, `ERROR:`).
 
-Cases: `errors/connection-failures`, `connection/connect-timeout-range`, `env/pg-tls-protocol-variables`, `connection/pgpass`, `connection/pgpass-wildcard-and-file`, `connection/pgpass-world-readable`, `connection/multi-host`, `connection/target-session-attrs`, `connection/keywords`, `connection/unix-socket`, `env/pg-variables`, `env/pgappname`, `env/pgconnect-timeout`, `env/ignored-variables`, `errors/connection-failures`, `exit-codes/11-connection-failed`, `connection/protocol-version`.
+Cases: `errors/connection-failures`, `connection/connect-timeout-range`, `env/pg-tls-protocol-variables`, `connection/pgpass`, `connection/pgpass-wildcard-and-file`, `connection/pgpass-world-readable`, `connection/multi-host`, `connection/target-session-attrs`, `connection/keywords`, `connection/unix-socket`, `env/pg-variables`, `env/pgappname`, `env/pgconnect-timeout`, `env/ignored-variables`, `errors/connection-failures`, `exit-codes/11-connection-failed`, `connection/protocol-version`, `bad-weather/connect-resets-retried`, `bad-weather/startup-refusals-retried`, `bad-weather/startup-refusals-final`.
 
 ### TLS
 
@@ -457,7 +457,7 @@ nothing is dropped. A database PostgreSQL marked invalid (connection limit
 -2, left by an interrupted `DROP DATABASE`) comes back with no connection
 limit. Full reference: `docs/CLI.md` "--overwrite".
 
-Cases: `exit-codes/12-overwrite-denied`, `flags/overwrite-force`, `flags/overwrite-connection-limit`, `flags/overwrite-invalid-database`, `flags/overwrite-new-database`, `flags/overwrite-restores`, `terminal/overwrite-confirmation`, `terminal/force-banner`, `terminal/force-countdown-timeout`, `terminal/non-interactive`, `terminal/prompt-cancel`, `connection/maintenance-database-only-when-needed`. A signal after the drop: Rust integration test `a_signal_after_the_drop_still_recreates_and_restores_the_database` (a case cannot hold `CREATE DATABASE` on a lock).
+Cases: `exit-codes/12-overwrite-denied`, `flags/overwrite-force`, `flags/overwrite-connection-limit`, `flags/overwrite-invalid-database`, `flags/overwrite-new-database`, `flags/overwrite-restores`, `terminal/overwrite-confirmation`, `terminal/force-banner`, `terminal/force-countdown-timeout`, `terminal/non-interactive`, `terminal/prompt-cancel`, `connection/maintenance-database-only-when-needed`. A signal after the drop: `bad-weather/overwrite-signal-between-drop-and-create` (the fault-injecting proxy holds the `CREATE DATABASE`), and the Rust integration test `a_signal_after_the_drop_still_recreates_and_restores_the_database`.
 
 ### Concurrency
 
@@ -473,7 +473,12 @@ of "<db>" is running`) and drops nothing. The check for a running deploy comes
 after the approval, right before the drop: a deploy that started during the
 prompt or the countdown is not ended, and the overwrite is exit 15.
 
-Cases: `exit-codes/15-concurrent-deploy`, `execution/open-transaction`, `execution/tail-block-fails`, `flags/overwrite-concurrent`, `flags/overwrite-deploy-during-approval`. Rust integration test `a_held_overwrite_lock_refuses_a_second_overwrite_with_exit_15`.
+Both locks are released on the server before pgmi disconnects, after a
+failure too, so a rerun is never refused because the closed connection reached
+the server late. A connection lost while holding the deploy lock takes the lock
+with it once the server notices.
+
+Cases: `exit-codes/15-concurrent-deploy`, `execution/open-transaction`, `execution/tail-block-fails`, `flags/overwrite-concurrent`, `flags/overwrite-deploy-during-approval`, `bad-weather/overwrite-slow-close`, `bad-weather/setup-failure-slow-close`, `bad-weather/reset-in-session-setup`, `bad-weather/reset-at-lock-release`. Rust integration test `a_held_overwrite_lock_refuses_a_second_overwrite_with_exit_15`.
 
 ### Execution contract
 
@@ -490,7 +495,14 @@ A head that ends with `COMMIT AND CHAIN` or `END AND CHAIN` counts as committed
 although the session is never idle after it; a `deploy.sql` that ends right
 there succeeds, and the empty chained transaction is rolled back.
 
-Cases: `execution/atomic-head`, `execution/tail-autocommit`, `execution/open-transaction`, `execution/tail-block-fails`, `execution/commit-and-chain`.
+A connection lost while `deploy.sql` runs (reset, or the server ending the
+session with FATAL) is exit 13 with the server's text; what the head or
+earlier tail statements committed stays. Lost while the session tables are
+created, before `deploy.sql`, it is exit 1. A lock held by another session is
+waited for; `lock_timeout`, a deadlock (40P01) and a serialization failure
+(40001) are exit 13 like any SQL error, and pgmi never retries them.
+
+Cases: `execution/atomic-head`, `execution/tail-autocommit`, `execution/open-transaction`, `execution/tail-block-fails`, `execution/commit-and-chain`, `bad-weather/reset-in-transaction`, `bad-weather/reset-in-tail`, `bad-weather/server-errors-mid-deploy`, `bad-weather/lock-wait`, `bad-weather/lock-timeout`, `bad-weather/deadlock`, `bad-weather/serialization-failure`.
 
 ### Test macro
 
@@ -587,9 +599,14 @@ Go duration holds (about 2562047h) is refused: exit 2 on the flag, 10 in
 ended inside an open transaction, and the lock release after every deploy,
 get 3 s; a server that does not answer by then has its connection closed,
 which rolls back as well (Rust integration test
-`a_rollback_the_server_never_answers_does_not_hang_the_deploy`).
+`a_rollback_the_server_never_answers_does_not_hang_the_deploy`). A server
+that freezes, answering neither the session nor the cancel request, still ends
+the run within 2.5 s of `--timeout`. A signal while connecting, between
+connection attempts, while the session tables are created, in the tail or at
+the lock release is exit 130 at once; in the tail the running statement is
+cancelled and the earlier ones stay committed.
 
-Cases: `config/pgmi-yaml-timeout-too-long`, `exit-codes/16-timeout`, `exit-codes/130-interrupted`, `exit-codes/130-sigterm`, `flags/timeout-forms`, `cancel/timeout-cancels`, `cancel/timeout-over-tls`, `cancel/sigint-twice`, `env/pgconnect-timeout`, `cancel/ctrl-c-json-exit-code`, `cancel/timeout-leaves-invalid-concurrent-index`, `cancel/stopped-record`.
+Cases: `config/pgmi-yaml-timeout-too-long`, `exit-codes/16-timeout`, `exit-codes/130-interrupted`, `exit-codes/130-sigterm`, `flags/timeout-forms`, `cancel/timeout-cancels`, `cancel/timeout-over-tls`, `cancel/sigint-twice`, `env/pgconnect-timeout`, `cancel/ctrl-c-json-exit-code`, `cancel/timeout-leaves-invalid-concurrent-index`, `cancel/stopped-record`, `bad-weather/frozen-server-timeout`, `bad-weather/signal-while-connecting`, `bad-weather/signal-during-connect-backoff`, `bad-weather/signal-during-session-setup`, `bad-weather/signal-in-tail`, `bad-weather/signal-at-lock-release`, `bad-weather/lock-wait-timeout`.
 
 ### Checksums
 
@@ -690,15 +707,16 @@ over a wrong `AZURE_TENANT_ID`; a principal without a database role is exit 11
 naming the user (`check that the signed-in identity has a database role and
 that --username matches it`); a wrong tenant is exit 11 (`AADSTS90002`).
 A sign-in endpoint that fails briefly is asked again, as the Go SDKs do: a
-managed identity endpoint other than IMDS (Arc, Cloud Shell, Service
-Fabric, Azure ML) on 408, 429, 500, 502, 503, 504 or no answer (4 attempts,
+managed identity endpoint other than IMDS (App Service, Arc, Cloud Shell,
+Service Fabric, Azure ML) on 408, 429, 500, 502, 503, 504 or no answer (4 attempts,
 waits 0.8 s, 2.4 s, 5.6 s); the Cloud SQL Admin API on 5xx (5
 attempts, waits from about 0.3 s growing by 1.6); a Google access token on
-an error its library calls transient. When every attempt fails the error
+an error its library calls transient; the AWS container credentials
+endpoint on 5xx. When every attempt fails the error
 says how many were made. The Rust binary also retries an Admin API call that
 got no answer, which Go's connector does not.
 
-Cases: `cloud/azure-msi-retry`, `cloud/azure-cli`, `cloud/azure-managed-identity`, `cloud/azure-powershell`, `cloud/azure-cloud-shell`, `cloud/azure-ml`, `cloud/azure-service-fabric`, `cloud/aws-iam-token`, `cloud/aws-credential-source`, `cloud/dotenv-feeds-sdk`, `cloud/token-auth-requires-tls`, `cloud/google-arguments`, `cloud/azure-client-id-never-uses-the-cli`, `cloud/aws-session-token-and-profile`, `cloud/cloud-ids-env-beats-yaml`.
+Cases: `cloud/azure-msi-retry`, `cloud/azure-cli`, `cloud/azure-managed-identity`, `cloud/azure-powershell`, `cloud/azure-cloud-shell`, `cloud/azure-ml`, `cloud/azure-service-fabric`, `cloud/aws-iam-token`, `cloud/aws-credential-source`, `cloud/dotenv-feeds-sdk`, `cloud/token-auth-requires-tls`, `cloud/google-arguments`, `cloud/azure-client-id-never-uses-the-cli`, `cloud/aws-session-token-and-profile`, `cloud/cloud-ids-env-beats-yaml`, `bad-weather/azure-managed-identity-retries`, `bad-weather/azure-managed-identity-gives-up`, `bad-weather/aws-credential-endpoints-retried`.
 Service principal and the real Cloud SQL connector: no case; neither can be
 pointed at a local fake from the Go binary (see `blackbox/COVERAGE.md` "Cloud
 sign-in"); the Rust binary is checked against the runner's fakes by Rust

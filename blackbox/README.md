@@ -109,6 +109,40 @@ Databases a case creates there are dropped afterwards.
 
 The certificates come from `openssl`; Docker and `openssl` must be on `PATH`.
 
+A `/flaky/<code>x<n>/` prefix on a fake endpoint's path answers `<code>` to
+its first `n` requests, then serves the rest of the path.
+
+## Fault injection
+
+`proxy:` puts a TCP proxy (`pgmi_blackbox/proxy.py`) in front of the main
+server for the whole case; reach it with `{proxy_conn}` (URI of the maintenance
+database, `sslmode=disable`) or `{proxy_port}`. It logs every connection,
+startup, query and fault to `{proxy_log}`. Each fault is one rule; the first
+rule that matches an event acts:
+
+```yaml
+proxy:
+  - {at: startup, do: reset, times: 3, step: 1}       # the first 3 startups during steps[1]
+  - {at: startup, do: {error: "53300"}}               # FATAL with that SQLSTATE, then close
+  - {query: head_sleep, do: {error: "57P01"}, after: 0.5}  # forward, 0.5 s later end the session
+  - {query: INSERT, do: {error: "25006", severity: ERROR}} # answer in the server's place, session goes on
+  - {query: pg_sleep, do: freeze, after: 0.5}         # stop answering anything, cancel requests included
+  - {query: "^CREATE DATABASE", do: {delay: 6}}       # hold that query 6 s on its way to the server
+  - {at: close, do: {delay: 3}}                       # the client's close reaches the server 3 s late
+```
+
+`at` is `accept`, `startup` or `close`; `query` is a regex on the text of a
+Query or Parse message (the two are exclusive). `do` is `reset` (RST both
+sides), `freeze`, `{delay: s}` or `{error: SQLSTATE, severity, message}`
+(`FATAL` by default; `ERROR` only for a query, not with `after`). Without
+`after` the fault acts instead of forwarding the message; with it the message
+goes through first. `times` limits a rule to its first matches; `step` to one
+step. The proxy answers an SSLRequest with `N` itself.
+
+A server stays busy after its client vanishes until its statement ends: a
+case that resets a running statement sets `client_connection_check_interval`
+in `deploy.sql` so the orphan ends at once.
+
 `COVERAGE.md` lists every behaviour and the case that checks it. A new case
 updates its row.
 

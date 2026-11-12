@@ -1,0 +1,25 @@
+description: a repeatable-read deploy that updates a row another session changed after its snapshot is exit 13 with SQLSTATE 40001 (pgmi never retries it; deploy.sql decides), and only the other session's change is kept
+project:
+  files:
+    deploy.sql: |
+      BEGIN ISOLATION LEVEL REPEATABLE READ;
+      CREATE TABLE IF NOT EXISTS counter (n int);
+      INSERT INTO counter SELECT 0 WHERE NOT EXISTS (SELECT FROM counter);
+      SELECT pg_sleep(CASE WHEN current_setting('pgmi.setup', true) = 'true' THEN 0 ELSE 3 END);
+      UPDATE counter SET n = n + 1;
+      COMMIT;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env: {PGMI_PARAM_SETUP: "true"}
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    background: true
+    timeout: 30
+    expect:
+      exit: 13
+      stderr: ["could not serialize access due to concurrent update", "40001"]
+      sql:
+        - query: SELECT n FROM counter
+          rows: [[11]]
+  - sql: UPDATE counter SET n = n + 10
+    delay: 1.5

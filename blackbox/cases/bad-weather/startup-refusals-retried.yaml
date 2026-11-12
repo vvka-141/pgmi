@@ -1,0 +1,23 @@
+description: a server that refuses the startup with 53300 (too many clients), 57P03 (starting up) or 08P01 (protocol violation) is asked again; three refusals in a row are survived and the deploy goes on
+proxy:
+  - {at: startup, do: {error: "53300"}, times: 3, step: 1}
+  - {at: startup, do: {error: "57P03"}, times: 3, step: 2}
+  - {at: startup, do: {error: "08P01"}, times: 3, step: 3}
+project:
+  files:
+    deploy.sql: CREATE TABLE IF NOT EXISTS marker (n int);
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      stderr: ["Connection attempt 3 failed: .*too many", "max_connections"]
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      stderr: ["Connection attempt 3 failed: .*starting up"]
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      stderr: ["Connection attempt 3 failed: .*invalid frontend message type"]

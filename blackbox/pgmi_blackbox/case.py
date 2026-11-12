@@ -1,7 +1,7 @@
 import re
 import signal
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +10,9 @@ import yaml
 TEMPLATES = ("minimal", "basic", "advanced")
 SERVER_KINDS = ("tls", "tls_only", "replica", "socket", "fakes")
 IMPLEMENTATIONS = ("go", "rust")
+FAULT_EVENTS = ("accept", "startup", "close")
+FAULT_ACTIONS = ("reset", "freeze")
+SEVERITIES = ("FATAL", "PANIC", "ERROR")
 
 
 class CaseError(ValueError):
@@ -98,6 +101,20 @@ class HomeFile:
 
 
 @dataclass(frozen=True, slots=True)
+class Fault:
+    at: str
+    action: str
+    query: str = ""
+    seconds: float = 0.0
+    after: float | None = None
+    times: int | None = None
+    step: int | None = None
+    sqlstate: str = ""
+    severity: str = "FATAL"
+    message: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class Case:
     path: str
     description: str
@@ -106,6 +123,7 @@ class Case:
     servers: tuple[str, ...] = ()
     home: dict[str, HomeFile] | None = None
     only: str | None = None
+    proxy: tuple[Fault, ...] | None = None
 
     def runs_on(self, impl: str) -> bool:
         return self.only is None or self.only == impl
@@ -183,7 +201,9 @@ def load_cases(root: Path, directory: Path, impl: str = "go") -> list[Case]:
 
 def parse_case(path: str, doc: Any, impl: str = "go") -> Case:
     r = _Reader(path, impl)
-    doc = r.mapping(doc, "", {"description", "project", "servers", "home", "steps", "impl"}, {"description", "steps"})
+    doc = r.mapping(
+        doc, "", {"description", "project", "servers", "home", "steps", "impl", "proxy"}, {"description", "steps"}
+    )
     description = r.string(doc["description"], "description")
     project = _project(r, doc.get("project", {}))
     steps = doc["steps"]
@@ -204,6 +224,76 @@ def parse_case(path: str, doc: Any, impl: str = "go") -> Case:
         servers,
         _home(r, doc.get("home", {})),
         only,
+        _proxy(r, doc["proxy"]) if "proxy" in doc else None,
+    )
+
+
+def _proxy(r: _Reader, value: Any) -> tuple[Fault, ...]:
+    if not isinstance(value, list):
+        raise r.fail("proxy", "must be a list of faults (an empty list forwards everything)")
+    return tuple(_fault(r, v, f"proxy[{i}]") for i, v in enumerate(value))
+
+
+def _count(r: _Reader, value: Any, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise r.fail(field, "must be a positive integer")
+    return value
+
+
+def _index(r: _Reader, value: Any, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise r.fail(field, "must be a step index (0 for steps[0])")
+    return value
+
+
+def _fault(r: _Reader, value: Any, field: str) -> Fault:
+    value = r.mapping(value, field, {"at", "query", "do", "after", "times", "step"}, {"do"})
+    if ("at" in value) == ("query" in value):
+        raise r.fail(field, "needs exactly one of at (accept, startup, close) or query (a regex)")
+    if "at" in value and value["at"] not in FAULT_EVENTS:
+        raise r.fail(f"{field}.at", f"must be one of {', '.join(FAULT_EVENTS)}")
+    at = value.get("at", "query")
+    query = r.string(value.get("query", ""), f"{field}.query")
+    try:
+        re.compile(query)
+    except re.error as e:
+        raise r.fail(f"{field}.query", f"invalid regex: {e}") from e
+    fault = Fault(
+        at,
+        "",
+        query,
+        after=r.number(value["after"], f"{field}.after") if "after" in value else None,
+        times=_count(r, value["times"], f"{field}.times") if "times" in value else None,
+        step=_index(r, value["step"], f"{field}.step") if "step" in value else None,
+    )
+    do = value["do"]
+    if do in FAULT_ACTIONS:
+        return replace(fault, action=do)
+    shape = f"{field}.do"
+    if not isinstance(do, dict) or not {"delay", "error"} & do.keys():
+        raise r.fail(shape, "must be reset, freeze, {delay: seconds} or {error: SQLSTATE, severity, message}")
+    if "delay" in do:
+        r.mapping(do, shape, {"delay"})
+        if fault.after is not None:
+            raise r.fail(f"{field}.after", "does not go with delay")
+        return replace(fault, action="delay", seconds=r.number(do["delay"], f"{shape}.delay"))
+    do = r.mapping(do, shape, {"error", "severity", "message"}, {"error"})
+    sqlstate = do["error"]
+    if not isinstance(sqlstate, str) or not re.fullmatch(r"[0-9A-Z]{5}", sqlstate):
+        raise r.fail(f"{shape}.error", 'must be a quoted five-character SQLSTATE such as "57P01"')
+    severity = do.get("severity", "FATAL")
+    if severity not in SEVERITIES:
+        raise r.fail(f"{shape}.severity", f"must be one of {', '.join(SEVERITIES)}")
+    if at not in ("startup", "query"):
+        raise r.fail(shape, "an error answers a startup or a query")
+    if severity == "ERROR" and (at != "query" or fault.after is not None):
+        raise r.fail(f"{shape}.severity", "ERROR answers a query in the server's place: not at startup, not after")
+    return replace(
+        fault,
+        action="error",
+        sqlstate=sqlstate,
+        severity=severity,
+        message=r.string(do.get("message", ""), f"{shape}.message"),
     )
 
 

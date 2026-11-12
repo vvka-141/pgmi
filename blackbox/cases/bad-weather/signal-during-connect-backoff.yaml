@@ -1,0 +1,15 @@
+description: SIGINT while pgmi waits between connection attempts (every startup is reset) ends the run at once with exit 130 (the waits alone would take it past 0.7 s)
+proxy:
+  - {at: startup, do: reset}
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    signal: {name: SIGINT, after: 0.35}
+    timeout: 10
+    expect:
+      exit: 130
+      stderr: ["Connection attempt 1 failed"]
+      stderr_within:
+        - {pattern: "pgmi: error: interrupted", seconds: 0.65}

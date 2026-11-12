@@ -1,0 +1,19 @@
+description: SIGTERM while the server has not yet answered the startup (held 6 s) ends the run with exit 130 at once
+proxy:
+  - {at: startup, do: {delay: 6}}
+project:
+  files:
+    deploy.sql: CREATE TABLE marker (n int);
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    signal: {name: SIGTERM, after: 1}
+    timeout: 20
+    expect:
+      exit: 130
+      stderr_within:
+        - {pattern: "pgmi: error: interrupted", seconds: 3}
+      sql:
+        - query: SELECT to_regclass('marker') IS NULL
+          rows: [[true]]

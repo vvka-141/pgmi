@@ -1,0 +1,14 @@
+description: a server that freezes mid-statement (no answer on the session, nor to the cancel request, as under docker pause) still ends the run with exit 16 within 2.5 s of --timeout
+proxy:
+  - {query: head_sleep, do: freeze, after: 0.5}
+project:
+  files:
+    deploy.sql: SELECT pg_sleep(30) AS head_sleep;
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}", --timeout, 3s]
+    timeout: 5.5
+    expect:
+      exit: 16
+      stderr: ["exceeded --timeout 3s"]

@@ -1,0 +1,23 @@
+description: a connection reset before the server answers the startup is tried 4 times in all, each failure on stderr; three resets are survived, four are exit 11 (a fifth attempt would have been let through)
+proxy:
+  - {at: startup, do: reset, times: 3, step: 1}
+  - {at: startup, do: reset, times: 4, step: 2}
+project:
+  files:
+    deploy.sql: CREATE TABLE marker (n int);
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      stderr: ["Connection attempt 1 failed: .*; retrying in", "Connection attempt 3 failed: .*; retrying in"]
+      stderr_not: ["Connection attempt 4"]
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[0]]
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ["Connection attempt 3 failed: .*; retrying in"]
+      stderr_not: ["Connection attempt 4 failed: .*; retrying"]

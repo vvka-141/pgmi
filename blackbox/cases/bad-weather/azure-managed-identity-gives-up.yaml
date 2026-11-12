@@ -1,0 +1,14 @@
+description: an Azure ML managed-identity endpoint that keeps answering 503 is given up after a bounded number of attempts, exit 11 naming the managed identity
+servers: [tls, fakes]
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --azure, --connection, "host=127.0.0.1 port={tls_port} user={azure_user} dbname=postgres sslmode=require", -d, "{db}"]
+    env: {MSI_ENDPOINT: "{fake_http}/flaky/503x99/bw-azureml-down", MSI_SECRET: ml-secret, PATH: "/nonexistent"}
+    timeout: 90
+    expect:
+      exit: 11
+      stderr: ["503"]
+      files:
+        "{fake_http_log}": ["(GET /flaky/503x99/bw-azureml-down\\?.*\\n(.*\\n)*){4}"]

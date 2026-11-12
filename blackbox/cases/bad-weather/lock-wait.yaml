@@ -1,0 +1,20 @@
+description: a deploy blocked by a lock another session holds waits for it and succeeds once it is released
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS t (n int);
+      SELECT pg_sleep(CASE WHEN current_setting('pgmi.setup', true) = 'true' THEN 0 ELSE 1 END);
+      INSERT INTO t VALUES (1);
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env: {PGMI_PARAM_SETUP: "true"}
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    background: true
+    timeout: 30
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT count(*) FROM t
+          rows: [[2]]
+  - sql: BEGIN; LOCK TABLE t IN ACCESS EXCLUSIVE MODE; SELECT pg_sleep(3); COMMIT;

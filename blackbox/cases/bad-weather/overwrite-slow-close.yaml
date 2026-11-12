@@ -1,0 +1,17 @@
+description: --overwrite releases its lock and the deploy lock on the server before it disconnects, so an immediate second --overwrite succeeds even when each closed connection reaches the server 3 s late
+proxy:
+  - {at: close, do: {delay: 3}}
+project:
+  files:
+    deploy.sql: CREATE TABLE marker AS SELECT 1 AS n;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}", --overwrite, --force]
+    expect:
+      exit: 0
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}", --overwrite, --force]
+    timeout: 30
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[1]]

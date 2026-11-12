@@ -1,0 +1,31 @@
+description: a connection reset while the session tables are created, after the deploy lock was taken, fails the deploy before deploy.sql runs (Go exits 1); the lock goes with the session, so the next deploy runs
+proxy:
+  - {query: "PGMI Session Schema", do: reset, step: 1}
+project:
+  files:
+    deploy.sql: |
+      SET client_connection_check_interval = '100ms';
+      BEGIN;
+      CREATE TABLE IF NOT EXISTS marker (phase text);
+      INSERT INTO marker VALUES ('head');
+      SELECT pg_sleep(1.5) AS head_sleep;
+      COMMIT;
+      INSERT INTO marker VALUES ('tail-1');
+      SELECT pg_sleep(1.5) AS tail_sleep;
+      INSERT INTO marker VALUES ('tail-2');
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    expect:
+      exit: 1
+      sql:
+        - query: SELECT to_regclass('marker') IS NULL
+          rows: [[true]]
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    delay: 1
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT coalesce(string_agg(phase, ',' ORDER BY ctid), '') FROM marker
+          rows: [["head,tail-1,tail-2"]]

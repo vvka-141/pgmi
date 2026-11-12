@@ -290,3 +290,28 @@ decided in the behaviour contract (PGMI-828), not fixed.
 | a parameter value never reaches the statement text pgmi echoes on an error | ✓ `errors/parameter-value-not-in-statement-echo` |
 | a client ID without a secret signs in as that identity, never through the Azure CLI | ✓ `cloud/azure-client-id-never-uses-the-cli` |
 | AWS temporary credentials (`AWS_SESSION_TOKEN`) and a named profile (`AWS_PROFILE`) sign the RDS token | ✓ `cloud/aws-session-token-and-profile` |
+
+## Bad weather (PGMI-885)
+
+Rows of the 2026-11-12 robustness review of the Rust port against Go's
+hardening history, proved with faults the runner injects: the `proxy:` plan, a second session from
+`sql:` steps, `/flaky/` fake endpoints and signals. Go's behaviour is the
+expectation; `rust/blackbox-passing.txt` lists the ones Rust matches.
+
+| Row | Behaviour | Coverage |
+|---|---|---|
+| A01, A05 | a reset before the startup answer is tried 4 times in all, each failure on stderr | ✓ `bad-weather/connect-resets-retried` |
+| A02 | 53300, 57P03 and 08P01 at startup are retried; 57P01 and 25006 are not; the 53300 hint | ✓ `bad-weather/startup-refusals-retried`, `bad-weather/startup-refusals-final` |
+| A03 | a temporary name-lookup failure is retried | ✗ needs a resolver stub; the Rust unit test `a_temporary_lookup_failure_is_retried_and_an_unknown_name_is_not` |
+| A06 | SIGINT between connection attempts is exit 130 at once | ✓ `bad-weather/signal-during-connect-backoff` |
+| A15 | a setup failure after the deploy lock releases it on the server, even when the close arrives late | ✓ `bad-weather/setup-failure-slow-close` |
+| A17 | a frozen server (session and cancel) still ends the run within 2.5 s of `--timeout` | ✓ `bad-weather/frozen-server-timeout` |
+| A21 | a session lost mid-deploy (reset or FATAL) is exit 13 with the server's text and severity; only what was committed stays | ✓ `bad-weather/reset-in-transaction`, `bad-weather/reset-in-tail`, `bad-weather/server-errors-mid-deploy`; lost during setup (exit 1) ✓ `bad-weather/reset-in-session-setup`; at the lock release ✓ `bad-weather/reset-at-lock-release` |
+| A24 | `--overwrite` then an immediate `--overwrite` through a slow close: both succeed | ✓ `bad-weather/overwrite-slow-close` |
+| A26 | a signal between DROP and CREATE: the database is recreated, exit 130 | ✓ `bad-weather/overwrite-signal-between-drop-and-create` |
+| A28 | `--overwrite` with a role limited to 2 connections | ✓ `flags/overwrite-connection-limit` |
+| A32 | lock waits, `lock_timeout` (55P03), deadlock (40P01), serialization failure (40001): waited for or exit 13, never retried | ✓ `bad-weather/lock-wait`, `bad-weather/lock-timeout`, `bad-weather/deadlock`, `bad-weather/serialization-failure`; `--timeout` during a lock wait ✓ `bad-weather/lock-wait-timeout` |
+| — | SIGTERM or SIGINT while connecting, during session setup, in the tail, at the lock release | ✓ `bad-weather/signal-while-connecting`, `bad-weather/signal-during-session-setup`, `bad-weather/signal-in-tail`, `bad-weather/signal-at-lock-release` |
+| B06 | a sign-in endpoint that fails briefly: AWS container credentials on 5xx | ✓ `bad-weather/aws-credential-endpoints-retried`; a transport error (reset) before any HTTP answer ✗ the fakes answer HTTP only |
+| B07 | Azure managed identity (App Service, Cloud Shell, Service Fabric) on 5xx and 429 is asked again; a dead endpoint is given up after 4 attempts | ✓ `bad-weather/azure-managed-identity-retries`, `bad-weather/azure-managed-identity-gives-up`, `cloud/azure-msi-retry` |
+| B08 | Cloud SQL Admin API on 5xx | ✗ Go's connector takes no Admin API endpoint, so a fake cannot reach it; Rust unit test `the_admin_api_is_asked_again_after_a_server_error` |

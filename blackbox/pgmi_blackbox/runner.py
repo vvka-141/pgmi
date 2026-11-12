@@ -21,6 +21,7 @@ from typing import Any
 import psycopg
 
 from pgmi_blackbox.case import Case, Dir, Expect, Fifo, Step, Symlink, Until
+from pgmi_blackbox.proxy import Proxy
 from pgmi_blackbox.server import Server
 
 _silent: socket.socket | None = None
@@ -117,7 +118,17 @@ def run_case(case: Case, ws: Workspace) -> None:
 def play(case: Case, ws: Workspace, observe: Callable[[str, Step, "Outcome | None"], list[str]]) -> list[str]:
     ws.project.mkdir(parents=True)
     ws.home.mkdir()
+    proxy = None
     try:
+        if case.proxy is not None:
+            proxy = Proxy(case.proxy, (ws.server.host, ws.server.port), ws.root / "proxy.log").start()
+            s = ws.server
+            ws.extras = ws.extras | {
+                "{proxy_port}": str(proxy.port),
+                "{proxy_conn}": f"postgresql://{s.user}:{s.password}@127.0.0.1:{proxy.port}/{s.maintenance_db}"
+                "?sslmode=disable",
+                "{proxy_log}": str(proxy.log_path),
+            }
         _prepare_project(case, ws)
         for rel, item in (case.home or {}).items():
             target = ws.home / rel
@@ -130,6 +141,8 @@ def play(case: Case, ws: Workspace, observe: Callable[[str, Step, "Outcome | Non
             label = f"steps[{i}]"
             if step.delay:
                 time.sleep(step.delay)
+            if proxy:
+                proxy.step = i
             if step.sql is not None:
                 _run_sql(ws, step.sql, maintenance=step.maintenance)
                 failures += observe(label, step, None)
@@ -143,6 +156,8 @@ def play(case: Case, ws: Workspace, observe: Callable[[str, Step, "Outcome | Non
             failures += observe(label, step, _finish(label, step, run))
         return failures
     finally:
+        if proxy:
+            proxy.stop()
         _unlock_dirs(case, ws)
         _drop(ws)
 

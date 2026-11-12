@@ -1,0 +1,27 @@
+description: the Azure managed-identity endpoints of App Service (500 twice), Cloud Shell (429 once) and Service Fabric (503 twice) are asked again until they give a token, as the Azure SDK does, and the deploy succeeds
+servers: [tls, fakes]
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --azure, --azure-client-id, 11111111-1111-1111-1111-111111111111, --connection, "host=127.0.0.1 port={tls_port} user={azure_user} dbname=postgres sslmode=require", -d, "{db}"]
+    env: {IDENTITY_ENDPOINT: "{fake_http}/flaky/500x2/bw-app-service", IDENTITY_HEADER: secret-header}
+    timeout: 90
+    expect:
+      exit: 0
+      files:
+        "{fake_http_log}": ["(GET /flaky/500x2/bw-app-service\\?.*\\n(.*\\n)*){3}"]
+  - pgmi: [deploy, "{project}", --azure, --connection, "host=127.0.0.1 port={tls_port} user={azure_user} dbname=postgres sslmode=require", -d, "{db}"]
+    env: {MSI_ENDPOINT: "{fake_http}/flaky/429x1/bw-cloudshell", PATH: "/nonexistent"}
+    timeout: 90
+    expect:
+      exit: 0
+      files:
+        "{fake_http_log}": ["(POST /flaky/429x1/bw-cloudshell .*\\n(.*\\n)*){2}"]
+  - pgmi: [deploy, "{project}", --azure, --connection, "host=127.0.0.1 port={tls_port} user={azure_user} dbname=postgres sslmode=require", -d, "{db}"]
+    env: {IDENTITY_ENDPOINT: "{fake_https}/flaky/503x2/bw-fabric", IDENTITY_HEADER: fabric-secret, IDENTITY_SERVER_THUMBPRINT: "{fake_https_thumbprint}", PATH: "/nonexistent"}
+    timeout: 90
+    expect:
+      exit: 0
+      files:
+        "{fake_https_log}": ["(GET /flaky/503x2/bw-fabric\\?.*\\n(.*\\n)*){3}"]

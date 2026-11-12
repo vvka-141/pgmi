@@ -1,0 +1,22 @@
+description: a deploy whose lock_timeout runs out waiting for a lock another session holds is exit 13 with SQLSTATE 55P03 and the statement named; nothing of it is kept
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS t (n int);
+      SELECT pg_sleep(CASE WHEN current_setting('pgmi.setup', true) = 'true' THEN 0 ELSE 1 END);
+      SET lock_timeout = '500ms';
+      INSERT INTO t VALUES (1);
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env: {PGMI_PARAM_SETUP: "true"}
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    background: true
+    timeout: 30
+    expect:
+      exit: 13
+      stderr: ["canceling statement due to lock timeout", "55P03", "INSERT INTO t"]
+      sql:
+        - query: SELECT count(*) FROM t
+          rows: [[1]]
+  - sql: BEGIN; LOCK TABLE t IN ACCESS EXCLUSIVE MODE; SELECT pg_sleep(3); COMMIT;

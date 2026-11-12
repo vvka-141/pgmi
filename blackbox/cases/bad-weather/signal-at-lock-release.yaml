@@ -1,0 +1,26 @@
+description: SIGINT after deploy.sql finished, while the deploy lock release is held 4 s on its way to the server, keeps what deploy.sql committed, and the next deploy is not refused as concurrent
+proxy:
+  - {query: pg_advisory_unlock_all, do: {delay: 4}, step: 1}
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS marker (n int);
+      INSERT INTO marker VALUES (1);
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    signal: {name: SIGINT, after: 1.5}
+    timeout: 20
+    expect:
+      exit: 130
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[1]]
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    delay: 4
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[2]]

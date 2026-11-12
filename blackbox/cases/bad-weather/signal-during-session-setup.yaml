@@ -1,0 +1,26 @@
+description: SIGINT while the session tables are being created (that query held 4 s on its way to the server) is exit 130 before deploy.sql runs, and the next deploy is not refused as concurrent
+proxy:
+  - {query: "PGMI Session Schema", do: {delay: 4}, step: 1}
+project:
+  files:
+    deploy.sql: CREATE TABLE IF NOT EXISTS marker (n int);
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    signal: {name: SIGINT, after: 1.5}
+    timeout: 20
+    expect:
+      exit: 130
+      stderr_within:
+        - {pattern: "pgmi: error: interrupted", seconds: 5}
+      sql:
+        - query: SELECT to_regclass('marker') IS NULL
+          rows: [[true]]
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    delay: 4
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT to_regclass('marker') IS NULL
+          rows: [[false]]

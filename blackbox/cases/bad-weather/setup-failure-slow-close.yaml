@@ -1,0 +1,21 @@
+description: a session setup that fails after the deploy lock was taken (no TEMPORARY privilege) releases the lock on the server before it disconnects, so an immediate redeploy runs even when the closed connection reaches the server 3 s late
+proxy:
+  - {at: close, do: {delay: 3}}
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - sql: CREATE ROLE "{db}_limited" LOGIN PASSWORD 'limited-pw'
+  - sql: |
+      REVOKE TEMPORARY ON DATABASE "{db}" FROM PUBLIC;
+      GRANT CONNECT ON DATABASE "{db}" TO "{db}_limited";
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{db}_limited:limited-pw@127.0.0.1:{proxy_port}/{db}?sslmode=disable", -d, "{db}"]
+    expect:
+      exit: 13
+      stderr: ["GRANT TEMPORARY ON DATABASE"]
+  - sql: GRANT TEMPORARY ON DATABASE "{db}" TO "{db}_limited"
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{db}_limited:limited-pw@127.0.0.1:{proxy_port}/{db}?sslmode=disable", -d, "{db}"]
+    expect:
+      exit: 0
