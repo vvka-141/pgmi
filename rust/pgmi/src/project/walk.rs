@@ -275,6 +275,7 @@ fn unsupported_dunder(path: &str) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::vfs::{EmbeddedFs, MemFs};
+    use std::path::Path;
 
     const MAX: u64 = DEFAULT_MAX_FILE_SIZE;
 
@@ -519,7 +520,10 @@ mod tests {
             assert_eq!(e.exit_code(), 14, "{}", e.text());
             assert_eq!(
                 e.text(),
-                "deploy.sql not found in /mem\nexpected: /mem/deploy.sql — run `pgmi init` to scaffold one"
+                format!(
+                    "deploy.sql not found in /mem\nexpected: {} — run `pgmi init` to scaffold one",
+                    Path::new("/mem").join("deploy.sql").display()
+                )
             );
         }
         assert!(scan(&MemFs::default(), MAX).is_ok());

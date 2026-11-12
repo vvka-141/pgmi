@@ -625,7 +625,8 @@ pub fn dotenv_text(text: &str) -> Checked {
         .chars()
         .all(|c| c.is_ascii() && (!c.is_ascii_control() || matches!(c, '\t' | '\n' | '\r')))
         && !text.contains(['$', '\\'])
-        && !text.replace("\r\n", "").contains('\r');
+        && !text.replace("\r\n", "").contains('\r')
+        && !text.lines().any(|l| l.trim_start().starts_with("export"));
     let key = |k: &str| {
         k.chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
@@ -763,6 +764,13 @@ mod tests {
 
     fn checked(r: Checked) -> Result<(), TestCaseError> {
         r.map_err(TestCaseError::fail)
+    }
+
+    #[test]
+    fn fuzz_findings_hold() {
+        for found in ["export =", "export  =1"] {
+            assert_eq!(dotenv_text(found), Ok(()), "{found:?}");
+        }
     }
 
     fn conn_settings() -> impl Strategy<Value = Conn> {

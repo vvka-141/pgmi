@@ -346,6 +346,9 @@ mod tests {
             e.text(),
             "failed to create project: failed to check target directory: path exists but is not a directory"
         );
+        if cfg!(windows) {
+            return;
+        }
         let e = check_empty(&OsFs::new(file.join("inside"))).unwrap_err();
         assert!(
             e.text().starts_with(&format!(

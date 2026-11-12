@@ -797,9 +797,10 @@ Cases: `cloud/google-arguments`.
 
 When a host resolves to several addresses, Go reports only the last one's
 error, so a certificate failure on 127.0.0.1 can read as "connection refused"
-from `::1`. The Rust binary reports each address tried.
+from `::1` and is retried as one. The Rust binary reports each address
+tried, and a certificate failure among them ends the connect at once.
 
-Cases: `tls/system-roots`.
+Cases: `tls/system-roots`, `tls/verify-without-root`.
 
 ### POSIX character classes in .pgmiignore
 
@@ -1354,7 +1355,7 @@ release notes take their "Behaviour changes" section from this table.
 | `pgmi.yaml` with a `%YAML 1.2` directive | refused, exit 10 | accepted | agent 2026-11-12 (PGMI-895), owner may revisit |
 | `pgmi.yaml` `port: 0` | quietly 5432 | refused, exit 10 | agent 2026-11-12 (PGMI-895), owner may revisit |
 | `pgmi.yaml` negative timeout (`-5s`) | runs, then exit 11 "exceeded --timeout -5s" | refused before connecting, exit 10 | agent 2026-11-12 (PGMI-895), owner may revisit |
-| A host with several addresses fails to connect | only the last address's error | every address's error; exit 11 both | intended |
+| A host with several addresses fails to connect | only the last address's error, retried when that one is transient | every address's error; a certificate failure among them is final, not retried; exit 11 both | intended |
 | POSIX class such as `[[:space:]]` in `.pgmiignore` | refused, exit 10 | accepted | intended |
 | `invalid configuration:` inside an error message | `failed to scan directory: invalid configuration: .pgmiignore excludes deploy.sql ...` | the same message without the infix; exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
 | Driver error text in connection and retry lines | pgx's text, sorted by pgmi (`server at h:p refused the connection: ...`, `password authentication failed for user "u" on database "d"`, `SSL/TLS connection error: ...`) | each host as `h:p: ` with the server's message and SQLSTATE, or the TLS or driver library's text; the next-step lines and exit codes unchanged | agent 2026-11-12 (PGMI-907), owner may revisit |

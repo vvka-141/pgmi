@@ -666,7 +666,10 @@ fn defaults_without_an_environment() {
     let env = Env::from_pairs(&[("PGDATABASE", "d"), ("USERNAME", "win-user")]);
     assert_eq!(resolve(&flags(), &env, None).unwrap().user, "win-user");
     let env = Env::from_pairs(&[("PGDATABASE", "d")]);
-    assert_eq!(resolve(&flags(), &env, None).unwrap().user, "postgres");
+    assert_eq!(
+        resolve(&flags(), &env, None).unwrap().user,
+        os_user().unwrap_or_else(|| "postgres".into())
+    );
 }
 
 #[test]

@@ -1146,13 +1146,13 @@ impl Spec {
 /// The account name the passwd database gives the process's uid, as Go's
 /// os/user does when `$USER` is not set (common in containers).
 #[cfg(unix)]
-fn os_user() -> Option<String> {
+pub(super) fn os_user() -> Option<String> {
     let uid = rustix::process::getuid().as_raw().to_string();
     passwd_name(&std::fs::read_to_string("/etc/passwd").ok()?, &uid)
 }
 
 #[cfg(not(unix))]
-fn os_user() -> Option<String> {
+pub(super) fn os_user() -> Option<String> {
     None
 }
 
