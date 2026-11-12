@@ -297,7 +297,7 @@ project are resolved and before connecting, so the summary line and the
 `contractVersion` null. Plan order: sort key, then path, byte order; a file
 without metadata sorts by its path; a missing `<description>` is an empty
 string. The session tables are analysed after loading, so deploy.sql and
-pgmi's own plan queries see statistics (case `deploy/session-tables-analyzed`). Full reference: `docs/session-api.md`.
+pgmi's own plan queries see statistics (case `deploy/session-tables-analyzed`). `pgmi_test_directory_view` lists every directory that holds a test-path file, SQL or not (case `execution/test-directory-without-sql`). Full reference: `docs/session-api.md`.
 
 The session speaks the target database's own encoding (`client_encoding` is set
 to `server_encoding`), as Go's driver does by never sending one: on a LATIN1

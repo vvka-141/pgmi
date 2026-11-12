@@ -1,0 +1,13 @@
+description: a __test__ directory holding only non-SQL files is still listed in pgmi_test_directory_view, as every directory that holds a test-path file is
+project:
+  files:
+    deploy.sql: CREATE TABLE dirs AS SELECT path FROM pg_temp.pgmi_test_directory_view ORDER BY path;
+    docs/__test__/readme.md: notes
+    lib/__test__/test_one.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT path FROM dirs
+          rows: [[./docs/__test__/], [./lib/__test__/]]

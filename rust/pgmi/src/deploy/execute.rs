@@ -82,6 +82,7 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
                     params,
                     sources: &project.sources,
                     tests: &project.tests,
+                    test_dir_files: &project.test_dir_files,
                     metadata: meta,
                 },
             ),

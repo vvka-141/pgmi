@@ -30,6 +30,7 @@ pub(crate) struct Load<'a> {
     pub(crate) params: &'a BTreeMap<String, String>,
     pub(crate) sources: &'a [File],
     pub(crate) tests: &'a [File],
+    pub(crate) test_dir_files: &'a [String],
     pub(crate) metadata: &'a [Meta],
 }
 
@@ -93,14 +94,8 @@ pub(crate) async fn load(client: &Client, l: Load<'_>) -> Result<()> {
         )
         .await?;
     }
+    load_test_directories(client, l.test_dir_files).await?;
     if !l.tests.is_empty() {
-        load_json(
-            client,
-            "INSERT INTO pg_temp._pgmi_test_directory (path, parent_path, depth) \
-             SELECT d->>0, d->>1, (d->>2)::int FROM jsonb_array_elements($1::text::jsonb) d",
-            json!(test_directories(l.tests)),
-        )
-        .await?;
         let rows: Vec<_> = l
             .tests
             .iter()
@@ -160,8 +155,24 @@ fn test_depth(dir: &str) -> usize {
     parts.len().saturating_sub(first + 1)
 }
 
-pub(crate) fn test_directories(tests: &[File]) -> Vec<(String, Option<String>, usize)> {
-    let dirs: BTreeSet<&str> = tests.iter().map(|f| split_path(&f.path).0).collect();
+/// Every directory holding a test-path file, SQL or not, as Go lists them.
+async fn load_test_directories(client: &Client, files: &[String]) -> Result<()> {
+    if files.is_empty() {
+        return Ok(());
+    }
+    load_json(
+        client,
+        "INSERT INTO pg_temp._pgmi_test_directory (path, parent_path, depth) \
+         SELECT d->>0, d->>1, (d->>2)::int FROM jsonb_array_elements($1::text::jsonb) d",
+        json!(test_directories(files.iter().map(String::as_str))),
+    )
+    .await
+}
+
+pub(crate) fn test_directories<'a>(
+    paths: impl IntoIterator<Item = &'a str>,
+) -> Vec<(String, Option<String>, usize)> {
+    let dirs: BTreeSet<&str> = paths.into_iter().map(|p| split_path(p).0).collect();
     dirs.iter()
         .map(|d| {
             let mut parent = None;
@@ -185,15 +196,11 @@ mod tests {
 
     #[test]
     fn test_tree() {
-        let f = |p: &str| File {
-            path: p.into(),
-            content: String::new(),
-        };
-        let dirs = test_directories(&[
-            f("./__test__/t.sql"),
-            f("./failing/__test__/t.sql"),
-            f("./failing/__test__/deep/__test__/t.sql"),
-            f("./x/__tests__/sub/t.sql"),
+        let dirs = test_directories([
+            "./__test__/t.sql",
+            "./failing/__test__/t.sql",
+            "./failing/__test__/deep/__test__/t.sql",
+            "./x/__tests__/sub/t.sql",
         ]);
         assert_eq!(
             dirs,
