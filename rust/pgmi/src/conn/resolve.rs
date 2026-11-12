@@ -382,7 +382,7 @@ impl From<ResolveError> for Error {
             ResolveError::Parse { source, error } => {
                 Error::new(Kind::Config, source.label()).with_source(error)
             }
-            other => Error::new(Kind::Config, other.to_string()),
+            other => Error::new(Kind::Config, other.to_string()).with_cause(other),
         }
     }
 }

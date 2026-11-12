@@ -42,15 +42,47 @@ pub(crate) struct Connection {
     pub(crate) google_instance: Option<String>,
 }
 
-fn auth_method(text: &str) -> Result<Provider> {
+/// Why `pgmi.yaml`'s text is not a project configuration.
+#[derive(Debug)]
+pub(crate) enum YamlError {
+    Syntax(serde_saphyr::Error),
+    AuthMethod(String),
+}
+
+impl std::fmt::Display for YamlError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            YamlError::Syntax(e) => e.fmt(f),
+            YamlError::AuthMethod(text) => {
+                write!(
+                    f,
+                    "invalid auth_method {text:?}: expected azure, aws or google"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for YamlError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            YamlError::Syntax(e) => e.source(),
+            YamlError::AuthMethod(_) => None,
+        }
+    }
+}
+
+impl From<YamlError> for Error {
+    fn from(e: YamlError) -> Self {
+        Error::config("failed to load pgmi.yaml").with_source(e)
+    }
+}
+
+fn auth_method(text: &str) -> std::result::Result<Provider, YamlError> {
     [Provider::Azure, Provider::Aws, Provider::Google]
         .into_iter()
         .find(|p| p.key() == text)
-        .ok_or_else(|| {
-            Error::config(format!(
-                "failed to load pgmi.yaml: invalid auth_method {text:?}: expected azure, aws or google"
-            ))
-        })
+        .ok_or_else(|| YamlError::AuthMethod(text.to_string()))
 }
 
 fn sslmode_line(text: &str) -> Option<usize> {
@@ -78,15 +110,14 @@ impl ProjectConfig {
                 return Err(Error::config("failed to load pgmi.yaml").with_source(e));
             }
         };
-        Self::parse(&text).map(Some)
+        Ok(Some(Self::parse(&text)?))
     }
 
-    pub(crate) fn parse(text: &str) -> Result<Self> {
+    pub(crate) fn parse(text: &str) -> std::result::Result<Self, YamlError> {
         if text.trim().is_empty() {
             return Ok(Self::default());
         }
-        let mut cfg: ProjectConfig = serde_saphyr::from_str(text)
-            .map_err(|e| Error::config(format!("failed to load pgmi.yaml: {e}")))?;
+        let mut cfg: ProjectConfig = serde_saphyr::from_str(text).map_err(YamlError::Syntax)?;
         let c = &mut cfg.connection;
         c.auth_method = c
             .auth_method_text
@@ -140,8 +171,29 @@ mod tests {
     #[test]
     fn unknown_key_refused() {
         let e = ProjectConfig::parse("connection:\n  usernmae: someone\n").unwrap_err();
+        assert!(matches!(e, YamlError::Syntax(_)), "{e:?}");
+        let reason = e.to_string();
+        let e = Error::from(e);
         assert!(e.text().contains("usernmae"), "{}", e.text());
+        assert_eq!(e.text(), format!("failed to load pgmi.yaml: {reason}"));
         assert_eq!(e.exit_code(), 10);
+        let source = std::error::Error::source(&e).unwrap();
+        assert!(
+            matches!(
+                source.downcast_ref::<YamlError>(),
+                Some(YamlError::Syntax(_))
+            ),
+            "{source:?}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_auth_method_reads_as_before() {
+        let e = Error::from(ProjectConfig::parse("connection:\n  auth_method: gcp\n").unwrap_err());
+        assert_eq!(
+            e.text(),
+            "failed to load pgmi.yaml: invalid auth_method \"gcp\": expected azure, aws or google"
+        );
     }
 
     #[test]

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use super::stderr;
 use crate::cli::ConfigArgs;
 use crate::config::edit;
-use crate::config::yaml::ProjectConfig;
+use crate::config::yaml::{ProjectConfig, YamlError};
 use crate::env::Env;
 use crate::error::{Error, Kind, Result, Secret};
 use crate::tui::connection::{self, Done, Settings};
@@ -30,7 +30,7 @@ pub(crate) fn run(a: &ConfigArgs, env: &Env, runtime: &tokio::runtime::Handle) -
                 initial = Some(cfg.connection);
             }
             Err(e) => {
-                stderr(&format!("{}\n", unparseable(&e)));
+                stderr(&format!("{}\n", unparseable(e).text()));
                 if !crate::tui::confirm("Overwrite the unparseable pgmi.yaml?") {
                     return Err(cancelled("config"));
                 }
@@ -59,12 +59,8 @@ pub(crate) fn interrupted(what: &str) -> Error {
     Error::new(Kind::Interrupted, format!("{what} interrupted"))
 }
 
-fn unparseable(e: &Error) -> String {
-    let text = e.text();
-    let reason = text
-        .strip_prefix("failed to load pgmi.yaml: ")
-        .unwrap_or(&text);
-    format!("pgmi.yaml exists but could not be parsed: {reason}")
+fn unparseable(e: YamlError) -> Error {
+    Error::config("pgmi.yaml exists but could not be parsed").with_source(e)
 }
 
 /// Writes the connection settings into `target/pgmi.yaml`, keeping the rest
@@ -77,7 +73,7 @@ pub(crate) fn save(target: &Path, s: &Settings, replace: bool) -> Result<()> {
     let text = match std::fs::read_to_string(&path) {
         _ if replace => edit::fresh(&values),
         Ok(existing) => {
-            ProjectConfig::parse(&existing).map_err(|e| Error::config(unparseable(&e)))?;
+            ProjectConfig::parse(&existing).map_err(unparseable)?;
             edit::set_connection(&existing, &values)?
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => edit::fresh(&values),
@@ -163,6 +159,16 @@ mod tests {
                 .starts_with("pgmi.yaml exists but could not be parsed: "),
             "{}",
             e.text()
+        );
+        let reason = ProjectConfig::parse(broken).unwrap_err().to_string();
+        assert_eq!(
+            e.text(),
+            format!("pgmi.yaml exists but could not be parsed: {reason}")
+        );
+        assert!(
+            std::error::Error::source(&e)
+                .and_then(|s| s.downcast_ref::<YamlError>())
+                .is_some()
         );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), broken);
         save(dir.path(), &settings("appdb", "postgres"), true).unwrap();

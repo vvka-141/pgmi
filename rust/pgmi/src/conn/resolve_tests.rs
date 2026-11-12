@@ -1565,3 +1565,21 @@ fn a_string_that_does_not_parse_keeps_the_parse_error_as_its_source() {
     assert!(source.downcast_ref::<ParseError>().is_some(), "{source}");
     assert!(e.text().starts_with("--connection: "), "{}", e.text());
 }
+
+#[test]
+fn a_refusal_as_an_error_keeps_the_typed_reason_as_its_source() {
+    let e = Error::from(ResolveError::PortCount { ports: 2, hosts: 3 });
+    assert_eq!(e.exit_code(), 10);
+    let source = std::error::Error::source(&e).expect("no source");
+    assert!(
+        matches!(
+            source.downcast_ref::<ResolveError>(),
+            Some(ResolveError::PortCount { ports: 2, hosts: 3 })
+        ),
+        "{source:?}"
+    );
+    assert_eq!(
+        e.text(),
+        ResolveError::PortCount { ports: 2, hosts: 3 }.to_string()
+    );
+}

@@ -245,7 +245,7 @@ mod tests {
         ];
         for text in ["", "params:\n  a: b\n", "connection: ~\ntimeout: 1m\n"] {
             let out = set_connection(text, &values).unwrap();
-            let cfg = ProjectConfig::parse(&out).unwrap_or_else(|e| panic!("{out}\n{}", e.text()));
+            let cfg = ProjectConfig::parse(&out).unwrap_or_else(|e| panic!("{out}\n{e}"));
             assert_eq!(cfg.connection.host.as_deref(), Some("my host:1"), "{out}");
             assert_eq!(cfg.connection.database.as_deref(), Some("it's"), "{out}");
             assert_eq!(cfg.connection.username.as_deref(), Some("true"), "{out}");
