@@ -520,6 +520,26 @@ fn pgport_edge_cases() {
 }
 
 #[test]
+fn the_port_flag_is_refused_outside_one_to_65535() {
+    let port = |p: i64| {
+        let fl = Flags {
+            port: Some(p),
+            database: Some("d".into()),
+            ..Flags::default()
+        };
+        resolve(&fl, &Env::from_pairs(&[("PGPORT", "6000")]), None)
+    };
+    assert_eq!(port(1).unwrap().first().port, 1);
+    assert_eq!(port(65535).unwrap().first().port, 65535);
+    for bad in [-1, 65536, i64::MAX] {
+        assert_eq!(
+            refused(port(bad)).to_string(),
+            format!("invalid --port flag: invalid port {bad}: must be between 1 and 65535")
+        );
+    }
+}
+
+#[test]
 fn the_password_comes_from_pgpassword_when_nothing_else_names_one() {
     let env = Env::from_pairs(&[("PGPASSWORD", "secretpass"), ("PGDATABASE", "d")]);
     let s = resolve(&flags(), &env, None).unwrap();
@@ -824,7 +844,7 @@ fn a_server_flag_next_to_an_environment_string_is_refused() {
         "cannot combine -h with DATABASE_URL",
     );
     let mut fl = flags();
-    fl.port = Some("6007".into());
+    fl.port = Some(6007);
     one(
         fl,
         &[
@@ -835,7 +855,7 @@ fn a_server_flag_next_to_an_environment_string_is_refused() {
     );
     let fl = Flags {
         host: Some("h".into()),
-        port: Some("5471".into()),
+        port: Some(5471),
         username: Some("u".into()),
         sslmode: Some(SslMode::Require),
         ..Flags::default()

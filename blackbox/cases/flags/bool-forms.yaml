@@ -1,0 +1,41 @@
+description: every boolean flag, -v, --help and --version too, takes =true or =false and may be given twice; a value that is not a boolean is a usage error
+project:
+  files:
+    deploy.sql: CREATE TABLE marker (id int);
+steps:
+  - pgmi: [--verbose=false, version]
+    expect: {exit: 0, stdout: ["^pgmi "]}
+  - pgmi: [-v=false, version]
+    expect: {exit: 0, stdout: ["^pgmi "]}
+  - pgmi: [-v, -v, version]
+    expect: {exit: 0, stdout: ["^pgmi "]}
+  - pgmi: [-vv, version, --verbose=1]
+    expect: {exit: 0, stdout: ["^pgmi "]}
+  - pgmi: [serve, --verbose=false]
+    stdin: ""
+    expect: {exit: 0}
+  - pgmi: [--help=false, version]
+    expect: {exit: 0, stdout: ["^pgmi "], stdout_not: ["Usage"]}
+  - pgmi: [--help=true, version]
+    expect: {exit: 0, stdout: ["Usage:"]}
+  - pgmi: [deploy, --json=false, --help=1]
+    expect: {exit: 0, stdout: ["Exit codes:"]}
+  - pgmi: [--version, --version]
+    expect: {exit: 0, stdout: ["^pgmi "]}
+  - pgmi: [--version=false]
+    expect: {exit: 0, stdout_not: ["^pgmi \\d"]}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --overwrite=false, --overwrite=false, --force, --force=false, --json=false, --json, -v=false]
+    expect:
+      exit: 0
+      json: {status: success}
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[0]]
+  - pgmi: [info, "{project}", --json, --json]
+    expect: {exit: 0, json: {deploySql: true}}
+  - pgmi: [metadata, plan, "{project}", --json=false, --json=T]
+    expect: {exit: 0, stdout: ["^\\s*[\\[{]"]}
+  - pgmi: [-v=x, version]
+    expect: {exit: 2, stderr: ["^pgmi: error: "]}
+  - pgmi: [info, "{project}", --json=yes]
+    expect: {exit: 2, stderr: ["^pgmi: error: .*yes"]}

@@ -167,12 +167,7 @@ pub(crate) fn overrides(
                 &y.host,
                 given(flags.host.as_ref()).is_some(),
             ),
-            (
-                "port",
-                "PGPORT",
-                &y.port,
-                given(flags.port.as_ref()).is_some(),
-            ),
+            ("port", "PGPORT", &y.port, flags.port.is_some()),
             (
                 "user",
                 "PGUSER",

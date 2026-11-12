@@ -1,0 +1,26 @@
+description: -p is an integer; one that is not (a letter, a list, a space, empty, beyond 64 bits) is a usage error, one outside 1-65535 is 10, and 0 leaves the port to PGPORT
+project:
+  files:
+    deploy.sql: CREATE TABLE marker (id int);
+steps:
+  - pgmi: [deploy, "{project}", -h, "{host}", -U, "{user}", -d, "{db}", -p, abc]
+    expect: {exit: 2, stderr: ["^pgmi: error: .*abc"]}
+  - pgmi: [deploy, "{project}", -h, "{host}", -U, "{user}", -d, "{db}", -p, "1,2"]
+    expect: {exit: 2, stderr: ["^pgmi: error: .*1,2"]}
+  - pgmi: [deploy, "{project}", -h, "{host}", -U, "{user}", -d, "{db}", -p, " 1"]
+    expect: {exit: 2, stderr: ["^pgmi: error: "]}
+  - pgmi: [deploy, "{project}", -h, "{host}", -U, "{user}", -d, "{db}", -p, ""]
+    expect: {exit: 2, stderr: ["^pgmi: error: "]}
+  - pgmi: [deploy, "{project}", -h, "{host}", -U, "{user}", -d, "{db}", -p, "99999999999999999999"]
+    expect: {exit: 2, stderr: ["^pgmi: error: "]}
+  - pgmi: [deploy, "{project}", -h, "{host}", -U, "{user}", -d, "{db}", -p, "-1"]
+    expect: {exit: 10, stderr: ["^pgmi: error: invalid --port flag: invalid port -1: must be between 1 and 65535"]}
+  - pgmi: [deploy, "{project}", -h, "{host}", -U, "{user}", -d, "{db}", --port=70000]
+    expect: {exit: 10, stderr: ["^pgmi: error: invalid --port flag: invalid port 70000: must be between 1 and 65535"]}
+  - pgmi: [deploy, "{project}", -h, "{host}", -U, "{user}", -d, "{db}", -p, "0"]
+    env: {PGPORT: "{port}", PGPASSWORD: "{password}"}
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[0]]

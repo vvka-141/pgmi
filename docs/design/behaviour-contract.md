@@ -40,9 +40,18 @@ unknown subcommand, an unknown shorthand, and `-h` without a value on
 `deploy` (it is `--host`; the message says so). More than one of `--azure`,
 `--aws`, `--google` is exit 10. Booleans take `=false`, `--param` is never
 split on commas, and `--timeout 0` turns the timeout off; help shows the
-default as `3m0s`.
+default as `3m0s`. Every boolean, `-v`, `--help` and `--version` too, takes
+`=true`/`=false` (`1`, `t`, `T`, `TRUE`, `True` and their false forms) and
+may be given twice; `--help` wins over a missing argument but not over a bad
+flag value. A flag given twice takes its last value; `--param` and
+`--params-file` keep every value. A flag that takes a value takes the next
+argument even when it starts with `-` (`-d -x` names the database `-x`).
+`-p` is an integer as Go reads one (`+5`, `0x10`, `010` is octal 8, `1_0`):
+anything else is 2, `0` leaves the port to `PGPORT`, pgmi.yaml or 5432, and
+one outside 1-65535 is 10 (`invalid --port flag: invalid port -1: must be
+between 1 and 65535`).
 
-Cases: `commands/usage-errors`, `exit-codes/0-success`, `exit-codes/2-usage`, `exit-codes/10-invalid-config`, `exit-codes/11-connection-failed`, `exit-codes/12-overwrite-denied`, `exit-codes/13-sql-failed`, `exit-codes/14-no-deploy-sql`, `exit-codes/15-concurrent-deploy`, `exit-codes/16-timeout`, `exit-codes/130-interrupted`, `exit-codes/130-sigterm`, `commands/init-unwritable`, `commands/short-help-and-sslmode-value`.
+Cases: `flags/repeated-flags`, `flags/bool-forms`, `flags/port-values`, `commands/usage-errors`, `exit-codes/0-success`, `exit-codes/2-usage`, `exit-codes/10-invalid-config`, `exit-codes/11-connection-failed`, `exit-codes/12-overwrite-denied`, `exit-codes/13-sql-failed`, `exit-codes/14-no-deploy-sql`, `exit-codes/15-concurrent-deploy`, `exit-codes/16-timeout`, `exit-codes/130-interrupted`, `exit-codes/130-sigterm`, `commands/init-unwritable`, `commands/short-help-and-sslmode-value`.
 Exit 3: no case; a release binary cannot panic on purpose. The Rust build proves it with its `testhooks` feature (`rust/pgmi/tests/panic.rs`): a panic exits 3 with the `--json` record, and a panicking serve tool answers `isError` with exit code 3.
 
 ## Commands

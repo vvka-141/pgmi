@@ -71,6 +71,9 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `--connection` URI | ✓ every `deploy` case |
 | `--connection` keyword/value, ADO.NET | ✓ `flags/connection-forms` |
 | `-h`, `-p`, `-U`, `-d`; `-h` with `--connection` = 10 | ✓ `flags/granular-flags` |
+| `-p` values (not an integer = 2, outside 1-65535 = 10, `0` = unset) | ✓ `flags/port-values` |
+| a flag given twice takes the last value; `--param` keeps every value; a value may start with `-` | ✓ `flags/repeated-flags` |
+| every boolean (`-v`, `--help`, `--version` too) takes `=true`/`=false` and may repeat | ✓ `flags/bool-forms` |
 | `--compat` (unknown = 10 with the target in the summary and `--json`) | ✓ `flags/compat`, `flags/compat-record` |
 | `--force` (alone; with `--overwrite`, no countdown without a terminal) | ✓ `flags/overwrite-force` |
 | `--overwrite` without `--force`, no terminal | ✓ `exit-codes/12-overwrite-denied` |

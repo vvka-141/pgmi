@@ -31,7 +31,7 @@ use std::ffi::OsString;
 use std::io::Write;
 
 use cli::usage::{clap_error, help};
-use cli::{Cli, Command};
+use cli::{Cli, Command, Parsed};
 pub use env::Env;
 pub use error::install_panic_hook;
 use error::{Error, Kind};
@@ -49,7 +49,11 @@ pub const PANIC_EXIT_CODE: u8 = Kind::Internal.exit_code();
 pub fn run(args: impl IntoIterator<Item = OsString>, env: Env, export: impl Fn(&str, &str)) -> u8 {
     let args: Vec<OsString> = args.into_iter().collect();
     let cli = match Cli::parse_args(&args) {
-        Ok(c) => c,
+        Ok(Parsed::Run(c)) => c,
+        Ok(Parsed::Help(text)) => {
+            let _ = std::io::stdout().write_all(text.as_bytes());
+            return 0;
+        }
         Err(e) => return clap_error(&e, &args),
     };
     if cli.version {

@@ -23,11 +23,11 @@ pub(crate) use commands::*;
     subcommand_help_heading = "Available Commands"
 )]
 pub(crate) struct Cli {
-    #[arg(short = 'v', long, global = true, action = ArgAction::SetTrue, help = "Enable verbose output for all commands")]
+    #[arg(short = 'v', long, global = true, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool, help = "Enable verbose output for all commands")]
     pub(crate) verbose: bool,
-    #[arg(long, global = true, action = ArgAction::Help, help = "Show help for this command")]
-    pub(crate) help: Option<bool>,
-    #[arg(long, action = ArgAction::SetTrue)]
+    #[arg(long, global = true, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool, help = "Show help for this command")]
+    pub(crate) help: bool,
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool)]
     pub(crate) version: bool,
     #[command(subcommand)]
     pub(crate) command: Option<Command>,
@@ -35,9 +35,10 @@ pub(crate) struct Cli {
 
 impl Cli {
     /// The command line as Go reads it: `-h` is help on every command except
-    /// `deploy`, where it is `--host`.
+    /// `deploy`, where it is `--host`; a repeated flag takes its last value;
+    /// a flag that takes a value takes the next argument, dash or not.
     pub(crate) fn command_line() -> clap::Command {
-        fn short_help(c: clap::Command) -> clap::Command {
+        fn go_flags(c: clap::Command) -> clap::Command {
             let c = if c.get_name() == "deploy" {
                 c
             } else {
@@ -48,14 +49,73 @@ impl Cli {
                         .hide(true),
                 )
             };
-            c.mut_subcommands(short_help)
+            c.args_override_self(true)
+                .mut_args(|a| {
+                    if !a.is_positional()
+                        && a.get_action().takes_values()
+                        && !a.is_require_equals_set()
+                    {
+                        a.allow_hyphen_values(true)
+                    } else {
+                        a
+                    }
+                })
+                .mut_subcommands(go_flags)
         }
-        short_help(<Self as clap::CommandFactory>::command())
+        go_flags(<Self as clap::CommandFactory>::command())
     }
 
-    pub(crate) fn parse_args(args: &[std::ffi::OsString]) -> Result<Self, clap::Error> {
-        let matches = Self::command_line().try_get_matches_from(args)?;
-        <Self as clap::FromArgMatches>::from_arg_matches(&matches)
+    /// Parses `args` as Go does: a flag value error refuses before `--help`,
+    /// and `--help` wins over a missing argument or a conflict.
+    pub(crate) fn parse_args(args: &[std::ffi::OsString]) -> Result<Parsed, clap::Error> {
+        let mut cmd = Self::command_line();
+        let matches = match cmd.try_get_matches_from_mut(args) {
+            Ok(m) => m,
+            Err(e) if checked_after_values(e.kind()) => {
+                let help = cmd
+                    .clone()
+                    .ignore_errors(true)
+                    .try_get_matches_from(args)
+                    .ok()
+                    .and_then(|m| asked_help(&cmd, &m));
+                return help.map(Parsed::Help).ok_or(e);
+            }
+            Err(e) => return Err(e),
+        };
+        if let Some(text) = asked_help(&cmd, &matches) {
+            return Ok(Parsed::Help(text));
+        }
+        <Self as clap::FromArgMatches>::from_arg_matches(&matches).map(Parsed::Run)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum Parsed {
+    Run(Cli),
+    Help(String),
+}
+
+fn checked_after_values(kind: clap::error::ErrorKind) -> bool {
+    use clap::error::ErrorKind as K;
+    matches!(
+        kind,
+        K::MissingRequiredArgument
+            | K::MissingSubcommand
+            | K::ArgumentConflict
+            | K::DisplayHelpOnMissingArgumentOrSubcommand
+    )
+}
+
+fn asked_help(cmd: &clap::Command, m: &clap::ArgMatches) -> Option<String> {
+    match m.subcommand() {
+        Some((name, sub)) => asked_help(cmd.find_subcommand(name)?, sub),
+        None => m
+            .try_get_one::<bool>("help")
+            .ok()
+            .flatten()
+            .copied()
+            .unwrap_or(false)
+            .then(|| cmd.clone().render_long_help().to_string()),
     }
 }
 
@@ -180,7 +240,8 @@ pub(crate) struct DeployArgs {
         long,
         help = "PostgreSQL server port\nPrecedence: --port > $PGPORT > pgmi.yaml > 5432"
     )]
-    pub(crate) port: Option<String>,
+    #[arg(value_parser = go_int)]
+    pub(crate) port: Option<i64>,
     #[arg(
         short = 'U',
         long,
@@ -284,7 +345,7 @@ impl From<DeployArgs> for crate::deploy::Request {
             connection: Flags {
                 connection: a.connection,
                 host: a.host,
-                port: a.port,
+                port: a.port.filter(|p| *p != 0),
                 username: a.username,
                 database: a.database,
                 sslmode: a.sslmode,
@@ -328,6 +389,32 @@ pub(crate) fn go_bool(s: &str) -> Result<bool, String> {
         "0" | "f" | "F" | "FALSE" | "false" | "False" => Ok(false),
         _ => Err(format!("invalid boolean {s:?}")),
     }
+}
+
+/// An integer as Go's `strconv.ParseInt(s, 0, 64)` reads it: a sign, then
+/// decimal, `0x`, `0o`, `0b` or a leading `0` for octal, `_` between digits.
+fn go_int(s: &str) -> Result<i64, String> {
+    let err = || format!("invalid integer {s:?}");
+    let (negative, body) = match s.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, s.strip_prefix('+').unwrap_or(s)),
+    };
+    let prefix = body.get(..2).map(str::to_ascii_lowercase);
+    let (radix, digits, prefixed) = match prefix.as_deref() {
+        Some("0x") => (16, &body[2..], true),
+        Some("0o") => (8, &body[2..], true),
+        Some("0b") => (2, &body[2..], true),
+        _ if body.len() > 1 && body.starts_with('0') => (8, &body[1..], true),
+        _ => (10, body, false),
+    };
+    let separated =
+        !digits.contains("__") && !digits.ends_with('_') && (prefixed || !digits.starts_with('_'));
+    let plain: String = digits.chars().filter(|c| *c != '_').collect();
+    if !separated || plain.is_empty() || !plain.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err(err());
+    }
+    let magnitude = i128::from(u64::from_str_radix(&plain, radix).map_err(|_| err())?);
+    i64::try_from(if negative { -magnitude } else { magnitude }).map_err(|_| err())
 }
 
 fn exit_codes_help() -> String {
@@ -480,7 +567,6 @@ mod tests {
         assert_eq!(
             [
                 &c.host,
-                &c.port,
                 &c.username,
                 &c.database,
                 &c.sslcert,
@@ -490,7 +576,6 @@ mod tests {
             .map(|v| v.as_deref()),
             [
                 Some("h"),
-                Some("6000"),
                 Some("u"),
                 Some("db"),
                 Some("c"),
@@ -498,6 +583,7 @@ mod tests {
                 Some("r")
             ]
         );
+        assert_eq!(c.port, Some(6000));
         assert_eq!(c.sslmode, Some(SslMode::Require));
         assert!(r.overwrite && r.force && r.json);
         assert_eq!(r.compat.as_deref(), Some("1"));
@@ -542,5 +628,176 @@ mod tests {
         let e =
             Cli::try_parse_from(["pgmi", "deploy", ".", "--databricks-endpoint", "x"]).unwrap_err();
         assert_eq!(e.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+    }
+
+    fn parse(args: &[&str]) -> Result<Parsed, clap::Error> {
+        let args: Vec<std::ffi::OsString> = ["pgmi"].iter().chain(args).map(Into::into).collect();
+        Cli::parse_args(&args)
+    }
+
+    fn run(args: &[&str]) -> Cli {
+        match parse(args) {
+            Ok(Parsed::Run(cli)) => cli,
+            other => panic!("{args:?}: {other:?}"),
+        }
+    }
+
+    fn deploy(args: &[&str]) -> DeployArgs {
+        match run(&[&["deploy"], args].concat()).command {
+            Some(Command::Deploy(d)) => *d,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_repeated_flag_takes_its_last_value_and_a_list_flag_keeps_every_value() {
+        let d = deploy(&[
+            ".",
+            "-d",
+            "a",
+            "-d",
+            "b",
+            "--timeout",
+            "1s",
+            "--timeout",
+            "2s",
+            "--json",
+            "--json=false",
+            "--force=false",
+            "--force",
+            "-p",
+            "1",
+            "--port",
+            "2",
+            "--param",
+            "a=1",
+            "--param",
+            "b=2",
+        ]);
+        assert_eq!(d.database.as_deref(), Some("b"));
+        assert_eq!(d.timeout, Some(Duration::from_secs(2)));
+        assert!(!d.json && d.force);
+        assert_eq!(d.port, Some(2));
+        assert_eq!(d.params, ["a=1", "b=2"]);
+        let i = run(&["init", "-t", "basic", "-t", "minimal"]);
+        let Some(Command::Init(i)) = i.command else {
+            panic!()
+        };
+        assert_eq!(i.template.as_deref(), Some("minimal"));
+    }
+
+    #[test]
+    fn every_boolean_takes_go_forms() {
+        for (args, verbose) in [
+            (&["--verbose=false", "version"][..], false),
+            (&["-v=false", "version"], false),
+            (&["-v", "-v", "version"], true),
+            (&["-vv", "version"], true),
+            (&["version", "-v=true"], true),
+            (&["--verbose=1", "serve"], true),
+            (&["serve", "--verbose=false"], false),
+        ] {
+            assert_eq!(run(args).verbose, verbose, "{args:?}");
+        }
+        assert!(!run(&["--version=false"]).version);
+        assert!(run(&["--version", "--version"]).version);
+        for args in [&["-v=x", "version"][..], &["info", "--json=yes"]] {
+            assert!(parse(args).is_err(), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn help_is_a_boolean_that_wins_over_a_missing_argument_but_not_over_a_bad_value() {
+        assert!(matches!(
+            run(&["--help=false", "version"]).command,
+            Some(Command::Version)
+        ));
+        let Ok(Parsed::Help(text)) = parse(&["--help=true", "version"]) else {
+            panic!()
+        };
+        assert!(text.contains("pgmi version"), "{text}");
+        let Ok(Parsed::Help(text)) = parse(&["deploy", "--help"]) else {
+            panic!()
+        };
+        assert!(text.contains("pgmi deploy"), "{text}");
+        let e = parse(&["deploy", "--timeout", "banana", "--help"]).unwrap_err();
+        assert_eq!(e.kind(), clap::error::ErrorKind::ValueValidation);
+    }
+
+    #[test]
+    fn a_value_flag_takes_the_next_argument_even_with_a_dash() {
+        let d = deploy(&[".", "-d", "-x", "-p", "-1", "--param", "--json"]);
+        assert_eq!(d.database.as_deref(), Some("-x"));
+        assert_eq!(d.port, Some(-1));
+        assert_eq!(d.params, ["--json"]);
+        assert!(!d.json);
+        let e = parse(&["deploy", ".", "--timeout", "-1s"]).unwrap_err();
+        assert!(e.to_string().contains("must not be negative"), "{e}");
+    }
+
+    #[test]
+    fn the_port_is_an_integer_as_go_reads_one() {
+        for (text, n) in [
+            ("5432", 5432),
+            ("+5", 5),
+            ("-1", -1),
+            ("0", 0),
+            ("010", 8),
+            ("0x10", 16),
+            ("0X1f", 31),
+            ("0o17", 15),
+            ("0b101", 5),
+            ("1_0", 10),
+            ("0_7", 7),
+            ("0x_1", 1),
+            ("70000", 70000),
+            ("-9223372036854775808", i64::MIN),
+        ] {
+            assert_eq!(go_int(text), Ok(n), "{text}");
+        }
+        for text in [
+            "",
+            "abc",
+            " 1",
+            "1 ",
+            "1,2",
+            "_1",
+            "1_",
+            "1__0",
+            "08",
+            "0x",
+            "+-1",
+            "--1",
+            "1e3",
+            "9223372036854775808",
+            "99999999999999999999",
+        ] {
+            assert!(go_int(text).is_err(), "{text:?}");
+        }
+        assert_eq!(request(&[".", "-p", "0"]).connection.port, None);
+        assert_eq!(request(&[".", "-p", "0x10"]).connection.port, Some(16));
+        let e = parse(&["deploy", ".", "-p", "1,2"]).unwrap_err();
+        assert_eq!(e.kind(), clap::error::ErrorKind::ValueValidation);
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn every_integer_reads_back_in_each_base(n in proptest::num::i64::ANY) {
+            let (sign, m) = (if n < 0 { "-" } else { "" }, n.unsigned_abs());
+            for text in [
+                n.to_string(),
+                format!("{sign}0x{m:x}"),
+                format!("{sign}0o{m:o}"),
+                format!("{sign}0b{m:b}"),
+                format!("{sign}0{m:o}"),
+            ] {
+                proptest::prop_assert_eq!(go_int(&text), Ok(n), "{}", text);
+            }
+        }
+
+        #[test]
+        fn any_text_is_an_integer_or_a_refusal(text in "\\PC{0,12}") {
+            let _ = go_int(&text);
+        }
     }
 }

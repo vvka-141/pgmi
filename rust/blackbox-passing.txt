@@ -155,6 +155,7 @@ exit-codes/14-no-deploy-sql
 exit-codes/15-concurrent-deploy
 exit-codes/16-timeout
 exit-codes/2-usage
+flags/bool-forms
 flags/compat
 flags/compat-record
 flags/connection-forms
@@ -166,6 +167,8 @@ flags/overwrite-invalid-database
 flags/overwrite-new-database
 flags/overwrite-restores
 flags/params-file
+flags/port-values
+flags/repeated-flags
 flags/timeout-forms
 formats/dotenv-edges
 formats/dotenv-expansion

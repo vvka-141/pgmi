@@ -1,0 +1,20 @@
+description: a flag given twice takes its last value; --param and --params-file keep every value; a flag that takes a value takes the next argument even when it starts with a dash
+project:
+  files:
+    deploy.sql: CREATE TABLE marker AS SELECT current_setting('pgmi.a') AS a, current_setting('pgmi.b') AS b, current_database() AS db;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://127.0.0.1:1/x", --connection, "{conn}", -d, nowhere, -d, "{db}", --timeout, 1ms, --timeout, 3m, --param, a=1, --param, b=2, --json=false, --json]
+    expect:
+      exit: 0
+      json: {status: success, database: "{db}"}
+      sql:
+        - query: SELECT a, b, db FROM marker
+          rows: [["1", "2", "{db}"]]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, a=-x, --param, -b=y]
+    expect: {exit: 10, stderr: ["-b"]}
+  - pgmi: [init, "{workdir}/fresh", -t, advanced, -t, minimal]
+    expect:
+      exit: 0
+      files:
+        fresh/deploy.sql: ["."]
+      absent: [fresh/api]

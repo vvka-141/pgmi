@@ -17,7 +17,7 @@ type Result<T> = std::result::Result<T, ResolveError>;
 pub(crate) struct Flags {
     pub(crate) connection: Option<Secret>,
     pub(crate) host: Option<String>,
-    pub(crate) port: Option<String>,
+    pub(crate) port: Option<i64>,
     pub(crate) username: Option<String>,
     pub(crate) database: Option<String>,
     pub(crate) sslmode: Option<SslMode>,
@@ -277,6 +277,7 @@ pub(crate) enum ResolveError {
     Parse { source: Source, error: ParseError },
     NoDatabase,
     Port(String),
+    FlagPort(i64),
     PortCount { ports: usize, hosts: usize },
     Value { key: &'static str, value: String },
     WeakForSystemRoots(SslMode),
@@ -316,6 +317,10 @@ impl fmt::Display for ResolveError {
                 "database name is required\nProvide via:\n  1. --database/-d flag: pgmi deploy . -d mydb\n  2. Connection string: pgmi deploy . --connection \"postgresql://user@host/mydb\"\n  3. pgmi.yaml: connection.database: mydb\n  4. Environment variable: export PGDATABASE=mydb, or a database in PGMI_CONNECTION_STRING / DATABASE_URL",
             ),
             ResolveError::Port(p) => write!(f, "invalid port \"{p}\""),
+            ResolveError::FlagPort(p) => write!(
+                f,
+                "invalid --port flag: invalid port {p}: must be between 1 and 65535"
+            ),
             ResolveError::PortCount { ports, hosts } => {
                 write!(f, "could not match {ports} port numbers to {hosts} hosts")
             }
@@ -554,14 +559,16 @@ impl Given {
             });
         }
         let mut fields = Fields::new();
-        for (k, v) in [
-            ("host", &flags.host),
-            ("port", &flags.port),
-            ("user", &flags.username),
-        ] {
+        for (k, v) in [("host", &flags.host), ("user", &flags.username)] {
             if let Some(v) = v {
                 fields.insert(k.into(), v.clone());
             }
+        }
+        if let Some(p) = flags.port {
+            if !(1..=65535).contains(&p) {
+                return Err(ResolveError::FlagPort(p));
+            }
+            fields.insert("port".into(), p.to_string());
         }
         Ok(Given {
             fields,
