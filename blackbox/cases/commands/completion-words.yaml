@@ -1,0 +1,38 @@
+description: the completion scripts ask pgmi __complete for the words - subcommands, flags, --sslmode and --template values, template names, shells - and get directories for a project path
+steps:
+  - pgmi: [__completeNoDesc, ""]
+    expect:
+      exit: 0
+      stdout: ["^ai\\ncompletion\\nconfig\\ndeploy\\nhelp\\ninfo\\ninit\\nmetadata\\nserve\\ntemplates\\nversion\\n:4\\n$"]
+  - pgmi: [__completeNoDesc, deploy, --ss]
+    expect:
+      exit: 0
+      stdout: ["^--sslcert\\n--sslkey\\n--sslmode\\n--sslrootcert\\n:4\\n$"]
+  - pgmi: [__completeNoDesc, deploy, --sslmode, ""]
+    expect:
+      exit: 0
+      stdout: ["^disable\\nallow\\nprefer\\nrequire\\nverify-ca\\nverify-full\\n:4\\n$"]
+  - pgmi: [__completeNoDesc, deploy, --sslmode=v]
+    expect:
+      exit: 0
+      stdout: ["^verify-ca\\nverify-full\\n:4\\n$"]
+  - pgmi: [__completeNoDesc, deploy, ""]
+    expect:
+      exit: 0
+      stdout: ["^:16\\n$"]
+  - pgmi: [__completeNoDesc, init, --template, ""]
+    expect:
+      exit: 0
+      stdout: ["^advanced\\nbasic\\nminimal\\n:4\\n$"]
+  - pgmi: [__completeNoDesc, templates, describe, ""]
+    expect:
+      exit: 0
+      stdout: ["^advanced\\nbasic\\nminimal\\n:4\\n$"]
+  - pgmi: [__completeNoDesc, completion, ""]
+    expect:
+      exit: 0
+      stdout: ["^bash\\nzsh\\nfish\\npowershell\\n:4\\n$"]
+  - pgmi: [__complete, templates, ""]
+    expect:
+      exit: 0
+      stdout: ["(^|\\n)describe\\t\\S", "(^|\\n)list\\t\\S", ":4\\n$"]

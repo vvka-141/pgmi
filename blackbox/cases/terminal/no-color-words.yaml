@@ -1,0 +1,22 @@
+description: with NO_COLOR on a terminal the summary line says ok or FAILED, never a glyph
+project:
+  files:
+    deploy.sql: SELECT 1;
+    broken/deploy.sql: SELECT 1/0;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    tty: true
+    env: {NO_COLOR: "1"}
+    timeout: 30
+    expect:
+      exit: 0
+      stdout: ["(^|\\n)ok {db}: "]
+      stdout_not: ["✓"]
+  - pgmi: [deploy, "{project}/broken", --connection, "{conn}", -d, "{db}"]
+    tty: true
+    env: {NO_COLOR: "1"}
+    timeout: 30
+    expect:
+      exit: 13
+      stdout: ["(^|\\n)FAILED {db}: "]
+      stdout_not: ["✗"]

@@ -1,0 +1,10 @@
+description: deploy's help lists the exit codes in two columns, before the usage
+steps:
+  - pgmi: [help, deploy]
+    expect:
+      exit: 0
+      stdout: &table ["Exit codes:\\n  0   success\\n  10  invalid configuration       13  SQL execution failed\\n  11  connection failed           14  deploy\\.sql not found\\n  12  user denied overwrite       15  concurrent deploy in progress\\n  16  timeout exceeded            130 interrupted \\(SIGINT, SIGTERM\\)\\nA --timeout that runs out while connecting is 11"]
+  - pgmi: [deploy, --help]
+    expect:
+      exit: 0
+      stdout: *table

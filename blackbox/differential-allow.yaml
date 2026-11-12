@@ -127,3 +127,8 @@ accept:
     case: variant/connection:.*
     field: stderr
     rust: \(not shown, it may hold a password\)
+  - row: '`pgmi completion bash` script'
+    case: cases/commands/completion\.yaml
+    step: steps[0]
+    field: stdout
+    rust: '# bash completion V2 for pgmi'

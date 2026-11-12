@@ -1,4 +1,4 @@
-use std::io::{IsTerminal, Write};
+use std::io::Write;
 use std::process::{Command, Stdio};
 
 use super::stdout;
@@ -19,7 +19,7 @@ pub(crate) fn run(a: &AiArgs, env: &Env) -> Result<()> {
 }
 
 fn pager(env: &Env) -> Result<Option<Vec<String>>> {
-    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+    if !crate::tui::interactive(env) {
         return Ok(None);
     }
     let command = match env.non_empty("PGMI_PAGER")? {

@@ -1,7 +1,6 @@
 pub(crate) mod commands;
 pub(crate) mod usage;
 
-use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -10,7 +9,7 @@ use clap::{ArgAction, Args, Parser, Subcommand};
 use crate::config::params::Param;
 use crate::conn::cloud::{self, Provider};
 use crate::conn::resolve::{Flags, SslMode};
-use crate::error::{Kind, Secret};
+use crate::error::Secret;
 pub(crate) use commands::*;
 
 #[derive(Debug, Parser)]
@@ -121,7 +120,7 @@ fn asked_help(cmd: &clap::Command, m: &clap::ArgMatches) -> Option<String> {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
-    #[command(about = "Deploy a project: load it into a session and run its deploy.sql", long_about = DEPLOY_HELP, after_help = exit_codes_help())]
+    #[command(about = "Deploy a project: load it into a session and run its deploy.sql", long_about = DEPLOY_HELP)]
     Deploy(Box<DeployArgs>),
     #[command(about = "Write a project from a template")]
     Init(InitArgs),
@@ -168,6 +167,12 @@ environment variables > pgmi.yaml. PGMI_PARAM_DB_PASSWORD=x becomes
 current_setting('pgmi.db_password'); other environment variables are not read.
 Secrets go in the environment or a params file, never in --param.
 
+Exit codes:
+  0   success
+  10  invalid configuration       13  SQL execution failed
+  11  connection failed           14  deploy.sql not found
+  12  user denied overwrite       15  concurrent deploy in progress
+  16  timeout exceeded            130 interrupted (SIGINT, SIGTERM)
 A --timeout that runs out while connecting is 11: the server was not reached.";
 
 const CONNECTION_HELP: &str =
@@ -415,14 +420,6 @@ fn go_int(s: &str) -> Result<i64, String> {
     }
     let magnitude = i128::from(u64::from_str_radix(&plain, radix).map_err(|_| err())?);
     i64::try_from(if negative { -magnitude } else { magnitude }).map_err(|_| err())
-}
-
-fn exit_codes_help() -> String {
-    let mut out = String::from("Exit codes:\n  0    success\n");
-    for (kind, text) in Kind::TABLE {
-        let _ = writeln!(out, "  {:<4} {text}", kind.exit_code());
-    }
-    out
 }
 
 #[cfg(test)]

@@ -23,7 +23,6 @@ azure_identity = { version = "1.0.0", default-features = false, features = ["tok
 base64ct = { version = "1.8.0", features = ["alloc"] }
 cbc = "0.2.1"
 clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "error-context", "help", "usage", "suggestions"] }
-clap_complete = { version = "4.6.11", default-features = false }
 crossterm = { version = "0.29.0", default-features = false, features = ["events"] }
 des = "0.9.0"
 futures-util = { version = "0.3.31", default-features = false, features = ["std"] }

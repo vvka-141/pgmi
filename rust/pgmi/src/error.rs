@@ -31,23 +31,6 @@ impl Kind {
             Kind::Interrupted => 130,
         }
     }
-
-    pub(crate) const TABLE: [(Kind, &'static str); 11] = [
-        (Kind::General, "general error"),
-        (Kind::Usage, "usage error"),
-        (Kind::Internal, "internal error (panic)"),
-        (
-            Kind::Config,
-            "invalid configuration, refused before connecting",
-        ),
-        (Kind::Connection, "connection failed"),
-        (Kind::Denied, "overwrite not approved"),
-        (Kind::Sql, "SQL execution failed"),
-        (Kind::NoDeploySql, "deploy.sql not found"),
-        (Kind::Locked, "another deploy holds the target"),
-        (Kind::Timeout, "--timeout exceeded"),
-        (Kind::Interrupted, "interrupted (SIGINT or SIGTERM)"),
-    ];
 }
 
 #[derive(Debug, Default, Clone)]

@@ -179,7 +179,22 @@ fn writable(
 
 const AGENTS_NOTE: &str = "AGENTS.md and .agents/skills/ tell an AI assistant how this project works;\ncommit them, and edit them as your conventions change. Run \"pgmi ai\" for the\ndocs that match this pgmi version.\n";
 
+/// `s` as one POSIX shell word: as is when plain, else in single quotes.
+fn shell_quote(s: &str) -> String {
+    let plain = !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_./-".contains(c));
+    if plain {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
+}
+
 fn next_steps(template: Template, target: &str, db: Option<&str>) -> String {
+    let target = shell_quote(target);
+    let db = db.map(shell_quote);
+    let db = db.as_deref();
     match template {
         Template::Minimal => {
             let db = db.unwrap_or("mydb");
@@ -427,5 +442,18 @@ mod tests {
         let advanced = next_steps(Template::Advanced, "p", Some("shop"));
         assert!(advanced.starts_with("Managed-cloud note:"));
         assert!(advanced.contains("pgmi deploy p -d shop --param env=dev\n"));
+    }
+
+    #[test]
+    fn next_steps_quote_the_path_and_database_for_a_shell() {
+        let text = next_steps(Template::Minimal, "a b/c\"d", Some("it's"));
+        assert!(
+            text.contains("pgmi deploy 'a b/c\"d' -d 'it'\\''s'\n"),
+            "{text}"
+        );
+        assert!(
+            next_steps(Template::Minimal, "./x_y-1", None)
+                .contains("pgmi deploy ./x_y-1 -d mydb\n")
+        );
     }
 }

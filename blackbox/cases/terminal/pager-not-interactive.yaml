@@ -1,0 +1,18 @@
+description: on a terminal with CI set or PGMI_NON_INTERACTIVE=1, pgmi ai prints directly and never starts the pager
+steps:
+  - pgmi: [ai]
+    tty: true
+    env: {CI: "1", PAGER: "tee {workdir}/ci.txt"}
+    timeout: 30
+    expect:
+      exit: 0
+      stdout: ["pgmi_plan_view"]
+      absent: [ci.txt]
+  - pgmi: [ai]
+    tty: true
+    env: {PGMI_NON_INTERACTIVE: "1", PGMI_PAGER: "tee {workdir}/non-interactive.txt"}
+    timeout: 30
+    expect:
+      exit: 0
+      stdout: ["pgmi_plan_view"]
+      absent: [non-interactive.txt]

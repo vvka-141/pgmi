@@ -1,0 +1,10 @@
+description: init's next step quotes the path for a POSIX shell when it is not a plain word, and leaves a plain one as is
+steps:
+  - pgmi: [init, '{workdir}/a b"c', -t, minimal]
+    expect:
+      exit: 0
+      stderr: ['pgmi deploy ''{workdir}/a b"c'' -d mydb']
+  - pgmi: [init, plain_dir-1, -t, basic]
+    expect:
+      exit: 0
+      stderr: ['pgmi deploy plain_dir-1 -d mydb --param env=dev']

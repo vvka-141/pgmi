@@ -70,12 +70,11 @@ impl Notice {
     }
 }
 
-/// How the summary line marks success or failure: words (`ok`, `FAILED`)
-/// off a terminal, glyphs on one, glyphs in color unless `NO_COLOR`.
+/// How the summary line marks success or failure: colored glyphs on a
+/// terminal, words (`ok`, `FAILED`) off one or under `NO_COLOR` or `TERM=dumb`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Style {
     Plain,
-    Glyphs,
     Colored,
 }
 
@@ -111,6 +110,15 @@ impl Reporter {
             stamped: false,
             ..Self::to(Box::new(std::io::stderr()), verbose, style(env))
         })
+        let term =
+            std::io::stderr().is_terminal() && env.get("TERM").ok().flatten() != Some("dumb");
+        let no_color = env.non_empty("NO_COLOR").ok().flatten().is_some();
+        let style = if term && !no_color {
+            Style::Colored
+        } else {
+            Style::Plain
+        };
+        Arc::new(Self::to(Box::new(std::io::stderr()), verbose, style))
     }
 
     pub(crate) fn to(sink: Box<dyn Write + Send>, verbose: bool, style: Style) -> Self {
@@ -146,6 +154,16 @@ impl Reporter {
         let _ = sink.flush();
     }
 
+    /// Text with no line end: a prompt, or a line rewritten in place with `\r`.
+    pub(crate) fn partial(&self, text: &str) {
+        let mut sink = self
+            .sink
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _ = sink.write_all(text.as_bytes());
+        let _ = sink.flush();
+    }
+
     /// A `--verbose` line as Go prints it: `[VERBOSE] ` and no elapsed time.
     pub(crate) fn verbose(&self, text: &str) {
         if self.verbose {
@@ -173,10 +191,8 @@ impl Reporter {
         let ok = matches!(summary, Summary::Done(_));
         let (word, open, close) = match (ok, self.style) {
             (true, Style::Colored) => ("✓", "\x1b[32m", "\x1b[0m"),
-            (true, Style::Glyphs) => ("✓", "", ""),
             (true, Style::Plain) => ("ok", "", ""),
             (false, Style::Colored) => ("✗", "\x1b[31m", "\x1b[0m"),
-            (false, Style::Glyphs) => ("✗", "", ""),
             (false, Style::Plain) => ("FAILED", "", ""),
         };
         self.line(&format!("{open}{word}{close} {}", summary.text()));
@@ -307,8 +323,6 @@ mod tests {
         for (style, ok, want) in [
             (Style::Plain, true, "ok app: done\n"),
             (Style::Plain, false, "FAILED app: done\n"),
-            (Style::Glyphs, true, "✓ app: done\n"),
-            (Style::Glyphs, false, "✗ app: done\n"),
             (Style::Colored, true, "\x1b[32m✓\x1b[0m app: done\n"),
             (Style::Colored, false, "\x1b[31m✗\x1b[0m app: done\n"),
         ] {

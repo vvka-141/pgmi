@@ -1,0 +1,22 @@
+description: the --overwrite prompt keeps the typed name on its line, and the --force countdown rewrites one line with a carriage return, ending with "now."
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --overwrite]
+    tty: true
+    stdin: [{wait: 3}, "not-the-name\r"]
+    timeout: 30
+    expect:
+      exit: 12
+      stdout: ["Type the database name to confirm: not-the-name\\n"]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --overwrite, --force]
+    tty: true
+    env: {PGMI_NO_BANNER: "1"}
+    timeout: 40
+    expect:
+      exit: 0
+      stdout: ["in 5s\\. Ctrl-C aborts\\.--force: DROP DATABASE \"{db}\" in 4s\\.", "--force: DROP DATABASE \"{db}\" now\\."]
+      raw: ["Ctrl-C aborts\\.\\r--force: DROP DATABASE"]

@@ -48,6 +48,22 @@ pub const PANIC_EXIT_CODE: u8 = Kind::Internal.exit_code();
 /// before it starts any thread (record 0016).
 pub fn run(args: impl IntoIterator<Item = OsString>, env: Env, export: impl Fn(&str, &str)) -> u8 {
     let args: Vec<OsString> = args.into_iter().collect();
+    if let Some(request) = args.get(1).and_then(|a| a.to_str()).filter(|a| {
+        [
+            commands::completion::REQUEST,
+            commands::completion::REQUEST_NO_DESCRIPTIONS,
+        ]
+        .contains(a)
+    }) {
+        let words: Vec<String> = args[2..]
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        return match commands::completion::request(request, &words, &env) {
+            Ok(()) => 0,
+            Err(e) => report(&e),
+        };
+    }
     let cli = match Cli::parse_args(&args) {
         Ok(Parsed::Run(c)) => c,
         Ok(Parsed::Help(text)) => {
@@ -173,17 +189,14 @@ fn print_version(repository: bool) -> u8 {
 }
 
 fn bare(env: &Env) -> error::Result<()> {
-    use std::io::IsTerminal;
-    let banner =
-        std::io::stderr().is_terminal() && env.non_empty("PGMI_NO_BANNER").ok().flatten().is_none();
-    if !banner {
+    if !tui::interactive(env) || env.non_empty("PGMI_NO_BANNER").ok().flatten().is_some() {
         return help::<&str>(&[]);
     }
     let logo = pgmi_shared::file("art/logo.txt")
         .and_then(|b| std::str::from_utf8(b).ok())
         .unwrap_or("pgmi");
     let text = format!(
-        "{}\n\n  pgmi deploy <path>   Deploy a project\n  pgmi init <path>     Start a project from a template\n  pgmi --help          Full reference\n",
+        "{}\nPostgreSQL-native deployment driver.\n\n  pgmi init demo                Scaffold a starter project\n  pgmi deploy ./demo -d mydb    Run deploy.sql against mydb\n  pgmi --help                   Full reference\n",
         logo.trim_end()
     );
     std::io::stderr()

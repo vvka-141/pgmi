@@ -92,17 +92,20 @@ impl Approver for Terminal {
                 return Ok(());
             }
             if self.banner {
-                reporter.line(&banner(db));
+                reporter.line(&format!("\n{}\n", banner(db)));
             }
             for left in (1..=5).rev() {
-                reporter.line(&format!(
-                    "--force: DROP DATABASE \"{db}\" in {left}s. Ctrl-C aborts."
+                reporter.partial(&format!(
+                    "\r--force: DROP DATABASE \"{db}\" in {left}s. Ctrl-C aborts."
                 ));
                 tokio::select! {
                     () = tokio::time::sleep(Duration::from_secs(1)) => {}
                     () = token.cancelled() => return Err(interrupted()),
                 }
             }
+            reporter.partial(&format!(
+                "\r--force: DROP DATABASE \"{db}\" now.                          \n"
+            ));
             return Ok(());
         }
         if !self.interactive {
@@ -114,8 +117,9 @@ impl Approver for Terminal {
             ));
         }
         reporter.line(&format!(
-            "WARNING: about to DROP and RECREATE database \"{db}\". This deletes all data.\nType the database name to confirm:"
+            "\nWARNING: about to DROP and RECREATE database \"{db}\". This deletes all data."
         ));
+        reporter.partial("Type the database name to confirm: ");
         let answer = self.answer.clone();
         let read = crate::blocking::spawn(move || answer());
         let line = tokio::select! {
@@ -212,7 +216,7 @@ mod tests {
         r.unwrap();
         assert_eq!(
             out,
-            "WARNING: about to DROP and RECREATE database \"app\". This deletes all data.\nType the database name to confirm:\nConfirmed.\n"
+            "\nWARNING: about to DROP and RECREATE database \"app\". This deletes all data.\nType the database name to confirm: Confirmed.\n"
         );
         let (r, _) = ask(&terminal(false, true, Some("ap\n"))).await;
         let e = r.unwrap_err();
@@ -244,15 +248,16 @@ mod tests {
         let (r, out) = ask(&terminal(true, true, None)).await;
         r.unwrap();
         assert_eq!(started.elapsed(), Duration::from_secs(5));
-        let lines: Vec<&str> = out.lines().collect();
-        assert_eq!(lines.len(), 5);
+        let ticks: Vec<String> = (1..=5)
+            .rev()
+            .map(|n| format!("\r--force: DROP DATABASE \"app\" in {n}s. Ctrl-C aborts."))
+            .collect();
         assert_eq!(
-            lines[0],
-            "--force: DROP DATABASE \"app\" in 5s. Ctrl-C aborts."
-        );
-        assert_eq!(
-            lines[4],
-            "--force: DROP DATABASE \"app\" in 1s. Ctrl-C aborts."
+            out,
+            format!(
+                "{}\r--force: DROP DATABASE \"app\" now.                          \n",
+                ticks.concat()
+            )
         );
     }
 

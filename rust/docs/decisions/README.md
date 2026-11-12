@@ -21,7 +21,7 @@ them.
 | [0008](0008-aws-credentials.md) | aws-config credentials on pgmi's own reqwest-based HTTP client; the RDS token signed with aws-sigv4 directly, not aws-sdk-rds |
 | [0009](0009-google-cloud-sql.md) | Spike B's own dialer; google-cloud-auth without default features; Admin API URL overridable for fakes |
 | [0010](0010-embedded-assets-and-packaging.md) | Own `build.rs` table in `pgmi-shared`; `include` lists; git, package list and embedded list must be equal |
-| [0011](0011-cli-parsing.md) | clap derive + clap_complete; long-only `--help`, Go-style booleans and durations, exit codes in help |
+| [0011](0011-cli-parsing.md) | clap derive; Cobra's completion scripts answered by `__complete`; long-only `--help`, Go-style booleans and durations, exit codes in help |
 | [0012](0012-terminal-ui.md) | ratatui + crossterm state machines for the two wizards, plain prompts elsewhere; detection rules for CI, colour, banner, pager |
 | [0013](0013-yaml.md) | serde-saphyr to read (strict, source text kept), yaml-edit to edit keeping comments |
 | [0014](0014-pgmiignore-and-sql-lexer.md) | Own clean-room gitignore matcher with POSIX classes; one hand-written SQL lexer for split, macro, checksum, metadata |

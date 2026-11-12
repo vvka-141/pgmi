@@ -81,9 +81,10 @@ with exit 1.
 `{{PROJECT_NAME}}` in a template becomes the target folder's name, as is in
 text files and JSON-escaped in `.json` files. Answering Yes to "Set up the
 connection now?" runs the `config` wizard and writes its settings into the
-scaffolded `pgmi.yaml`.
+scaffolded `pgmi.yaml`. The next step it prints names the path and database
+as POSIX shell words, single-quoted unless plain (`pgmi deploy 'a b' -d mydb`).
 
-Cases: `commands/init`, `commands/init-unwritable`, `commands/init-unlistable`, `terminal/init-wizard`, `terminal/non-interactive`, `commands/init-project-name`, `terminal/init-wizard-connection`, `terminal/init-wizard-connection-esc`.
+Cases: `commands/init-next-step-quoted`, `commands/init`, `commands/init-unwritable`, `commands/init-unlistable`, `terminal/init-wizard`, `terminal/non-interactive`, `commands/init-project-name`, `terminal/init-wizard-connection`, `terminal/init-wizard-connection-esc`.
 
 ### Template deployments
 
@@ -136,17 +137,18 @@ Cases: `commands/metadata`, `commands/metadata-invalid`, `commands/metadata-dupl
 1)`), `ai` (the overview) and `ai contract` (the session API), `completion
 bash|zsh|fish|powershell`, `help <command>` and `--help`. An unknown
 subcommand, template or shell, or extra arguments, is exit 2. `pgmi` with no
-arguments prints the root help on stdout and exits 0; on a terminal it draws
-the banner on stderr instead, unless `PGMI_NO_BANNER` is set. `deploy --help`
+arguments prints the root help on stdout and exits 0; when interactive (stdin
+and stdout on a terminal, no `CI`, no `PGMI_NON_INTERACTIVE=1`) it draws the
+banner on stderr instead, unless `PGMI_NO_BANNER` is set. `deploy --help`
 describes the command, its examples, where the password and parameters come
-from, and every flag. Completion offers `init --template` names,
-`templates describe` names and `--sslmode` values in every shell; in
-PowerShell and fish the Rust script completes them itself (Rust unit tests
-`powershell_completes_template_names_and_sslmode_values`,
-`bash_zsh_and_fish_complete_template_names_after_describe`), where Go's script
-calls back into the binary.
+from, the exit codes in two columns, and every flag. The completion scripts
+are Cobra's: each asks the binary for the words (`pgmi __complete <words>`,
+one per line with a tab and its description, `__completeNoDesc` without, then
+`:<directive>`). They offer subcommands, flags (`-` typed), `--sslmode`
+values, `init --template` and `templates describe` names, the `completion`
+shells, and directories for a project path.
 
-Cases: `commands/templates`, `commands/version`, `commands/ai`, `commands/completion`, `commands/help`, `commands/bare`, `commands/deploy-help-text`.
+Cases: `commands/bare-not-interactive`, `commands/deploy-help-exit-codes`, `commands/completion-words`, `commands/templates`, `commands/version`, `commands/ai`, `commands/completion`, `commands/help`, `commands/bare`, `commands/deploy-help-text`.
 
 ### Verbose output
 
@@ -460,7 +462,9 @@ A missing target is created (`Database "<name>" does not exist; creating`); a
 exit 15. A server older than PostgreSQL 15 is refused with exit 10 before
 anything is created or dropped.
 `--overwrite` drops and recreates it: on a terminal after the user types the
-database name (a wrong name is exit 12); with `--force` after a countdown, with
+database name after `Type the database name to confirm: `, on that line (a
+wrong name is exit 12); with `--force` after a five-second countdown that
+rewrites one line with `\r` and ends `now.`, with
 a danger banner on a terminal unless `PGMI_NO_BANNER` is set, and without a
 countdown when there is no terminal; without `--force` and without a terminal
 it is refused with exit 12 and nothing is dropped. `--force` alone changes
@@ -481,6 +485,7 @@ nothing is dropped. A database PostgreSQL marked invalid (connection limit
 limit. Full reference: `docs/CLI.md` "--overwrite".
 
 Cases: `exit-codes/12-overwrite-denied`, `flags/overwrite-force`, `flags/overwrite-connection-limit`, `flags/overwrite-invalid-database`, `flags/overwrite-new-database`, `flags/overwrite-restores`, `terminal/overwrite-confirmation`, `terminal/force-banner`, `terminal/force-countdown-timeout`, `terminal/non-interactive`, `terminal/prompt-cancel`, `connection/maintenance-database-only-when-needed`. A signal after the drop: `bad-weather/overwrite-signal-between-drop-and-create` (the fault-injecting proxy holds the `CREATE DATABASE`), and the Rust integration test `a_signal_after_the_drop_still_recreates_and_restores_the_database`.
+Cases: `exit-codes/12-overwrite-denied`, `flags/overwrite-force`, `flags/overwrite-connection-limit`, `flags/overwrite-invalid-database`, `flags/overwrite-new-database`, `flags/overwrite-restores`, `terminal/overwrite-confirmation`, `terminal/overwrite-prompt-and-countdown`, `terminal/force-banner`, `terminal/force-countdown-timeout`, `terminal/non-interactive`, `terminal/prompt-cancel`, `connection/maintenance-database-only-when-needed`. A signal after the drop: Rust integration test `a_signal_after_the_drop_still_recreates_and_restores_the_database` (a case cannot hold `CREATE DATABASE` on a lock).
 
 ### Concurrency
 
@@ -558,7 +563,8 @@ and above as `WARNING:  <message>`, then `DETAIL:  ...` and `HINT:  ...` lines
 `deploy.sql` lowers `client_min_messages` itself (or DEBUG under `-v`), as bare
 messages; the server's own DEBUG never does. The run ends with one summary line: `ok
 <db>: N files loaded in T` or `FAILED <db>: failed after T ...` when stderr is
-not a terminal, `✓`/`✗` and colours on a terminal; `NO_COLOR` removes colours.
+not a terminal, `✓`/`✗` in colour on a terminal; with `NO_COLOR` or
+`TERM=dumb` the words again.
 T is seconds with two decimals (`1.12s`). A success adds `, N paths ignored`
 when discovery left paths out (dot-files count). A failure adds what was
 left: ` — nothing committed` in atomic mode, ` (unit U of N failed; C earlier
@@ -566,6 +572,7 @@ unit(s) already committed)` in psql mode, and `created database "<db>", left
 empty` when this run created it.
 
 Cases: `notices/streaming`, `notices/severity`, `notices/deploy-sql-message-level`, `commands/verbose`, `terminal/colors`, `notices/summary-line`, `notices/secrets-redacted`, `execution/pgmi-test-without-tests`, `execution/setup-psql-fixture`.
+Cases: `notices/streaming`, `notices/severity`, `commands/verbose`, `terminal/colors`, `terminal/no-color-words`, `notices/summary-line`, `notices/secrets-redacted`, `execution/pgmi-test-without-tests`, `execution/setup-psql-fixture`.
 
 ### The --json record
 
@@ -689,12 +696,12 @@ Wizards and prompts run only on a terminal and never when `CI` is set or
 else `PAGER`, else `less -R`, on a terminal only; `PGMI_PAGER=cat` prints
 directly. The pager command is split on white space and run without a shell
 (no quoting, no `$` expansion); a pager that cannot start means the output is
-printed directly. Wizards and the pager need stdin and stdout on a terminal,
-prompts stdin and stderr. Outside the wizards pgmi never sends the terminal a
+printed directly. Wizards and the pager need stdin and stdout on a terminal
+and neither `CI` nor `PGMI_NON_INTERACTIVE=1`, prompts stdin and stderr. Outside the wizards pgmi never sends the terminal a
 query (background colour, cursor position, device attributes), so a terminal
 that never answers cannot stall it.
 
-Cases: `terminal/init-wizard`, `terminal/non-interactive`, `terminal/pager`, `terminal/colors`, `terminal/pager-command`, `terminal/no-terminal-queries`.
+Cases: `terminal/init-wizard`, `terminal/non-interactive`, `terminal/pager`, `terminal/pager-not-interactive`, `terminal/colors`, `terminal/pager-command`, `terminal/no-terminal-queries`.
 
 ### Cloud sign-in
 
@@ -1261,6 +1268,7 @@ release notes take their "Behaviour changes" section from this table.
 | `.env` line with no key (`=x`, or a last line without `=`) | the rest applied, an empty name set | file refused, exit 10 | agent 2026-11-12 (PGMI-900), owner may revisit |
 | `pgmi help <unknown topic>` | "Unknown help topic", exit 0 | exit 2 | agent 2026-11-12 (PGMI-906), owner may revisit |
 | `pgmi help deploy <extra>` | extra argument ignored, exit 0 | exit 2 | agent 2026-11-12 (PGMI-906), owner may revisit |
+| `pgmi completion bash` script | Cobra's first version: also offers `--flag=` forms of flags that take a value | Cobra's second version: the same words without the `--flag=` forms | agent 2026-11-12 (PGMI-905), owner may revisit |
 | `--sslmode ''` | treated as unset | refused, exit 10 | agent 2026-11-12 (PGMI-906), owner may revisit |
 | `.env` with a leading UTF-8 BOM | whole file refused | applied | agent 2026-11-12 (PGMI-906), owner may revisit |
 | `metadata scaffold --write` on a file with a UTF-8 BOM | BOM kept before the inserted block | BOM removed | agent 2026-11-12 (PGMI-906), owner may revisit |

@@ -1,0 +1,24 @@
+description: bare pgmi draws the banner only when interactive (stdin and stdout terminals, no CI, no PGMI_NON_INTERACTIVE=1); otherwise it prints the root help on stdout
+steps:
+  - pgmi: []
+    tty: true
+    timeout: 30
+    expect:
+      exit: 0
+      stdout: ["█", "PostgreSQL-native deployment driver\\.", "pgmi init demo +Scaffold a starter project"]
+  - pgmi: []
+    tty: true
+    env: {CI: "1"}
+    timeout: 30
+    expect:
+      exit: 0
+      stdout: ["Available Commands:"]
+      stdout_not: ["█"]
+  - pgmi: []
+    tty: true
+    env: {PGMI_NON_INTERACTIVE: "1"}
+    timeout: 30
+    expect:
+      exit: 0
+      stdout: ["Available Commands:"]
+      stdout_not: ["█"]

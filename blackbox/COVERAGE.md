@@ -42,8 +42,10 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | advanced template: first-deploy check of the login's attributes and Azure's extension list | ✓ `deploy/advanced-template-preflight` |
 | `version`, `--version`, extra argument = 2 | ✓ `commands/version` |
 | `ai`, `ai contract`, unknown subcommand = 2 | ✓ `commands/ai` |
-| `completion bash\|zsh\|fish\|powershell`, other shell = 2 | ✓ `commands/completion`; PowerShell template and sslmode values ✗ (the scripts differ by design; Rust unit test `powershell_completes_template_names_and_sslmode_values`, checked by hand with `pwsh`) |
+| `completion bash\|zsh\|fish\|powershell`, other shell = 2 | ✓ `commands/completion` |
+| completion words through `__complete`: subcommands, flags, `--sslmode` and `--template` values (also `--flag=v`), template names, shells, directories for a project path | ✓ `commands/completion-words`; the scripts themselves in a real shell ✗ (the runner starts only pgmi; bash checked by hand, zsh, fish and PowerShell scripts are Cobra's text unchanged) |
 | `help`, `--help`, `<command> --help`, unknown command / wrong arity = 2 | ✓ `commands/help`, `commands/deploy-help-text` |
+| `help deploy` / `deploy --help` exit-code table | ✓ `commands/deploy-help-exit-codes` |
 | `-v` / `--verbose` (DEBUG notices shown, none from pgmi's own queries; parameter counts, never keys or values) | ✓ `commands/verbose`, `notices/verbose-no-internal-debug`, `params/verbose-counts` |
 | `-v` step lines: `--database` choice, resolved connection without its password, scan, create/exists/recreate, session tables, contract, TLS, macros, units; ignored paths after the summary; `init` and `metadata` lines | ✓ `commands/verbose-lines` |
 | `serve`: initialize, `tools/list` (7 tools), a tool call, malformed message (-32700, session continues), unknown method (-32601), EOF exits 0 | ✓ `serve/session` |
@@ -59,7 +61,8 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `serve`: deploys in sequence after an open transaction or a failed tail block; overlapping deploys = 15 | ✓ `serve/deploys-in-sequence`, `serve/concurrent-deploys` |
 | `serve`: deploy `timeout` argument (16, not a duration = 10) | ✓ `serve/deploy-timeout` |
 | `init`: `{{PROJECT_NAME}}`, JSON-escaped in `.json` | ✓ `commands/init-project-name`; file modes 0644/0755 ✗ (the runner checks content only) |
-| `pgmi` with no arguments | ✓ `commands/bare` |
+| `init`: next step shell-quotes the path | ✓ `commands/init-next-step-quoted` |
+| `pgmi` with no arguments; help instead of the banner under `CI` or `PGMI_NON_INTERACTIVE=1` | ✓ `commands/bare`, `commands/bare-not-interactive` |
 | `pgmi: error:` prefix, unknown subcommand and shorthand, `-h` on deploy, several cloud flags = 10 | ✓ `commands/usage-errors` |
 | `-h` is help (exit 0) on every command but deploy; an invalid `--sslmode` value = 10 | ✓ `commands/short-help-and-sslmode-value` |
 | metadata id spellings, XML leniency, fallback id; broken blocks = 10 | ✓ `commands/metadata-forms`, `commands/metadata-refusals` |
@@ -106,9 +109,9 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `PGOPTIONS`, `PGTZ`, `PGTARGETSESSIONATTRS`, `PGREQUIREAUTH`, `PGCHANNELBINDING` (read by the driver) | ✓ `connection/keywords`, `connection/target-session-attrs`, `tls/require-auth-and-version`, `tls/channel-binding-and-direct` |
 | `PGHOSTADDR`, `PGSSLCRL` (ignored) | ✓ `env/ignored-variables` |
 | `PGSSLSNI`, `PGSSLCERTMODE`, `PGMINPROTOCOLVERSION`, `PGMAXPROTOCOLVERSION` (invalid = 10) | ✓ `env/pg-tls-protocol-variables` |
-| `NO_COLOR`, `PGMI_NO_BANNER`, `CI`, `PGMI_NON_INTERACTIVE` (on a terminal) | ✓ `terminal/colors`, `terminal/force-banner`, `terminal/non-interactive` |
+| `NO_COLOR`, `PGMI_NO_BANNER`, `CI`, `PGMI_NON_INTERACTIVE` (on a terminal); `ok`/`FAILED` under `NO_COLOR` | ✓ `terminal/colors`, `terminal/no-color-words`, `terminal/force-banner`, `terminal/non-interactive`; `TERM=dumb` ✗ (the runner sets `TERM` for a terminal step) |
 | no terminal queries outside the wizards | ✓ `terminal/no-terminal-queries` |
-| `PGMI_PAGER`, `PAGER`, `PGMI_PAGER=cat` (on a terminal); split without a shell, default `less -R`, a pager that cannot start | ✓ `terminal/pager`, `terminal/pager-command` |
+| `PGMI_PAGER`, `PAGER`, `PGMI_PAGER=cat` (on a terminal); split without a shell, default `less -R`, a pager that cannot start; no pager under `CI` or `PGMI_NON_INTERACTIVE=1` | ✓ `terminal/pager`, `terminal/pager-command`, `terminal/pager-not-interactive` |
 | `PGMI_MAX_FILE_SIZE` (cap, not a number = 10) | ✓ `commands/metadata-refusals` |
 | `IDENTITY_ENDPOINT`/`IDENTITY_HEADER`, `AWS_REGION`, `AWS_DEFAULT_REGION`, `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` | ✓ `cloud/*`; `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET` ✗ (they only reach Entra, see Cloud sign-in) |
 
@@ -212,6 +215,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | Behaviour | Coverage |
 |---|---|
 | `init` wizard, overwrite confirmation (right name / wrong name = 12), `--force` countdown and banner, `config` | ✓ `terminal/*` |
+| typed name on the prompt line; countdown rewrites one line with `\r` | ✓ `terminal/overwrite-prompt-and-countdown` |
 | `--timeout` during the `--force` countdown = 16, nothing dropped | ✓ `terminal/force-countdown-timeout` |
 | end of input at the prompt = 12, SIGINT at the prompt or countdown = 130, Ctrl-C in `config` = 130 | ✓ `terminal/prompt-cancel`; Esc on the first `config` screen ✗ (did not end the wizard under the runner's pty; not investigated) |
 
