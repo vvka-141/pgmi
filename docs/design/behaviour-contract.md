@@ -1196,6 +1196,14 @@ release notes take their "Behaviour changes" section from this table.
 | Change | 0.14 (Go) | 0.20 (Rust) | Decided |
 |---|---|---|---|
 | Google sign-in without Application Default Credentials | exit 1 | exit 11 | intended |
+| `pgmi help <unknown topic>` | "Unknown help topic", exit 0 | exit 2 | agent 2026-11-12 (PGMI-906), owner may revisit |
+| `pgmi help deploy <extra>` | extra argument ignored, exit 0 | exit 2 | agent 2026-11-12 (PGMI-906), owner may revisit |
+| `--sslmode ''` | treated as unset | refused, exit 10 | agent 2026-11-12 (PGMI-906), owner may revisit |
+| `.env` with a leading UTF-8 BOM | whole file refused | applied | agent 2026-11-12 (PGMI-906), owner may revisit |
+| `metadata scaffold --write` on a file with a UTF-8 BOM | BOM kept before the inserted block | BOM removed | agent 2026-11-12 (PGMI-906), owner may revisit |
+| `CALL pgmi_test('it''s')` (doubled quote in the pattern) | not expanded; the server answers 42883, exit 13 | expanded with pattern `it's`; no test matches, exit 13 | agent 2026-11-12 (PGMI-906), owner may revisit |
+| `--json` `ignoredPaths` path of a directory | `./lib` | `./lib/`, as the serve schema says | agent 2026-11-12 (PGMI-906), owner may revisit |
+| A parameter key in an error message | lowercased | as typed | agent 2026-11-12 (PGMI-906), owner may revisit |
 | URI scheme not in lowercase (`POSTGRESQL://`) | refused as an unknown form, exit 10 | read as a URI | agent 2026-11-12 (PGMI-896), owner may revisit |
 | `pgmi.yaml` quoted port (`port: "5433"`) | refused, exit 10 | accepted | agent 2026-11-12 (PGMI-895), owner may revisit |
 | `pgmi.yaml` with two YAML documents | the second is silently ignored | refused, exit 10 | agent 2026-11-12 (PGMI-895), owner may revisit |
