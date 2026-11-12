@@ -287,7 +287,14 @@ pub(crate) fn check(provider: Provider, req: &Options, spec: &mut Spec, env: &En
     }
 }
 
-pub(crate) async fn token(provider: Provider, req: &Options, env: &Env) -> Result<Token> {
+/// Signs in to `provider`. A Google sign-in then renews in the background
+/// and tells `log` when a renewal fails.
+pub(crate) async fn token(
+    provider: Provider,
+    req: &Options,
+    env: &Env,
+    log: crate::conn::dial::LogSink,
+) -> Result<Token> {
     crate::conn::tls::require_cpu()?;
     match provider {
         Provider::Azure => renew::Renewing::start(azure::Signin::new(
@@ -300,7 +307,7 @@ pub(crate) async fn token(provider: Provider, req: &Options, env: &Env) -> Resul
         Provider::Aws => aws::signer(req, env).await.map(|s| Token::Aws(Arc::new(s))),
         Provider::Google => {
             let signin = Arc::new(renew::Renewing::start(google::Signin::new(req, env)?).await?);
-            signin.renew_ahead();
+            signin.renew_ahead(log);
             Ok(Token::Google(signin))
         }
         Provider::Databricks => databricks::lakebase(req, env)

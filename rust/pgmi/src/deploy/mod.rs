@@ -600,8 +600,23 @@ impl Steps<'_> {
     }
 
     async fn sign_in(&self, provider: Provider, options: &cloud::Options) -> Result<cloud::Token> {
+        let (reporter, verbose, secrets) = (
+            self.reporter.clone(),
+            self.ctx.verbose,
+            self.secrets.clone(),
+        );
+        let log: crate::conn::dial::LogSink = Arc::new(move |line: String| {
+            if verbose {
+                reporter.verbose(&redact(&line, &secrets.list()));
+            }
+        });
         self.guard
-            .connecting(Box::pin(cloud::token(provider, options, &self.ctx.env)))
+            .connecting(Box::pin(cloud::token(
+                provider,
+                options,
+                &self.ctx.env,
+                log,
+            )))
             .await
     }
 
