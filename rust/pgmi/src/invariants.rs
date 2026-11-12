@@ -225,8 +225,11 @@ fn percent(s: &str) -> String {
     })
 }
 
+const SUFFIX: &str = "Zq7suffix";
+
 /// The URI, keyword/value and ADO.NET forms of the same settings parse to the
-/// same fields, and no refusal of a damaged form shows the password.
+/// same fields, and no refusal of a damaged form shows the password or a
+/// key written after it, which may be the password's unquoted rest.
 pub fn conn_forms(settings: &Conn) -> Checked {
     let c = settings.normalized();
     let want = c.expected();
@@ -259,6 +262,9 @@ pub fn conn_forms(settings: &Conn) -> Checked {
         format!("postgresql://u:{}@h:99999/d", c.password),
         format!("host=h password={} dbname=d port=x", c.password),
         format!("Host=h;Password={};Database=d;Port=x", c.password),
+        format!("postgresql://h/d?password={}&{SUFFIX}=x", c.password),
+        format!("host=h dbname=d password={} {SUFFIX}=x", c.password),
+        format!("Host=h;Database=d;Password={};{SUFFIX}=x", c.password),
     ];
     for (text, must_fail) in refused
         .iter()
@@ -270,7 +276,7 @@ pub fn conn_forms(settings: &Conn) -> Checked {
             Err(e) => {
                 let shown = Error::from(e).text();
                 ensure!(
-                    !shown.contains(&c.password),
+                    !shown.contains(&c.password) && !shown.contains(SUFFIX),
                     "{text:?} was refused with the password in {shown:?}"
                 );
             }

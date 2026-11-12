@@ -63,6 +63,7 @@ pub(crate) enum ParseError {
     ServiceFile,
     Unsupported(&'static str),
     UnknownKey(String),
+    UnknownKeyBesidePassword,
     InvalidPort,
     PercentEncoding,
     NotUtf8,
@@ -88,6 +89,10 @@ impl fmt::Display for ParseError {
                 write!(f, "{k} is not supported; remove it from the connection string")
             }
             ParseError::UnknownKey(k) => write!(f, "invalid connection option \"{k}\""),
+            ParseError::UnknownKeyBesidePassword => write!(
+                f,
+                "invalid connection option ({HIDDEN}): quote or percent-encode a password that holds a separator, or remove the option"
+            ),
             ParseError::InvalidPort => write!(
                 f,
                 "invalid port in connection string ({HIDDEN}): want a number from 1 to 65535"
@@ -129,8 +134,25 @@ impl From<ParseError> for Error {
 
 type Result<T> = std::result::Result<T, ParseError>;
 
+/// The fields of a connection string. An unknown key written after a
+/// password is not named: an unquoted password with a separator in it splits
+/// into a key that is the rest of the password.
 pub(crate) fn parse(s: &str) -> Result<Fields> {
     let t = s.trim();
+    fields(t).map_err(|e| match e {
+        ParseError::UnknownKey(k) if after_password(t, &k) => ParseError::UnknownKeyBesidePassword,
+        e => e,
+    })
+}
+
+fn after_password(s: &str, key: &str) -> bool {
+    let s = s.to_ascii_lowercase();
+    let at = s.rfind(&key.to_ascii_lowercase()).unwrap_or(s.len());
+    let before = &s[..at];
+    before.contains("password") || before.contains("pwd")
+}
+
+fn fields(t: &str) -> Result<Fields> {
     let fields = if t.starts_with("postgresql://") || t.starts_with("postgres://") {
         uri(t)?
     } else if !t.contains('=') {
@@ -211,8 +233,10 @@ fn decode(s: &str) -> Result<String> {
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'%' {
-            let hex = s
+            let hex = b
                 .get(i + 1..i + 3)
+                .filter(|h| h.iter().all(u8::is_ascii_hexdigit))
+                .and_then(|h| std::str::from_utf8(h).ok())
                 .and_then(|h| u8::from_str_radix(h, 16).ok())
                 .ok_or(ParseError::PercentEncoding)?;
             out.push(hex);
@@ -227,6 +251,7 @@ fn decode(s: &str) -> Result<String> {
 
 fn uri(s: &str) -> Result<Fields> {
     let rest = s.split_once("://").map_or(s, |x| x.1);
+    let rest = rest.split_once('#').map_or(rest, |x| x.0);
     let (before_query, query) = rest.split_once('?').unwrap_or((rest, ""));
     let (authority, path) = before_query.split_once('/').unwrap_or((before_query, ""));
     let (userinfo, hostlist) = match authority.rsplit_once('@') {
@@ -642,6 +667,52 @@ mod tests {
         assert_eq!(
             fields(r"host=db1 password='a b\'c;d' dbname=app"),
             pairs(&[("host", "db1"), ("password", "a b'c;d"), ("dbname", "app")])
+        );
+    }
+
+    #[test]
+    fn percent_escapes_take_two_hex_digits() {
+        for bad in ["%+F", "%-1", "%G0", "%2", "% 2"] {
+            assert_eq!(
+                parse(&format!("postgresql://u:a{bad}z@h/d")),
+                Err(ParseError::PercentEncoding),
+                "{bad}"
+            );
+            assert_eq!(
+                parse(&format!("postgresql://h/d?application_name=a{bad}z")),
+                Err(ParseError::PercentEncoding),
+                "{bad}"
+            );
+        }
+        assert_eq!(parse("postgresql://h/d%2Fx").unwrap()["dbname"], "d/x");
+    }
+
+    #[test]
+    fn a_uri_fragment_is_dropped() {
+        let f = parse("postgresql://u@h/d?sslmode=require#frag").unwrap();
+        assert_eq!(f["sslmode"], "require");
+        assert_eq!(parse("postgresql://u@h/d#x").unwrap()["dbname"], "d");
+        let f = parse("postgresql://u@h/d?application_name=a%23b").unwrap();
+        assert_eq!(f["application_name"], "a#b");
+    }
+
+    #[test]
+    fn an_unknown_key_beside_a_password_is_not_named() {
+        for s in [
+            "Host=h;Password=ab;private-suffix=x;Database=d",
+            "Host=h;Database=d;Pwd=ab;private-suffix=x",
+            "host=h dbname=d password=ab private-suffix=x",
+            "postgresql://h/d?password=ab&private-suffix=x",
+            "host=h dbname=d sslpassword=ab private-suffix=x",
+        ] {
+            let e = parse(s).unwrap_err();
+            assert_eq!(e, ParseError::UnknownKeyBesidePassword, "{s}");
+            assert!(!e.to_string().contains("private-suffix"), "{e}");
+            assert_eq!(Error::from(e).exit_code(), 10);
+        }
+        assert_eq!(
+            parse("Host=h;Database=d;Pooling=true"),
+            Err(ParseError::UnknownKey("Pooling".into()))
         );
     }
 

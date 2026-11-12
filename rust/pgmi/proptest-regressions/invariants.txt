@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc f047a796cfa8ebd735af7b4f6ff4edd4b2758b1520a93e16e7c1ec818bf632fc # shrinks to c = Conn { hosts: [("a", None)], dbname: "", user: "", password: ";", sslmode: None, application_name: None }
