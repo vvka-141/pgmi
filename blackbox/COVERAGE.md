@@ -146,8 +146,8 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | 18 | cancel over TLS and over direct TLS negotiation | ✓ `cancel/timeout-over-tls` |
 | 19 | cancel request blocked by a firewall | ✗ needs a firewall between client and server; `internal/db/cancel_integration_test.go` covers it |
 | 20 | SIGINT twice = 130 at once | ✓ `cancel/sigint-twice` |
-| 21 | unreachable host with a connect timeout = 11, not 16 | ✓ `env/pgconnect-timeout` |
-| 22 | URI, keyword/value and ADO.NET forms; a string that does not parse is not echoed | ✓ `flags/connection-forms`, `errors/connection-string-secrets` |
+| 21 | unreachable host with a connect timeout = 11, not 16; a timeout beyond Go's range | ✓ `env/pgconnect-timeout`, `connection/connect-timeout-range` |
+| 22 | URI, keyword/value and ADO.NET forms; a string that does not parse is not echoed; percent escapes, URI fragments, an option after a password | ✓ `flags/connection-forms`, `errors/connection-string-secrets`, `errors/connection-string-password-rest` |
 | 23 | `PG*` variables, `PGOPTIONS`, `PGTZ`, `PGTARGETSESSIONATTRS`, `PGCHANNELBINDING`, `PGREQUIREAUTH` | ✓ `env/pg-variables`, `connection/keywords`, `connection/target-session-attrs`, `tls/channel-binding-and-direct`, `tls/require-auth-and-version` |
 | 24 | `.pgpass`, wildcard, `PGPASSFILE`, wrong entry, world-readable file ignored | ✓ `connection/pgpass`, `connection/pgpass-wildcard-and-file`, `connection/pgpass-world-readable` |
 | 25 | `service=` / `PGSERVICE` refused | ✓ `env/pgservice-refused` |

@@ -356,9 +356,13 @@ on stderr; other failures are not retried. `max_protocol_version` and
 work with both set to `3.2` (Go speaks 3.2 then; the Rust binary refuses a
 minimum above 3.0, see "A minimum protocol above 3.0 is refused for now");
 `sslsni`, `sslcertmode` and
-`client_encoding` are accepted.
+`client_encoding` are accepted. `connect_timeout` (and `PGCONNECT_TIMEOUT`) is
+whole seconds; in the Rust binary it bounds each attempt from
+before the host lookup and the sign-in token, so a stalled host is given up
+and the next one tried, and a value above 9223372036 (the longest Go
+duration, which Go wraps around) is refused before connecting, exit 10.
 
-Cases: `env/pg-tls-protocol-variables`, `connection/pgpass`, `connection/pgpass-wildcard-and-file`, `connection/pgpass-world-readable`, `connection/multi-host`, `connection/target-session-attrs`, `connection/keywords`, `connection/unix-socket`, `env/pg-variables`, `env/pgappname`, `env/pgconnect-timeout`, `env/ignored-variables`, `errors/connection-failures`, `exit-codes/11-connection-failed`, `connection/protocol-version`.
+Cases: `connection/connect-timeout-range`, `env/pg-tls-protocol-variables`, `connection/pgpass`, `connection/pgpass-wildcard-and-file`, `connection/pgpass-world-readable`, `connection/multi-host`, `connection/target-session-attrs`, `connection/keywords`, `connection/unix-socket`, `env/pg-variables`, `env/pgappname`, `env/pgconnect-timeout`, `env/ignored-variables`, `errors/connection-failures`, `exit-codes/11-connection-failed`, `connection/protocol-version`.
 
 ### TLS
 
@@ -707,8 +711,19 @@ binary never quotes connection-string input in an error, on stderr, in
 `--json` or in the MCP answer, and redacts the password and `sslpassword` from
 every later refusal of the resolved connection.
 
-Cases: `errors/connection-string-secrets` (the forms Go hides too); Rust unit
-tests `errors_never_echo_the_input`, `errors_redact_the_password`.
+An unknown option is named only when no password is written before it: an
+unquoted password holding a `;`, a space or a `&` splits there, and the
+option after it is the password's rest, so the refusal says the option is not
+shown and how to quote the password. A percent sign in a URI takes exactly
+two hex digits (`%+F` is refused, as Go's URL parser does), and a URI
+`#fragment` is dropped, as in Go.
+
+Cases: `errors/connection-string-secrets` (the forms Go hides too),
+`errors/connection-string-password-rest`; Rust unit tests
+`errors_never_echo_the_input`, `errors_redact_the_password`,
+`an_unknown_key_beside_a_password_is_not_named`,
+`percent_escapes_take_two_hex_digits`, `a_uri_fragment_is_dropped`, and the
+property check `conn_forms_agree_and_hide_the_password`.
 
 ### An unreadable .pgmiignore or a file name that is not UTF-8 is exit 10
 
@@ -1121,6 +1136,9 @@ release notes take their "Behaviour changes" section from this table.
 | Cloud SQL connector metrics to Cloud Monitoring | sent | none | owner 2026-11-10 |
 | `sslmode=allow` against a server that requires TLS | exit 11 | retries with TLS, connects | owner 2026-11-10 |
 | Unknown connection-string key | exit 11 (the server refuses the setting) | newly refused before connecting, exit 10 | owner 2026-11-10 |
+| Unknown connection-string option written after a password | named in the refusal | not named (it may be the password's rest); exit 10 both | owner 2026-11-11 (never quote the input) |
+| `connect_timeout` above 9223372036 seconds | wrapped around (a negative or short timeout) | newly refused before connecting, exit 10 | intended |
+| `connect_timeout` with a stalled host lookup or sign-in | waits for it (pgx counts only the connection) | counted per attempt; the next host is tried | intended |
 | `PGPORT` listing several ports | refused, exit 10 | accepted, one per `PGHOST` entry | owner 2026-11-10 |
 | `PGPORT` with spaces around the number (`" 5432 "`) | refused, exit 10 | accepted, as libpq does | owner 2026-11-11 |
 | `keepalives*`, `load_balance_hosts`, `gssencmode=disable`/`prefer`, `gssdelegation=0`, `sslcompression=0` | exit 11 (the server refuses the setting) | honoured | owner 2026-11-11 |

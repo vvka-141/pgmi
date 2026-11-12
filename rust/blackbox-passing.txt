@@ -59,6 +59,7 @@ config/pgmi-yaml-invalid
 config/pgmi-yaml-timeout-too-long
 config/precedence
 connection/client-encoding
+connection/connect-timeout-range
 connection/gssapi-keys
 connection/hostaddr
 connection/keepalives
@@ -108,6 +109,7 @@ env/pg-variables
 errors/attribution
 errors/connection-failures
 errors/connection-source
+errors/connection-string-password-rest
 errors/connection-string-secrets
 errors/diagnostics-secrets
 errors/head-syntax
