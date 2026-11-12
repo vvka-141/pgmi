@@ -52,5 +52,5 @@ steps:
     timeout: 60
     expect:
       exit: 11
-      stderr: ['the Databricks Lakebase token was refused for user "{azure_user}".*has a database role and that --username matches it']
+      stderr: ['the Databricks Lakebase token was refused for user "{azure_user}" on database "postgres"$', '^check that the signed-in identity has a database role and that --username matches it$']
       stderr_not: ["{lakebase_token}", "{databricks_pat}"]
