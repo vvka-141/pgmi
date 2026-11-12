@@ -311,3 +311,5 @@ retry/server-shutdown-mid-run
 retry/sign-in-unavailable
 retry/signal-during-a-wait
 retry/wait-cut-at-the-deadline
+config/dotenv-bom
+formats/binary-file-in-test-directory

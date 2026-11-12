@@ -1,0 +1,16 @@
+description: a project .env that starts with a UTF-8 byte-order mark (as some Windows editors write it) - Go warns and applies none of it, Rust applies it (contract "Behaviour changes in 0.20", owner 2026-11-12, PGMI-943)
+project:
+  files:
+    .env: {hex: "efbbbf50474d495f504152414d5f4752454554494e473d68656c6c6f0a"}
+    deploy.sql: |
+      DO $$ BEGIN
+        IF current_setting('pgmi.greeting', true) IS DISTINCT FROM 'hello' THEN
+          RAISE EXCEPTION 'greeting not applied';
+        END IF;
+      END $$;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 13
+      stderr: ["greeting not applied"]
+      rust: {exit: 0, stderr: ["\\.env applied: PGMI_PARAM_GREETING"]}

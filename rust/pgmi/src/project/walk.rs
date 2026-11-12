@@ -238,8 +238,8 @@ fn walk(
         }
         if in_test {
             out.test_dir_files.push(format!("./{child}"));
+            let content = read_text(fs, &child, max_size)?;
             if is_sql(&name) {
-                let content = read_text(fs, &child, max_size)?;
                 out.tests.push(File {
                     path: format!("./{child}"),
                     content,
@@ -668,11 +668,15 @@ mod tests {
     }
 
     #[test]
-    fn non_text_files_in_test_directories_are_listed_not_read() {
-        let fs = project().file("__test__/blob.bin", b"\0\0");
-        let p = load(&fs, MAX).unwrap();
+    fn non_text_files_in_test_directories_are_refused_as_go_refuses_them() {
+        let text = refused(&project().file("__test__/blob.bin", b"\0\0"));
+        assert!(
+            text.contains("file ./__test__/blob.bin contains a NUL byte"),
+            "{text}"
+        );
+        let p = load(&project().file("__test__/notes.txt", b"plain"), MAX).unwrap();
         assert!(p.tests.is_empty());
-        assert_eq!(p.test_dir_files, ["./__test__/blob.bin"]);
+        assert_eq!(p.test_dir_files, ["./__test__/notes.txt"]);
     }
 
     #[test]

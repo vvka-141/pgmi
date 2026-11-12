@@ -1,0 +1,10 @@
+description: a non-SQL file holding a NUL byte in a __test__ directory is refused before connecting, as every other project file is (Go and Rust alike since PGMI-943)
+project:
+  files:
+    deploy.sql: SELECT 1;
+    __test__/blob.bin: {hex: "00ff00"}
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 10
+      stderr: ["file ./__test__/blob.bin contains a NUL byte"]
