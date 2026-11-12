@@ -1,7 +1,5 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 use serde::Serialize;
 use serde_json::value::{RawValue, to_raw_value};
@@ -10,11 +8,12 @@ use tokio_util::sync::CancellationToken;
 
 use super::wire::{JsonKind, Members};
 use crate::commands::{init, metadata};
+use crate::config::params::{Param, check_key};
 use crate::conn::resolve::Flags;
-use crate::deploy::{ConfirmedName, Context, Request, Run, Stdin, redact_sql_passwords};
+use crate::deploy::{ConfirmedName, Context, Request, Run, Stdin, Stop, redact_sql_passwords};
 use crate::env::Env;
-use crate::error::Error;
 use crate::error::redact;
+use crate::error::{Error, Kind};
 use crate::output::Reporter;
 use crate::templates::Template;
 
@@ -125,15 +124,25 @@ impl Tool {
             }
             Tool::Blocking(b) => b,
         };
-        match tokio::task::spawn_blocking(move || {
-            crate::error::catching(|| blocking.answer(arguments.as_deref(), &env))
-        })
-        .await
-        {
+        on_blocking_thread(token, move || blocking.answer(arguments.as_deref(), &env)).await
+    }
+}
+
+/// Runs `work` on the blocking pool; a cancelled call stops waiting for it,
+/// so a stalled filesystem never holds up the end of a session.
+async fn on_blocking_thread(
+    token: CancellationToken,
+    work: impl FnOnce() -> Outcome + Send + 'static,
+) -> Outcome {
+    let work = tokio::task::spawn_blocking(move || crate::error::catching(work));
+    tokio::select! {
+        biased;
+        () = token.cancelled() => Outcome::failed(&Error::new(Kind::Interrupted, "the tool call was cancelled")),
+        done = work => match done {
             Ok(Ok(o)) => o,
             Ok(Err(p)) => Outcome::panicked(&p),
             Err(_) => Outcome::failed(&Error::internal("the tool call was aborted")),
-        }
+        },
     }
 }
 
@@ -158,7 +167,7 @@ impl Blocking {
                 {
                     Ok(metadata::Validated::Report(v)) => Outcome::json(&v),
                     Ok(metadata::Validated::Unreadable(errors)) => {
-                        Outcome::failed(&Error::config(errors.join("\n")))
+                        Outcome::failed(&Error::config(metadata::unreadable(&errors).join("\n")))
                     }
                     Err(e) => Outcome::failed(&e),
                 }
@@ -420,7 +429,7 @@ fn deploy_context(
     }
     let params = pairs
         .into_iter()
-        .map(|(k, v)| crate::config::params::check_key(k).map(|()| format!("{k}={v}")))
+        .map(|(k, v)| check_key(k).map(|()| Param::Pair(k.clone(), v.clone())))
         .collect::<Result<Vec<_>, Error>>()?;
     let params_files = match a.get("paramsFile") {
         None => Vec::new(),
@@ -475,9 +484,7 @@ fn deploy_context(
 async fn run_deploy(ctx: Context, token: CancellationToken) -> Outcome {
     let reporter = Reporter::new(ctx.verbose, &ctx.env);
     let mut run = Run::start();
-    let result = run
-        .deploy(&ctx, &reporter, token, Arc::new(AtomicBool::new(false)))
-        .await;
+    let result = run.deploy(&ctx, &reporter, Stop::on(token)).await;
     let secrets = run.secrets();
     let mut record = run.record(&ctx, &result);
     match &result {
@@ -530,6 +537,25 @@ async fn run_deploy(ctx: Context, token: CancellationToken) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_cancelled_blocking_call_does_not_wait_for_its_thread() {
+        let token = CancellationToken::new();
+        let (release, stalled) = std::sync::mpsc::channel::<()>();
+        let call = tokio::spawn(on_blocking_thread(token.clone(), move || {
+            let _ = stalled.recv_timeout(std::time::Duration::from_secs(30));
+            Outcome::json(&json!("finished"))
+        }));
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        token.cancel();
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), call)
+            .await
+            .expect("the call waited for its blocking thread")
+            .unwrap();
+        assert!(outcome.is_error);
+        assert!(outcome.text.contains("exit code 130"), "{}", outcome.text);
+        drop(release);
+    }
 
     fn raw(s: &str) -> Box<RawValue> {
         RawValue::from_string(s.to_string()).unwrap()
@@ -594,7 +620,7 @@ mod tests {
         assert_eq!(r.project, std::path::Path::new("/"));
         assert_eq!(r.connection.database.as_deref(), Some("-d"));
         assert_eq!(r.timeout, Some(std::time::Duration::from_secs(2)));
-        assert_eq!(r.params, ["k=v"]);
+        assert_eq!(r.params, [Param::Pair("k".into(), "v".into())]);
         assert_eq!(r.params_files, ["a", "b"]);
         assert!(r.overwrite && !r.force && !r.json && r.compat.is_none() && r.cloud.is_empty());
         assert_eq!(ctx.stdin, Stdin::Unavailable);

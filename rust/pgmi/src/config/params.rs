@@ -7,11 +7,21 @@ use crate::error::{Error, Result};
 
 pub(crate) const ENV_PREFIX: &str = "PGMI_PARAM_";
 
+/// One parameter given on the deploy request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Param {
+    /// A `--param` argument as typed; `collect` splits it at the first `=`
+    /// after reading the other sources, where Go refuses a malformed one.
+    Flag(String),
+    /// A key and a value given apart (serve's `params` object).
+    Pair(String, String),
+}
+
 pub(crate) struct Sources<'a> {
     pub(crate) yaml: Vec<(String, String)>,
     pub(crate) env: &'a Env,
     pub(crate) files: &'a [String],
-    pub(crate) flags: &'a [String],
+    pub(crate) flags: &'a [Param],
     /// Receives the `--verbose` lines: counts only, never keys or values.
     pub(crate) note: &'a dyn Fn(String),
 }
@@ -150,16 +160,17 @@ pub(crate) fn collect(
     }
     let mut flagged: BTreeMap<String, &str> = BTreeMap::new();
     for p in src.flags {
-        let Some((k, v)) = p.split_once('=') else {
-            return Err(Error::config(format!(
-                "invalid parameter format {p:?}: expected key=value"
-            )));
+        let (k, v) = match p {
+            Param::Pair(k, v) => (k.as_str(), v.as_str()),
+            Param::Flag(text) => match text.split_once('=') {
+                Some((k, v)) if !k.is_empty() => (k, v),
+                _ => {
+                    return Err(Error::config(format!(
+                        "invalid parameter format {text:?}: expected key=value"
+                    )));
+                }
+            },
         };
-        if k.is_empty() {
-            return Err(Error::config(format!(
-                "invalid parameter format {p:?}: expected key=value"
-            )));
-        }
         let lower = k.to_lowercase();
         if let Some(prev) = flagged.get(&lower)
             && *prev != k
@@ -194,7 +205,7 @@ mod tests {
             ("PGMI_PARAM_B", "env"),
             ("PGMI_PARAM_C", "env"),
         ]);
-        let flags = vec!["a=flag".to_string()];
+        let flags = vec![Param::Flag("a=flag".into())];
         let files = vec!["-".to_string()];
         let out = collect(
             Sources {
@@ -216,7 +227,7 @@ mod tests {
     #[test]
     fn verbose_notes_count_parameters_and_never_show_keys_or_values() {
         let env = Env::from_pairs(&[("PGMI_PARAM_A", "secret-env"), ("PGMI_PARAM_B", "x")]);
-        let flags = vec!["a=secret-flag".to_string()];
+        let flags = vec![Param::Flag("a=secret-flag".into())];
         let files = vec!["-".to_string()];
         let notes = std::cell::RefCell::new(Vec::new());
         collect(
@@ -242,15 +253,54 @@ mod tests {
     }
 
     #[test]
+    fn a_pair_is_taken_as_given_and_a_flag_is_split_at_its_first_equals_sign() {
+        let flags = [
+            Param::Pair("a".into(), "x=y".into()),
+            Param::Flag("b=x=y".into()),
+        ];
+        let out = collect(
+            Sources {
+                yaml: vec![],
+                env: &Env::default(),
+                files: &[],
+                flags: &flags,
+                note: &|_| {},
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(out["a"], "x=y");
+        assert_eq!(out["b"], "x=y");
+        let flags = [Param::Pair("a=b".into(), "c".into())];
+        let e = collect(
+            Sources {
+                yaml: vec![],
+                env: &Env::default(),
+                files: &[],
+                flags: &flags,
+                note: &|_| {},
+            },
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            e.text().contains("invalid parameter key 'a=b'"),
+            "{}",
+            e.text()
+        );
+    }
+
+    #[test]
     fn refusals() {
         let env = Env::from_pairs(&[("PGMI_PARAM_TOKEN", "")]);
         let run = |env: &Env, files: &[String], flags: &[String], input: &str| {
+            let flags: Vec<Param> = flags.iter().cloned().map(Param::Flag).collect();
             collect(
                 Sources {
                     yaml: vec![],
                     env,
                     files,
-                    flags,
+                    flags: &flags,
                     note: &|_| {},
                 },
                 Some(&mut input.as_bytes()),
@@ -297,7 +347,10 @@ mod tests {
         flags: &[&str],
         stdin: &[u8],
     ) -> Result<BTreeMap<String, String>> {
-        let flags: Vec<String> = flags.iter().map(|f| (*f).to_string()).collect();
+        let flags: Vec<Param> = flags
+            .iter()
+            .map(|f| Param::Flag((*f).to_string()))
+            .collect();
         collect(
             Sources {
                 yaml: yaml

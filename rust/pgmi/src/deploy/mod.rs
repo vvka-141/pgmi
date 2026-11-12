@@ -6,19 +6,18 @@ mod record;
 mod request;
 pub(crate) mod script;
 mod session;
+mod stop;
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::future::Future;
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use tokio::runtime::Runtime;
 use tokio::time::Instant as TokioInstant;
 use tokio_postgres::error::ErrorPosition;
-use tokio_util::sync::CancellationToken;
 
 use crate::config::params::{self, Sources};
 use crate::config::yaml::ProjectConfig;
@@ -38,6 +37,7 @@ pub(crate) use blame::redact_sql_passwords;
 pub(crate) use record::DeployRecord;
 use record::Tls;
 pub(crate) use request::Request;
+pub(crate) use stop::{Stop, StopReason};
 
 /// The privilege a step needs, named in the error when the server answers
 /// 42501.
@@ -260,18 +260,16 @@ pub(crate) struct Failure {
 }
 
 struct Guard {
-    token: CancellationToken,
+    stop: Stop,
     deadline: TokioInstant,
     timeout: Duration,
-    interrupted: Arc<AtomicBool>,
 }
 
 impl Guard {
     fn stop_error(&self) -> Error {
-        if self.interrupted.load(Ordering::SeqCst) {
-            Error::new(Kind::Interrupted, "interrupted")
-        } else {
-            Error::new(Kind::Interrupted, "the deploy was cancelled")
+        match self.stop.reason() {
+            Some(StopReason::Signal) => Error::new(Kind::Interrupted, "interrupted"),
+            _ => Error::new(Kind::Interrupted, "the deploy was cancelled"),
         }
     }
 
@@ -288,7 +286,7 @@ impl Guard {
     async fn waiting<T>(&self, fut: impl Future<Output = Result<T>>) -> Result<T> {
         tokio::select! {
             r = fut => r,
-            () = self.token.cancelled() => Err(self.stop_error()),
+            () = self.stop.cancelled() => Err(self.stop_error()),
             () = tokio::time::sleep_until(self.deadline) => Err(self.expired_error()),
         }
     }
@@ -315,12 +313,12 @@ impl Guard {
             r = tokio::task::spawn_blocking(work) => {
                 r.map_err(|e| Error::internal("blocking task").with_source(e))?
             }
-            () = self.token.cancelled() => Err(self.stop_error()),
+            () = self.stop.cancelled() => Err(self.stop_error()),
         }
     }
 
     fn check(&self) -> Result<()> {
-        if self.token.is_cancelled() {
+        if self.stop.is_cancelled() {
             Err(self.stop_error())
         } else if TokioInstant::now() >= self.deadline {
             Err(self.expired_error())
@@ -332,7 +330,7 @@ impl Guard {
     async fn connecting<T>(&self, fut: impl Future<Output = Result<T>>) -> Result<T> {
         tokio::select! {
             r = fut => r,
-            () = self.token.cancelled() => Err(self.stop_error()),
+            () = self.stop.cancelled() => Err(self.stop_error()),
             () = tokio::time::sleep_until(self.deadline) => Err(Error::connection("--timeout ran out while connecting")),
         }
     }
@@ -348,7 +346,7 @@ impl Guard {
         tokio::pin!(fut);
         let stopped = tokio::select! {
             r = &mut fut => return r,
-            () = self.token.cancelled() => self.stop_error(),
+            () = self.stop.cancelled() => self.stop_error(),
             () = tokio::time::sleep_until(self.deadline) => self.expired_error(),
         };
         session.cancel().await;
@@ -424,8 +422,7 @@ impl Run {
         &mut self,
         ctx: &Context,
         reporter: &Arc<Reporter>,
-        token: CancellationToken,
-        interrupted: Arc<AtomicBool>,
+        stop: Stop,
     ) -> Result<()> {
         let contract = ContractVersion::of(ctx.request.compat.as_deref());
         self.st.contract = contract.as_ref().ok().copied();
@@ -433,10 +430,9 @@ impl Run {
         let yaml_timeout = yaml.as_ref().map(ProjectConfig::timeout).transpose()?;
         let timeout = limit(ctx.request.timeout.or(yaml_timeout.flatten()));
         let guard = Guard {
-            token,
+            stop,
             deadline: deadline(timeout),
             timeout,
-            interrupted,
         };
         let steps = Steps {
             ctx,
@@ -513,16 +509,15 @@ impl Run {
 pub(crate) fn run(runtime: Runtime, ctx: &Context) -> u8 {
     let reporter = Reporter::new(ctx.verbose, &ctx.env);
     let mut run = Run::start();
-    let interrupted = Arc::new(AtomicBool::new(false));
+    let stop = Stop::default();
     let caught = crate::error::catching(|| {
         runtime.block_on(async {
-            let token = CancellationToken::new();
-            spawn_signals(token.clone(), interrupted.clone(), reporter.clone());
-            run.deploy(ctx, &reporter, token, interrupted.clone()).await
+            spawn_signals(stop.clone(), reporter.clone());
+            run.deploy(ctx, &reporter, stop.clone()).await
         })
     });
     let mut result = caught.unwrap_or_else(|p| Err(p.error()));
-    if interrupted.load(Ordering::SeqCst) {
+    if stop.reason() == Some(StopReason::Signal) {
         result = Err(match result {
             Err(e) if e.sql_diagnostics().is_some() => {
                 let text = e.text();
@@ -557,7 +552,7 @@ fn limit(timeout: Option<Duration>) -> Duration {
 const INTERRUPTED: &str = "pgmi: interrupted, cancelling deployment... (again to quit at once)";
 const INTERRUPTED_AGAIN: &str = "pgmi: interrupted again, quitting";
 
-fn spawn_signals(token: CancellationToken, flag: Arc<AtomicBool>, reporter: Arc<Reporter>) {
+fn spawn_signals(stop: Stop, reporter: Arc<Reporter>) {
     tokio::spawn(async move {
         #[cfg(unix)]
         {
@@ -573,8 +568,7 @@ fn spawn_signals(token: CancellationToken, flag: Arc<AtomicBool>, reporter: Arc<
                 _ = term.recv() => {}
             }
             reporter.line(INTERRUPTED);
-            flag.store(true, Ordering::SeqCst);
-            token.cancel();
+            stop.signal();
             tokio::select! {
                 _ = int.recv() => {}
                 _ = term.recv() => {}
@@ -586,8 +580,7 @@ fn spawn_signals(token: CancellationToken, flag: Arc<AtomicBool>, reporter: Arc<
         {
             if tokio::signal::ctrl_c().await.is_ok() {
                 reporter.line(INTERRUPTED);
-                flag.store(true, Ordering::SeqCst);
-                token.cancel();
+                stop.signal();
             }
             if tokio::signal::ctrl_c().await.is_ok() {
                 reporter.line(INTERRUPTED_AGAIN);
@@ -806,7 +799,7 @@ impl Steps<'_> {
                 .waiting(
                     self.ctx
                         .approver
-                        .approve_drop(db, self.reporter, &guard.token),
+                        .approve_drop(db, self.reporter, guard.stop.token()),
                 )
                 .await?;
             guard
@@ -1135,10 +1128,9 @@ mod tests {
 
     fn guard(timeout: Duration) -> Guard {
         Guard {
-            token: CancellationToken::new(),
+            stop: Stop::default(),
             deadline: deadline(timeout),
             timeout,
-            interrupted: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -1161,8 +1153,7 @@ mod tests {
     #[tokio::test]
     async fn blocking_work_gives_way_to_the_first_signal() {
         let g = guard(Duration::from_secs(60));
-        g.interrupted.store(true, Ordering::SeqCst);
-        g.token.cancel();
+        g.stop.signal();
         let e = stuck(&g).await;
         assert_eq!((e.exit_code(), e.text()), (130, "interrupted".to_string()));
     }
@@ -1182,8 +1173,7 @@ mod tests {
                 .is_err(),
             "--timeout must not stop the stdin read"
         );
-        g.interrupted.store(true, Ordering::SeqCst);
-        g.token.cancel();
+        g.stop.signal();
         let e = tokio::time::timeout(Duration::from_secs(5), read)
             .await
             .expect("a signal must stop the stdin read")
@@ -1205,15 +1195,21 @@ mod tests {
     #[test]
     fn a_cancelled_deploy_is_not_a_timeout() {
         let guard = Guard {
-            token: CancellationToken::new(),
+            stop: Stop::default(),
             deadline: deadline(Duration::from_secs(60)),
             timeout: Duration::from_secs(60),
-            interrupted: Arc::new(AtomicBool::new(false)),
         };
+        guard.stop.cancel();
         let e = guard.stop_error();
         assert!(!e.text().contains("--timeout"), "{}", e.text());
-        guard.interrupted.store(true, Ordering::SeqCst);
-        assert_eq!(guard.stop_error().text(), "interrupted");
+        assert_eq!(e.text(), "the deploy was cancelled");
+        let signalled = Guard {
+            stop: Stop::default(),
+            deadline: deadline(Duration::from_secs(60)),
+            timeout: Duration::from_secs(60),
+        };
+        signalled.stop.signal();
+        assert_eq!(signalled.stop_error().text(), "interrupted");
     }
 
     #[tokio::test]

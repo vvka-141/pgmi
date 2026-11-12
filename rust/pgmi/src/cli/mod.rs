@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use clap::{ArgAction, Args, Parser, Subcommand};
 
+use crate::config::params::Param;
 use crate::conn::cloud::{self, Provider};
 use crate::conn::resolve::{Flags, SslMode};
 use crate::error::{Kind, Secret};
@@ -300,7 +301,7 @@ impl From<DeployArgs> for crate::deploy::Request {
                 google_instance: a.google_instance,
                 databricks_endpoint: a.databricks_endpoint,
             },
-            params: a.params,
+            params: a.params.into_iter().map(Param::Flag).collect(),
             params_files: a.params_files,
             timeout: a.timeout,
             overwrite: a.overwrite,
@@ -500,7 +501,7 @@ mod tests {
         assert_eq!(c.sslmode, Some(SslMode::Require));
         assert!(r.overwrite && r.force && r.json);
         assert_eq!(r.compat.as_deref(), Some("1"));
-        assert_eq!(r.params, ["a=b"]);
+        assert_eq!(r.params, [Param::Flag("a=b".into())]);
         assert_eq!(r.params_files, ["f"]);
         assert_eq!(r.cloud, [Provider::Aws]);
         assert_eq!(r.cloud_request.aws_region.as_deref(), Some("eu"));

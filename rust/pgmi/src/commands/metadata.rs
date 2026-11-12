@@ -9,7 +9,7 @@ use crate::cli::{MetadataArgs, MetadataCommand, MetadataReport, ScaffoldArgs};
 use crate::config::edit::write_atomic;
 use crate::env::Env;
 use crate::error::{Error, Result};
-use crate::project::metadata::{self, Meta};
+use crate::project::metadata::{self, Meta, MetaError};
 use crate::project::walk::{self, File, is_sql};
 
 pub(crate) fn run(a: &MetadataArgs, env: &Env, help: impl FnOnce() -> Result<()>) -> Result<()> {
@@ -157,7 +157,12 @@ pub(crate) struct Validation {
 /// it could not read.
 pub(crate) enum Validated {
     Report(Validation),
-    Unreadable(Vec<String>),
+    Unreadable(Vec<MetaError>),
+}
+
+/// The refusal for blocks `metadata validate` could not read, one per line.
+pub(crate) fn unreadable(errors: &[MetaError]) -> Vec<String> {
+    errors.iter().map(ToString::to_string).collect()
 }
 
 pub(crate) fn validate_report(path: &Path, env: &Env) -> Result<Validated> {
@@ -167,9 +172,7 @@ pub(crate) fn validate_report(path: &Path, env: &Env) -> Result<Validated> {
     let total = project.sources.len() + project.test_dir_files.len();
     let scan = metadata::scan(project.sources.iter());
     if !scan.errors.is_empty() {
-        return Ok(Validated::Unreadable(
-            scan.errors.iter().map(ToString::to_string).collect(),
-        ));
+        return Ok(Validated::Unreadable(scan.errors));
     }
     let by_path: BTreeSet<&str> = scan.metas.iter().map(|m| m.path.as_str()).collect();
     let warnings: Vec<String> = project
@@ -203,6 +206,7 @@ fn validate(r: &MetadataReport, env: &Env) -> Result<()> {
     let mut v = match report {
         Validated::Report(v) => v,
         Validated::Unreadable(errors) => {
+            let errors = unreadable(&errors);
             let e = Error::config(format!("validation failed: {}", errors.join("\n")));
             return Err(failed(
                 r.json,
@@ -407,6 +411,24 @@ fn scaffold(a: &ScaffoldArgs, env: &Env) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validate_reports_each_unreadable_block_as_its_own_error() {
+        let dir = crate::testdir::TempDir::new("validate-unreadable");
+        std::fs::write(dir.join("deploy.sql"), "SELECT 1;").unwrap();
+        std::fs::write(
+            dir.join("a.sql"),
+            "/* <pgmi-meta id=\"0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e01\" idempotent=\"maybe\"></pgmi-meta> */",
+        )
+        .unwrap();
+        let Ok(Validated::Unreadable(errors)) = validate_report(dir.path(), &Env::default()) else {
+            panic!("the block was read");
+        };
+        assert!(
+            matches!(&errors[..], [MetaError::Idempotent { path, value }] if path == "./a.sql" && value == "maybe"),
+            "{errors:?}"
+        );
+    }
 
     #[test]
     fn plan_order_and_fallback() {
