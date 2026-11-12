@@ -44,6 +44,37 @@ impl std::fmt::Display for Unanswered {
 
 impl std::error::Error for Unanswered {}
 
+/// An endpoint that kept answering a status its retry names, through every
+/// attempt.
+#[derive(Debug)]
+pub(crate) struct Exhausted {
+    what: &'static str,
+    status: reqwest::StatusCode,
+    attempts: u32,
+}
+
+impl Exhausted {
+    pub(crate) fn new(what: &'static str, status: reqwest::StatusCode, attempts: u32) -> Self {
+        Exhausted {
+            what,
+            status,
+            attempts,
+        }
+    }
+}
+
+impl std::fmt::Display for Exhausted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} answered {} (after {} attempts)",
+            self.what, self.status, self.attempts
+        )
+    }
+}
+
+impl std::error::Error for Exhausted {}
+
 /// Sends the request `build` makes, again after a failed connection or an
 /// answer `retry` names, and returns the last answer's status and body.
 pub(crate) async fn send(

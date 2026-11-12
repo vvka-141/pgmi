@@ -13,6 +13,25 @@ use crate::conn::resolve::{Spec, SslMode};
 use crate::env::Env;
 use crate::error::{Error, Result, Secret};
 
+pub(crate) use http::Exhausted;
+
+/// Whether `e` says a sign-in endpoint stayed unavailable through its own
+/// retries: no answer, or a busy answer every time.
+pub(crate) fn unavailable(e: &(dyn std::error::Error + 'static)) -> bool {
+    e.is::<http::Unanswered>()
+        || e.is::<Exhausted>()
+        || matches!(
+            e.downcast_ref::<azure_msi::MsiError>(),
+            Some(azure_msi::MsiError::Retried(..))
+        )
+        || e.downcast_ref::<google_cloud_auth::errors::CredentialsError>()
+            .is_some_and(google_cloud_auth::errors::CredentialsError::is_transient)
+}
+
+fn unavailable_within(e: &(dyn std::error::Error + 'static)) -> bool {
+    std::iter::successors(Some(e), |c| c.source()).any(unavailable)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Provider {
     Azure,

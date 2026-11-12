@@ -19,6 +19,8 @@ use crate::project::walk::Ignored;
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DeployRecord {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    attempts: Vec<Attempt>,
     #[serde(skip_serializing_if = "Option::is_none")]
     column: Option<usize>,
     connection_source: Option<&'static str>,
@@ -73,11 +75,29 @@ pub(crate) struct DeployRecord {
     status: &'static str,
     target: Option<Target>,
     test_macros: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    time_used_ms: Option<u64>,
     tls: Option<Tls>,
     #[serde(skip_serializing_if = "Option::is_none")]
     units_committed: Option<usize>,
     #[serde(rename = "where", skip_serializing_if = "Option::is_none")]
     where_: Option<String>,
+}
+
+/// One run of the deploy from the start, as the record lists it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Attempt {
+    duration_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sqlstate: Option<String>,
+    started_at: String,
+}
+
+fn millis(d: Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
 
 #[derive(Debug, Serialize)]
@@ -125,7 +145,18 @@ impl DeployRecord {
             Some((n, t)) => (Some(n), t),
             None => (None, None),
         };
+        let clean = |t: &str| redact(&redact_sql_passwords(t), facts.secrets);
         let mut record = DeployRecord {
+            attempts: p
+                .attempts
+                .iter()
+                .map(|a| Attempt {
+                    duration_ms: millis(a.duration),
+                    message: a.failure.as_ref().map(|f| clean(&f.message)),
+                    sqlstate: a.failure.as_ref().and_then(|f| f.sqlstate.clone()),
+                    started_at: timestamp(a.started),
+                })
+                .collect(),
             column: None,
             connection_source: p.connection_source.map(Source::label),
             contract_version: p.contract.map(ContractVersion::as_str),
@@ -135,9 +166,7 @@ impl DeployRecord {
             database: loaded.and(p.database()).map(str::to_string),
             detail: None,
             dotenv_keys: facts.dotenv_keys.to_vec(),
-            duration_ms: p
-                .reached(Phase::Deploying)
-                .then(|| u64::try_from(facts.elapsed.as_millis()).unwrap_or(u64::MAX)),
+            duration_ms: p.reached(Phase::Deploying).then(|| millis(facts.elapsed)),
             error: None,
             execution_mode: None,
             execution_units: execution.map(|x| x.units),
@@ -182,6 +211,7 @@ impl DeployRecord {
             test_macros: execution
                 .map(|x| x.test_macros)
                 .or((loaded.is_some() || p.reached(Phase::Deploying)).then_some(0)),
+            time_used_ms: p.time_used.map(millis),
             tls: p.server.as_ref().map(|s| s.tls.clone()),
             units_committed: execution.map(|x| x.committed),
             where_: None,

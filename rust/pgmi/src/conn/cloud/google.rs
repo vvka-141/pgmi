@@ -11,7 +11,7 @@ use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, Server
 use serde::Deserialize;
 
 use super::Options;
-use super::http::{Retry, client, send};
+use super::http::{Exhausted, Retry, client, send};
 use super::renew::{Fetched, Mint};
 use crate::conn::socket::Tcp;
 use crate::conn::tls::Names;
@@ -171,9 +171,10 @@ async fn admin_api<T: serde::de::DeserializeOwned>(
 ) -> std::result::Result<T, DialerError> {
     let (status, text) = send(http, retry, build).await.map_err(failed(step))?;
     if (retry.status)(status) {
-        return Err(failed(step)(format!(
-            "the Cloud SQL Admin API answered {status} (after {} attempts)",
-            retry.attempts
+        return Err(failed(step)(Exhausted::new(
+            "the Cloud SQL Admin API",
+            status,
+            retry.attempts,
         )));
     }
     if !status.is_success() {

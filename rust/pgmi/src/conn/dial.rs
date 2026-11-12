@@ -1025,7 +1025,7 @@ pub(crate) struct Unconnected {
 }
 
 impl Unconnected {
-    fn transient(&self) -> bool {
+    pub(crate) fn transient(&self) -> bool {
         !self.failed.is_empty() && self.failed.iter().all(Failed::transient)
     }
 

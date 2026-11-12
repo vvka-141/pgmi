@@ -9,7 +9,7 @@ use reqwest::StatusCode;
 
 use super::Options;
 use super::azure;
-use super::http::{Retry, Unanswered, client, encode};
+use super::http::{Exhausted, Retry, Unanswered, client, encode};
 use super::renew::{Fetched, Mint, Renewing};
 use crate::env::Env;
 use crate::error::{Error, Result, Secret};
@@ -493,10 +493,13 @@ async fn m2m(host: &str, id: &str, secret: &Secret) -> Result<Secret> {
         Error::connection(format!("failed to sign in to Databricks: {url}")).with_source(e)
     })?;
     if !status.is_success() {
-        return Err(Error::connection(format!(
-            "failed to sign in to Databricks with OAuth M2M (client {id}): {url} answered {status}{}",
-            reason(&body)
-        )));
+        return Err(busy(
+            Error::connection(format!(
+                "failed to sign in to Databricks with OAuth M2M (client {id}): {url} answered {status}{}",
+                reason(&body)
+            )),
+            status,
+        ));
     }
     field(&body, "access_token")
         .map(Secret::from)
@@ -584,12 +587,10 @@ async fn credential(s: &Settings, bearer: &Secret) -> Result<Fetched> {
         Error::connection(format!("failed to get a Lakebase credential from {url}")).with_source(e)
     })?;
     if !status.is_success() {
-        return Err(Error::connection(refusal(
+        return Err(busy(
+            Error::connection(refusal(status, &s.endpoint, &s.host, &text)),
             status,
-            &s.endpoint,
-            &s.host,
-            &text,
-        )));
+        ));
     }
     parse_credential(&text).map_err(|e| {
         Error::connection(format!("failed to get a Lakebase credential from {url}")).with_source(e)
@@ -689,6 +690,15 @@ fn parse_credential(body: &str) -> std::result::Result<Fetched, AnswerError> {
     })
 }
 
+/// `e`, marked as a busy answer that outlasted the retries when `status` is one.
+fn busy(e: Error, status: StatusCode) -> Error {
+    if retryable(status) {
+        e.with_cause(Exhausted::new("Databricks", status, ATTEMPTS))
+    } else {
+        e
+    }
+}
+
 fn retryable(status: StatusCode) -> bool {
     status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
 }
@@ -719,7 +729,14 @@ impl std::fmt::Display for SendError {
     }
 }
 
-impl std::error::Error for SendError {}
+impl std::error::Error for SendError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            SendError::Client(e) => Some(e),
+            SendError::Http(e) => Some(e),
+        }
+    }
+}
 
 async fn send(
     build: impl Fn(&reqwest::Client) -> reqwest::RequestBuilder,

@@ -121,3 +121,22 @@ contract's "Behaviour changes in 0.20" table and a line in
   short, Ctrl-C during a wait gives 130, a failing test never retried).
 - The deploy loop owns the attempts; the connect retry (`conn/retry.rs`)
   stays as it is inside each attempt.
+
+## As built (PGMI-886)
+
+- The loop lives in `deploy::Steps::attempts`; `deploy::retry` classifies the
+  error that ended an attempt (its SQLSTATE, else the typed cause in its
+  chain: the connect round, a closed driver connection or socket error, a
+  sign-in endpoint that gave up) and holds the backoff and the messages.
+- 25006 counts as a standby only when the connection did not ask for one
+  (`target_session_attrs` `read-only`, `standby`, `prefer-standby` make it
+  final); the server is asked `SHOW in_hot_standby` after the rollback.
+- The `--overwrite` step (maintenance connection, approval, drop, create)
+  runs once before the first attempt; its own failure ends the run.
+- A sign-in happens in the first attempt that has no token; a token, once
+  had, renews per connection as before.
+- A wait cut by the deadline keeps the last error's kind and diagnostics;
+  a deadline inside a later attempt names the earlier attempt's error. Both
+  read `time box of <d> used up after N attempts; last error: ...`; with no
+  time box, `gave up after 5 attempts with no time box (--timeout 0); ...`.
+- `--json` names an attempt's start `startedAt`, as the record's own.

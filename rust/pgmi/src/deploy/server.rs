@@ -144,6 +144,14 @@ pub(super) async fn first_value(session: &Session, sql: &str) -> Result<Option<S
         .map(|v| v.flatten().map(str::to_string))
 }
 
+/// Whether the server says it is a hot standby; `false` when it does not answer.
+pub(super) async fn hot_standby(session: &Session) -> bool {
+    matches!(
+        tokio::time::timeout(CLEANUP, first_value(session, "SHOW in_hot_standby")).await,
+        Ok(Ok(Some(v))) if v == "on"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

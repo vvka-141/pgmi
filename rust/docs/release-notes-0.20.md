@@ -47,3 +47,12 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   and Node get thin wrappers over `deploy --json` (PGMI-850).
 - **Google Cloud SQL** goes through pgmi's own dialer, and a transient
   connection failure is retried like on every other route.
+- **Whole-deployment retry inside `--timeout`.** A transient failure (a lost
+  connection, a server restart, too many connections, a deadlock or
+  serialization failure, a lock timeout, a failover to a standby, a sign-in
+  endpoint that stays down) runs the deploy again from the start, exactly
+  like a redeploy, waiting 1 s doubling to 30 s, until it succeeds or the
+  time box ends. A failing test or any other SQL error is never retried.
+  `--json` lists the `attempts`; `retry: false` in `pgmi.yaml` turns it off.
+  Pipelines need no retry step of their own. See
+  [Time box and retries](switch-day/timeout-and-retry.md).

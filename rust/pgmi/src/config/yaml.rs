@@ -14,6 +14,7 @@ pub(crate) struct ProjectConfig {
     #[serde(default, deserialize_with = "null_is_empty")]
     pub(crate) params: BTreeMap<String, Option<String>>,
     pub(crate) timeout: Option<String>,
+    pub(crate) retry: Option<bool>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]

@@ -255,6 +255,7 @@ impl Signin {
             && self.env.non_empty("IDENTITY_ENDPOINT")?.is_none()
             && self.env.non_empty("MSI_ENDPOINT")?.is_none();
         let mut failures = Vec::new();
+        let mut unavailable = None;
         for &kind in plan.kinds() {
             let attempt = get(kind);
             let result = if kind == Kind::Managed && probing {
@@ -270,7 +271,12 @@ impl Signin {
                     let _ = self.pinned.set(kind);
                     return Ok(t);
                 }
-                Err(e) => failures.push(format!("\t{}: {e}", kind.name())),
+                Err(e) => {
+                    failures.push(format!("\t{}: {e}", kind.name()));
+                    if unavailable.is_none() && super::unavailable_within(&e) {
+                        unavailable = Some(e);
+                    }
+                }
             }
         }
         let head = match plan {
@@ -279,10 +285,14 @@ impl Signin {
             }
             Plan::Named(_) => "failed to acquire a token:",
         };
-        Err(Error::connection(format!(
+        let e = Error::connection(format!(
             "failed to acquire Azure token: {head}\n{}",
             failures.join("\n")
-        )))
+        ));
+        Err(match unavailable {
+            Some(cause) => e.with_cause(cause),
+            None => e,
+        })
     }
 }
 

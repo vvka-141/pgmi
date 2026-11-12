@@ -5,6 +5,7 @@ mod guard;
 mod overwrite;
 mod record;
 mod request;
+mod retry;
 pub(crate) mod script;
 mod secrets;
 mod server;
@@ -25,7 +26,7 @@ use crate::config::yaml::ProjectConfig;
 use crate::conn::cloud::{self, Provider};
 use crate::conn::dial::{Dialer, Session};
 use crate::conn::overrides::{Override, overrides};
-use crate::conn::resolve::{self, Source, Spec};
+use crate::conn::resolve::{self, Source, Spec, TargetSessionAttrs};
 use crate::env::Env;
 use crate::error::redact;
 use crate::error::{Error, Kind, Result, Secret, SqlDiagnostics};
@@ -41,7 +42,7 @@ use record::Tls;
 pub(crate) use request::Request;
 use secrets::Secrets;
 pub(crate) use server::quote_ident;
-use server::{check_server, client_encoding, create_database, first_value, release};
+use server::{check_server, client_encoding, create_database, first_value, hot_standby, release};
 pub(crate) use stop::{Stop, StopReason};
 
 /// The privilege a step needs, named in the error when the server answers
@@ -181,6 +182,22 @@ pub(crate) struct Progress {
     provision: Provision,
     server: Option<ServerInfo>,
     execution: Option<Execution>,
+    attempts: Vec<Tried>,
+    time_used: Option<Duration>,
+}
+
+/// One run of the deploy from the start: when it began, how long it took,
+/// and how it failed.
+struct Tried {
+    started: SystemTime,
+    duration: Duration,
+    failure: Option<Ended>,
+}
+
+/// The error an attempt ended with, as the record lists it.
+struct Ended {
+    sqlstate: Option<String>,
+    message: String,
 }
 
 impl Progress {
@@ -342,7 +359,8 @@ impl Run {
         })
         .await?;
         let yaml_timeout = yaml.as_ref().map(ProjectConfig::timeout).transpose()?;
-        let timeout = limit(ctx.request.timeout.or(yaml_timeout.flatten()));
+        let asked = ctx.request.timeout.or(yaml_timeout.flatten());
+        let timeout = limit(asked);
         let guard = Guard {
             stop,
             deadline: deadline(timeout),
@@ -353,8 +371,17 @@ impl Run {
             guard: &guard,
             reporter,
             secrets: &self.secrets,
+            retry: retry::Policy {
+                enabled: yaml.as_ref().and_then(|y| y.retry) != Some(false),
+                cap: (asked == Some(Duration::ZERO)).then_some(retry::UNBOXED_ATTEMPTS),
+            },
         };
-        Box::pin(steps.deploy(&mut self.st, yaml.as_ref(), contract, &self.log)).await
+        let boxed = Instant::now();
+        let result = Box::pin(steps.deploy(&mut self.st, yaml.as_ref(), contract, &self.log)).await;
+        if !self.st.attempts.is_empty() {
+            self.st.time_used = Some(boxed.elapsed());
+        }
+        result
     }
 
     pub(crate) fn reached_deployer(&self) -> bool {
@@ -471,6 +498,16 @@ struct Steps<'a> {
     guard: &'a Guard,
     reporter: &'a Arc<Reporter>,
     secrets: &'a Secrets,
+    retry: retry::Policy,
+}
+
+/// What every attempt of one deploy runs with.
+struct Plan<'a> {
+    dialer: &'a Dialer,
+    cloud: Option<&'a (Provider, cloud::Options)>,
+    loaded: &'a LoadedProject,
+    params: &'a BTreeMap<String, String>,
+    contract: ContractVersion,
 }
 
 impl Steps<'_> {
@@ -511,58 +548,164 @@ impl Steps<'_> {
             overwrite::refuse_maintenance(&spec.target_db, &spec.maintenance_db)?;
         }
         let dialer = self.dialer(log);
-        if let Some((provider, options)) = &cloud {
-            let first = if request.overwrite {
-                &spec.maintenance_db
-            } else {
-                &spec.target_db
-            };
-            spec.token = Some(self.sign_in(*provider, options).await.map_err(|e| {
-                if e.kind() == Kind::Connection {
-                    let text = format!("connect to \"{first}\": {}", e.text());
-                    e.reworded(Kind::Connection, text)
-                } else {
-                    e
-                }
-            })?);
-        }
         let maintenance = if request.overwrite {
+            if let Some((provider, options)) = &cloud {
+                spec.token = Some(self.signed_in(*provider, options, &spec).await?);
+            }
             Some(self.overwrite(st, &dialer, &spec).await?)
         } else {
             None
         };
-        let outcome = async {
-            let session = self.open(st, &dialer, &spec).await?;
-            self.settle(&session, &spec).await?;
-            if !request.overwrite {
-                self.reporter.line(PREPARING);
-            }
-            self.lock(&session, &spec.target_db).await?;
-            let server = st.server.insert(self.server_info(&session, &spec).await?);
-            let outcome = execute::run(execute::Input {
-                session: &session,
-                guard: self.guard,
-                role: &spec.user,
-                reporter: self.reporter,
-                project: &loaded.project,
-                meta: &loaded.meta,
-                params: &params,
-                database: &spec.target_db,
-                contract,
-                tls: &server.tls,
-                verbose: self.ctx.verbose,
-                files_loaded: loaded.files(),
-                execution: &mut st.execution,
-            })
-            .await;
-            release(&session).await;
-            outcome
-        }
-        .await;
+        let plan = Plan {
+            dialer: &dialer,
+            cloud: cloud.as_ref(),
+            loaded: &loaded,
+            params: &params,
+            contract,
+        };
+        let outcome = self.attempts(st, &plan, &mut spec).await;
         if let Some(m) = &maintenance {
             overwrite::unlock(m, &spec.target_db).await;
         }
         outcome
+    }
+
+    /// Runs the deploy from the start until an attempt succeeds, fails for
+    /// good, or the time box ends (record 0025).
+    async fn attempts(&self, st: &mut Progress, plan: &Plan<'_>, spec: &mut Spec) -> Result<()> {
+        let guard = self.guard;
+        let mut last: Option<Error> = None;
+        loop {
+            let n = st.attempts.len() + 1;
+            st.execution = None;
+            let (started, t0) = (SystemTime::now(), Instant::now());
+            let mut seen = retry::Seen::default();
+            let result = self.attempt(st, plan, spec, &mut seen).await;
+            st.attempts.push(Tried {
+                started,
+                duration: t0.elapsed(),
+                failure: result.as_ref().err().map(|e| Ended {
+                    sqlstate: e.sql_diagnostics().and_then(|d| d.sqlstate.clone()),
+                    message: e.text(),
+                }),
+            });
+            let Err(e) = result else { return Ok(()) };
+            let expired = tokio::time::Instant::now() >= guard.deadline;
+            if e.kind() == Kind::Timeout || (e.kind() == Kind::Connection && expired) {
+                return Err(match &last {
+                    Some(prev) => retry::used_up(e.kind(), guard.timeout, n, prev),
+                    None => e,
+                });
+            }
+            seen.in_test = st.failure().is_some_and(|f| f.blame.phase() == "test");
+            let why = if self.retry.enabled && !guard.stop.is_cancelled() {
+                retry::transient(&e, seen)
+            } else {
+                None
+            };
+            let Some(why) = why else { return Err(e) };
+            let attempts_left = match self.retry.cap {
+                Some(cap) if n >= cap => return Err(retry::gave_up(n, e)),
+                Some(cap) => Some(cap - n),
+                None => None,
+            };
+            let wait = retry::backoff(n);
+            let remaining = guard
+                .deadline
+                .saturating_duration_since(tokio::time::Instant::now());
+            if wait >= remaining {
+                return Err(retry::cut_short(guard.timeout, n, e));
+            }
+            let left = attempts_left.map_or(
+                retry::Left::Time(remaining.saturating_sub(wait)),
+                retry::Left::Attempts,
+            );
+            self.reporter
+                .line(&retry::retrying_line(n, &why, wait, left));
+            tokio::select! {
+                () = tokio::time::sleep(wait) => {}
+                () = guard.stop.cancelled() => return Err(guard.stop_error()),
+            }
+            last = Some(e);
+        }
+    }
+
+    /// One run of the deploy: sign in when there is no token yet, connect,
+    /// lock, load the session and run deploy.sql.
+    async fn attempt(
+        &self,
+        st: &mut Progress,
+        plan: &Plan<'_>,
+        spec: &mut Spec,
+        seen: &mut retry::Seen,
+    ) -> Result<()> {
+        if let (None, Some((provider, options))) = (&spec.token, plan.cloud) {
+            spec.token = Some(self.signed_in(*provider, options, spec).await?);
+        }
+        let spec = &*spec;
+        let session = self.open(st, plan.dialer, spec).await?;
+        let outcome = async {
+            self.settle(&session, spec).await?;
+            if !self.ctx.request.overwrite {
+                self.reporter.line(PREPARING);
+            }
+            self.lock(&session, &spec.target_db).await?;
+            let server = st.server.insert(self.server_info(&session, spec).await?);
+            execute::run(execute::Input {
+                session: &session,
+                guard: self.guard,
+                role: &spec.user,
+                reporter: self.reporter,
+                project: &plan.loaded.project,
+                meta: &plan.loaded.meta,
+                params: plan.params,
+                database: &spec.target_db,
+                contract: plan.contract,
+                tls: &server.tls,
+                verbose: self.ctx.verbose,
+                files_loaded: plan.loaded.files(),
+                execution: &mut st.execution,
+            })
+            .await
+        }
+        .await;
+        release(&session).await;
+        if outcome
+            .as_ref()
+            .err()
+            .and_then(|e| e.sql_diagnostics())
+            .and_then(|d| d.sqlstate.as_deref())
+            == Some("25006")
+        {
+            seen.hot_standby = !matches!(
+                spec.target_session_attrs,
+                TargetSessionAttrs::ReadOnly
+                    | TargetSessionAttrs::Standby
+                    | TargetSessionAttrs::PreferStandby
+            ) && hot_standby(&session).await;
+        }
+        outcome
+    }
+
+    async fn signed_in(
+        &self,
+        provider: Provider,
+        options: &cloud::Options,
+        spec: &Spec,
+    ) -> Result<cloud::Token> {
+        let first = if self.ctx.request.overwrite {
+            &spec.maintenance_db
+        } else {
+            &spec.target_db
+        };
+        self.sign_in(provider, options).await.map_err(|e| {
+            if e.kind() == Kind::Connection {
+                let text = format!("connect to \"{first}\": {}", e.text());
+                e.reworded(Kind::Connection, text)
+            } else {
+                e
+            }
+        })
     }
 
     fn target(&self, st: &mut Progress, yaml: Option<&ProjectConfig>) -> Result<Target> {
@@ -1552,6 +1695,46 @@ mod tests {
         assert_eq!(r["overrides"], json!([]));
         assert_eq!(r["notices"], json!([]));
         assert_eq!(r["dotenvKeys"], json!(["PGPASSWORD"]));
+    }
+
+    #[test]
+    fn the_record_lists_every_attempt_and_the_time_used_with_secrets_hidden() {
+        let at = SystemTime::UNIX_EPOCH + Duration::from_hours(500_000);
+        let p = Progress {
+            attempts: vec![
+                Tried {
+                    started: at,
+                    duration: Duration::from_millis(1210),
+                    failure: Some(Ended {
+                        sqlstate: Some("40P01".into()),
+                        message: "ERROR: deadlock near s3cret-pw (SQLSTATE 40P01)".into(),
+                    }),
+                },
+                Tried {
+                    started: at + Duration::from_secs(2),
+                    duration: Duration::from_millis(830),
+                    failure: None,
+                },
+            ],
+            time_used: Some(Duration::from_millis(3050)),
+            ..loaded("app")
+        };
+        let r = record_of(p, &Ok(()));
+        assert_eq!(
+            r["attempts"],
+            json!([
+                {
+                    "durationMs": 1210,
+                    "message": "ERROR: deadlock near *** (SQLSTATE 40P01)",
+                    "sqlstate": "40P01",
+                    "startedAt": "2027-01-15T08:00:00.000Z"
+                },
+                {"durationMs": 830, "startedAt": "2027-01-15T08:00:02.000Z"}
+            ])
+        );
+        assert_eq!(r["timeUsedMs"], 3050);
+        let none = record_of(loaded("app"), &Ok(()));
+        assert!(none.get("attempts").is_none() && none.get("timeUsedMs").is_none());
     }
 
     #[test]
