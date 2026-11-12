@@ -457,8 +457,8 @@ impl Steps<'_> {
         }
         st.phase = Phase::Deploying;
         let loaded = self.load().await?;
-        contract?;
         self.record_loaded(st, &loaded);
+        contract?;
         if request.overwrite {
             overwrite::refuse_maintenance(&spec.target_db, &spec.maintenance_db)?;
         }
