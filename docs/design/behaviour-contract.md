@@ -328,7 +328,7 @@ The first SIGINT or SIGTERM during the load is exit 130 and a
 `--timeout` that runs out there is exit 16, as in Go, which loads after
 connecting.
 
-Cases: `dialect/pgmiignore`, `dialect/root-deploy-file-any-case`, `dialect/pgmiignore-hides-deploy`, `execution/loader-at-scale`, `dialect/project-walk`, `commands/metadata-refusals`, `errors/special-file`, `dialect/nested-deploy-sql-loaded`, `dialect/pgmiignore-broken-patterns`, `formats/binary-file-in-test-directory`. The load racing a signal and the timeout: Rust unit tests `blocking_work_gives_way_to_the_first_signal`, `blocking_work_gives_way_to_the_timeout`.
+Cases: `dialect/pgmiignore`, `dialect/pgmiignore-characters`, `dialect/root-deploy-file-any-case`, `dialect/pgmiignore-hides-deploy`, `execution/loader-at-scale`, `dialect/project-walk`, `commands/metadata-refusals`, `errors/special-file`, `dialect/nested-deploy-sql-loaded`, `dialect/pgmiignore-broken-patterns`, `formats/binary-file-in-test-directory`. The load racing a signal and the timeout: Rust unit tests `blocking_work_gives_way_to_the_first_signal`, `blocking_work_gives_way_to_the_timeout`.
 
 ### Session API
 

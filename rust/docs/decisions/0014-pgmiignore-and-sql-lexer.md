@@ -84,3 +84,12 @@ parentheses, other. On top of it:
 Project discovery and loading; POSIX character classes in .pgmiignore;
 Execution contract; Test macro; Error attribution; Verbose output (ignored
 paths).
+
+## Changed by PGMI-926
+
+The matcher works on characters, not bytes, as Go's does: `?` and a class
+match one character of a non-ASCII name. A `[:` that the next `]` does not
+close as `[:name:]` is an ordinary class member, as git and Go read it.
+Still different from Go: POSIX classes (the intended change above) and a
+`\` inside a class, which escapes the next character as in git where Go
+reads a literal backslash.

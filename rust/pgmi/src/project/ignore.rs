@@ -1,6 +1,6 @@
 #[derive(Debug)]
 struct Pattern {
-    glob: Vec<u8>,
+    glob: Vec<char>,
     negated: bool,
     dir_only: bool,
     anchored: bool,
@@ -16,30 +16,30 @@ impl Rules {
         let mut patterns = Vec::new();
         for (n, line) in text.lines().enumerate() {
             let line = line.strip_suffix('\r').unwrap_or(line);
-            let mut p = line.as_bytes().to_vec();
-            while p.last() == Some(&b' ') && !(p.len() >= 2 && p[p.len() - 2] == b'\\') {
+            let mut p: Vec<char> = line.chars().collect();
+            while p.last() == Some(&' ') && !(p.len() >= 2 && p[p.len() - 2] == '\\') {
                 p.pop();
             }
-            if p.is_empty() || p[0] == b'#' {
+            if p.is_empty() || p[0] == '#' {
                 continue;
             }
             let mut negated = false;
-            if p[0] == b'!' {
+            if p[0] == '!' {
                 negated = true;
                 p.remove(0);
-            } else if p.starts_with(b"\\!") || p.starts_with(b"\\#") {
+            } else if p.starts_with(&['\\', '!']) || p.starts_with(&['\\', '#']) {
                 p.remove(0);
             }
             let mut dir_only = false;
-            if p.last() == Some(&b'/') {
+            if p.last() == Some(&'/') {
                 dir_only = true;
                 p.pop();
             }
             if p.is_empty() {
                 continue;
             }
-            let anchored = p.contains(&b'/');
-            if p[0] == b'/' {
+            let anchored = p.contains(&'/');
+            if p[0] == '/' {
                 p.remove(0);
             }
             if !valid(&p) {
@@ -66,7 +66,7 @@ impl Rules {
                 continue;
             }
             let subject = if p.anchored { path } else { base };
-            if wildmatch(&p.glob, subject.as_bytes()) {
+            if wildmatch(&p.glob, &subject.chars().collect::<Vec<_>>()) {
                 out = !p.negated;
             }
         }
@@ -74,14 +74,14 @@ impl Rules {
     }
 }
 
-fn valid(p: &[u8]) -> bool {
+fn valid(p: &[char]) -> bool {
     let mut i = 0;
     while i < p.len() {
         match p[i] {
-            b'\\' => i += 2,
-            b'[' => {
-                let first = i + 1 + usize::from(matches!(p.get(i + 1), Some(b'!' | b'^')));
-                if p.get(first) == Some(&b']') {
+            '\\' => i += 2,
+            '[' => {
+                let first = i + 1 + usize::from(matches!(p.get(i + 1), Some('!' | '^')));
+                if p.get(first) == Some(&']') {
                     return false;
                 }
                 match class_end(p, i) {
@@ -96,27 +96,24 @@ fn valid(p: &[u8]) -> bool {
     true
 }
 
-fn class_valid(p: &[u8], mut i: usize, end: usize) -> bool {
+fn class_valid(p: &[char], mut i: usize, end: usize) -> bool {
     let last = end - 1;
     let at = |k: usize| p.get(k).copied();
     while i < last {
-        if at(i) == Some(b'[') && at(i + 1) == Some(b':') {
-            let Some(close) = p[i + 2..].windows(2).position(|w| w == b":]") else {
-                return false;
-            };
-            if posix(&p[i + 2..i + 2 + close], b'a').is_none() {
+        if let Some((name, next)) = named(p, i) {
+            if posix(name, 'a').is_none() {
                 return false;
             }
-            i += 2 + close + 2;
+            i = next;
             continue;
         }
-        if at(i) == Some(b'\\') {
+        if at(i) == Some('\\') {
             i += 1;
         }
         let Some(lo) = at(i) else { return false };
-        if at(i + 1) == Some(b'-') && i + 2 < last {
+        if at(i + 1) == Some('-') && i + 2 < last {
             let (hi, step) = match at(i + 2) {
-                Some(b'\\') => (at(i + 3), 4),
+                Some('\\') => (at(i + 3), 4),
                 h => (h, 3),
             };
             if hi.is_none_or(|hi| lo > hi) {
@@ -130,50 +127,57 @@ fn class_valid(p: &[u8], mut i: usize, end: usize) -> bool {
     true
 }
 
-fn class_end(p: &[u8], open: usize) -> Option<usize> {
+fn class_end(p: &[char], open: usize) -> Option<usize> {
     let mut i = open + 1;
-    if matches!(p.get(i), Some(b'!' | b'^')) {
+    if matches!(p.get(i), Some('!' | '^')) {
         i += 1;
     }
-    if p.get(i) == Some(&b']') {
+    if p.get(i) == Some(&']') {
         i += 1;
     }
     while i < p.len() {
         match p[i] {
-            b'\\' => i += 2,
-            b'[' if p.get(i + 1) == Some(&b':') => {
-                let close = p[i + 2..].windows(2).position(|w| w == b":]")?;
-                i += 2 + close + 2;
-            }
-            b']' => return Some(i + 1),
+            '\\' => i += 2,
+            '[' if named(p, i).is_some() => i = named(p, i)?.1,
+            ']' => return Some(i + 1),
             _ => i += 1,
         }
     }
     None
 }
 
-fn posix(name: &[u8], c: u8) -> Option<bool> {
-    Some(match name {
-        b"alnum" => c.is_ascii_alphanumeric(),
-        b"alpha" => c.is_ascii_alphabetic(),
-        b"blank" => c == b' ' || c == b'\t',
-        b"cntrl" => c.is_ascii_control(),
-        b"digit" => c.is_ascii_digit(),
-        b"graph" => c.is_ascii_graphic(),
-        b"lower" => c.is_ascii_lowercase(),
-        b"print" => c.is_ascii_graphic() || c == b' ',
-        b"punct" => c.is_ascii_punctuation(),
-        b"space" => matches!(c, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c),
-        b"upper" => c.is_ascii_uppercase(),
-        b"xdigit" => c.is_ascii_hexdigit(),
+/// A `[:name:]` at `i`, as git reads it: the next `]` closes it only when
+/// a `:` comes right before; otherwise the `[` is an ordinary member.
+fn named(p: &[char], i: usize) -> Option<(&[char], usize)> {
+    if p.get(i) != Some(&'[') || p.get(i + 1) != Some(&':') {
+        return None;
+    }
+    let close = i + 2 + p[i + 2..].iter().position(|c| *c == ']')?;
+    (close > i + 2 && p[close - 1] == ':').then(|| (&p[i + 2..close - 1], close + 1))
+}
+
+fn posix(name: &[char], c: char) -> Option<bool> {
+    Some(match name.iter().collect::<String>().as_str() {
+        "alnum" => c.is_ascii_alphanumeric(),
+        "alpha" => c.is_ascii_alphabetic(),
+        "blank" => c == ' ' || c == '\t',
+        "cntrl" => c.is_ascii_control(),
+        "digit" => c.is_ascii_digit(),
+        "graph" => c.is_ascii_graphic(),
+        "lower" => c.is_ascii_lowercase(),
+        "print" => c.is_ascii_graphic() || c == ' ',
+        "punct" => c.is_ascii_punctuation(),
+        "space" => matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{b}' | '\u{c}'),
+        "upper" => c.is_ascii_uppercase(),
+        "xdigit" => c.is_ascii_hexdigit(),
         _ => return None,
     })
 }
 
-fn class_match(p: &[u8], open: usize, c: u8) -> Option<(bool, usize)> {
+fn class_match(p: &[char], open: usize, c: char) -> Option<(bool, usize)> {
     let end = class_end(p, open)?;
     let mut i = open + 1;
-    let negated = matches!(p.get(i), Some(b'!' | b'^'));
+    let negated = matches!(p.get(i), Some('!' | '^'));
     if negated {
         i += 1;
     }
@@ -181,25 +185,23 @@ fn class_match(p: &[u8], open: usize, c: u8) -> Option<(bool, usize)> {
     let mut first = true;
     while i < end - 1 {
         let mut lo = p[i];
-        if lo == b']' && !first {
+        if lo == ']' && !first {
             break;
         }
         first = false;
-        if lo == b'[' && p.get(i + 1) == Some(&b':') {
-            let close = p[i + 2..].windows(2).position(|w| w == b":]")?;
-            let name = &p[i + 2..i + 2 + close];
+        if let Some((name, next)) = named(p, i) {
             hit |= posix(name, c)?;
-            i += 2 + close + 2;
+            i = next;
             continue;
         }
-        if lo == b'\\' {
+        if lo == '\\' {
             i += 1;
             lo = *p.get(i)?;
         }
-        if p.get(i + 1) == Some(&b'-') && i + 2 < end - 1 {
+        if p.get(i + 1) == Some(&'-') && i + 2 < end - 1 {
             let mut hi = p[i + 2];
             let mut step = 3;
-            if hi == b'\\' {
+            if hi == '\\' {
                 hi = *p.get(i + 3)?;
                 step = 4;
             }
@@ -210,10 +212,10 @@ fn class_match(p: &[u8], open: usize, c: u8) -> Option<(bool, usize)> {
             i += 1;
         }
     }
-    Some((hit != negated && c != b'/', end))
+    Some((hit != negated && c != '/', end))
 }
 
-pub(crate) fn wildmatch(p: &[u8], t: &[u8]) -> bool {
+pub(crate) fn wildmatch(p: &[char], t: &[char]) -> bool {
     matches(p, 0, t, 0) == Match::Yes
 }
 
@@ -225,24 +227,24 @@ enum Match {
     AbortToStarStar,
 }
 
-fn matches(p: &[u8], mut pi: usize, t: &[u8], mut ti: usize) -> Match {
+fn matches(p: &[char], mut pi: usize, t: &[char], mut ti: usize) -> Match {
     while pi < p.len() {
-        if ti >= t.len() && p[pi] != b'*' {
+        if ti >= t.len() && p[pi] != '*' {
             return Match::AbortAll;
         }
         match p[pi] {
-            b'*' => {
-                let double = p.get(pi + 1) == Some(&b'*');
+            '*' => {
+                let double = p.get(pi + 1) == Some(&'*');
                 if double
-                    && (pi == 0 || p[pi - 1] == b'/')
-                    && (pi + 2 == p.len() || p[pi + 2] == b'/')
+                    && (pi == 0 || p[pi - 1] == '/')
+                    && (pi + 2 == p.len() || p[pi + 2] == '/')
                 {
                     if pi + 2 == p.len() {
                         return Match::Yes;
                     }
                     let rest = pi + 3;
                     let starts = std::iter::once(ti)
-                        .chain((ti..t.len()).filter(|k| t[*k] == b'/').map(|k| k + 1));
+                        .chain((ti..t.len()).filter(|k| t[*k] == '/').map(|k| k + 1));
                     for k in starts {
                         if let r @ (Match::Yes | Match::AbortAll) = matches(p, rest, t, k) {
                             return r;
@@ -250,11 +252,11 @@ fn matches(p: &[u8], mut pi: usize, t: &[u8], mut ti: usize) -> Match {
                     }
                     return Match::No;
                 }
-                while pi < p.len() && p[pi] == b'*' {
+                while pi < p.len() && p[pi] == '*' {
                     pi += 1;
                 }
                 if pi == p.len() {
-                    return if t[ti..].contains(&b'/') {
+                    return if t[ti..].contains(&'/') {
                         Match::No
                     } else {
                         Match::Yes
@@ -265,31 +267,31 @@ fn matches(p: &[u8], mut pi: usize, t: &[u8], mut ti: usize) -> Match {
                         Match::No => {}
                         r => return r,
                     }
-                    if t[k] == b'/' {
+                    if t[k] == '/' {
                         return Match::AbortToStarStar;
                     }
                 }
                 return Match::AbortAll;
             }
-            b'?' => {
-                if t[ti] == b'/' {
+            '?' => {
+                if t[ti] == '/' {
                     return Match::No;
                 }
                 pi += 1;
                 ti += 1;
             }
-            b'[' => match class_match(p, pi, t[ti]) {
+            '[' => match class_match(p, pi, t[ti]) {
                 Some((true, end)) => {
                     pi = end;
                     ti += 1;
                 }
-                None if class_end(p, pi).is_none() && t[ti] == b'[' => {
+                None if class_end(p, pi).is_none() && t[ti] == '[' => {
                     pi += 1;
                     ti += 1;
                 }
                 _ => return Match::No,
             },
-            b'\\' if pi + 1 < p.len() => {
+            '\\' if pi + 1 < p.len() => {
                 if t[ti] != p[pi + 1] {
                     return Match::No;
                 }
@@ -312,61 +314,68 @@ fn matches(p: &[u8], mut pi: usize, t: &[u8], mut ti: usize) -> Match {
 mod tests {
     use super::*;
 
+    fn wm(p: &str, t: &str) -> bool {
+        wildmatch(
+            &p.chars().collect::<Vec<_>>(),
+            &t.chars().collect::<Vec<_>>(),
+        )
+    }
+
     #[test]
     fn globs() {
-        assert!(wildmatch(b"*.bak", b"b.bak"));
-        assert!(!wildmatch(b"*.sql", b"a/b.sql"));
-        assert!(wildmatch(b"[Bb]uild", b"Build"));
-        assert!(wildmatch(b"**/scratch", b"sub/scratch"));
-        assert!(wildmatch(b"**/scratch", b"scratch"));
-        assert!(wildmatch(b"docs/**", b"docs/drop.sql"));
-        assert!(!wildmatch(b"docs/**", b"docs"));
-        assert!(wildmatch(b"a/**/b", b"a/b"));
-        assert!(wildmatch(b"a/**/b", b"a/x/y/b"));
-        assert!(wildmatch(b"[!a-m]*.tmp", b"n.tmp"));
-        assert!(!wildmatch(b"[!a-m]*.tmp", b"c.tmp"));
-        assert!(wildmatch(b"odd[&&]name.sql", b"odd&name.sql"));
-        assert!(!wildmatch(b"odd[&&]name.sql", b"oddname.sql"));
-        assert!(wildmatch(b"dash[--]x.sql", b"dash-x.sql"));
-        assert!(wildmatch(b"\\#hash.sql", b"#hash.sql"));
-        assert!(wildmatch(b"sp[[:space:]]ace.sql", b"sp ace.sql"));
-        assert!(wildmatch(b"* (copy)*", b"a (copy).sql"));
-        assert!(wildmatch(b"*~", b"a.sql~"));
+        assert!(wm("*.bak", "b.bak"));
+        assert!(!wm("*.sql", "a/b.sql"));
+        assert!(wm("[Bb]uild", "Build"));
+        assert!(wm("**/scratch", "sub/scratch"));
+        assert!(wm("**/scratch", "scratch"));
+        assert!(wm("docs/**", "docs/drop.sql"));
+        assert!(!wm("docs/**", "docs"));
+        assert!(wm("a/**/b", "a/b"));
+        assert!(wm("a/**/b", "a/x/y/b"));
+        assert!(wm("[!a-m]*.tmp", "n.tmp"));
+        assert!(!wm("[!a-m]*.tmp", "c.tmp"));
+        assert!(wm("odd[&&]name.sql", "odd&name.sql"));
+        assert!(!wm("odd[&&]name.sql", "oddname.sql"));
+        assert!(wm("dash[--]x.sql", "dash-x.sql"));
+        assert!(wm("\\#hash.sql", "#hash.sql"));
+        assert!(wm("sp[[:space:]]ace.sql", "sp ace.sql"));
+        assert!(wm("* (copy)*", "a (copy).sql"));
+        assert!(wm("*~", "a.sql~"));
     }
 
     #[test]
     fn many_stars_do_not_backtrack_exponentially() {
-        let text = vec![b'a'; 60];
+        let text = "a".repeat(60);
         let started = std::time::Instant::now();
-        assert!(!wildmatch(b"*a*a*a*a*a*a*a*a*b", &text));
-        assert!(!wildmatch(b"**/*a*a*a*a*a*a*a*a*b", &text));
-        assert!(wildmatch(b"*a*a*a*a*a*a*a*a*a", &text));
+        assert!(!wm("*a*a*a*a*a*a*a*a*b", &text));
+        assert!(!wm("**/*a*a*a*a*a*a*a*a*b", &text));
+        assert!(wm("*a*a*a*a*a*a*a*a*a", &text));
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 
-    fn naive(p: &[u8], pi: usize, t: &[u8], ti: usize) -> bool {
+    fn naive(p: &[char], pi: usize, t: &[char], ti: usize) -> bool {
         let Some(&c) = p.get(pi) else {
             return ti == t.len();
         };
         match c {
-            b'*' if p.get(pi + 1) == Some(&b'*')
-                && (pi == 0 || p[pi - 1] == b'/')
-                && (pi + 2 == p.len() || p[pi + 2] == b'/') =>
+            '*' if p.get(pi + 1) == Some(&'*')
+                && (pi == 0 || p[pi - 1] == '/')
+                && (pi + 2 == p.len() || p[pi + 2] == '/') =>
             {
                 pi + 2 == p.len()
                     || naive(p, pi + 3, t, ti)
-                    || (ti..t.len()).any(|k| t[k] == b'/' && naive(p, pi + 3, t, k + 1))
+                    || (ti..t.len()).any(|k| t[k] == '/' && naive(p, pi + 3, t, k + 1))
             }
-            b'*' => {
+            '*' => {
                 let mut q = pi;
-                while p.get(q) == Some(&b'*') {
+                while p.get(q) == Some(&'*') {
                     q += 1;
                 }
                 (ti..=t.len())
-                    .take_while(|k| *k == ti || t[k - 1] != b'/')
+                    .take_while(|k| *k == ti || t[k - 1] != '/')
                     .any(|k| naive(p, q, t, k))
             }
-            b'?' => t.get(ti).is_some_and(|x| *x != b'/') && naive(p, pi + 1, t, ti + 1),
+            '?' => t.get(ti).is_some_and(|x| *x != '/') && naive(p, pi + 1, t, ti + 1),
             c => t.get(ti) == Some(&c) && naive(p, pi + 1, t, ti + 1),
         }
     }
@@ -374,11 +383,126 @@ mod tests {
     proptest::proptest! {
         #[test]
         fn abort_rule_keeps_the_answer(
-            p in proptest::collection::vec(proptest::sample::select(b"ab/*?".to_vec()), 0..10),
-            t in proptest::collection::vec(proptest::sample::select(b"ab/".to_vec()), 0..10),
+            p in proptest::collection::vec(proptest::sample::select(vec!['a', 'é', '/', '*', '?']), 0..10),
+            t in proptest::collection::vec(proptest::sample::select(vec!['a', 'é', '/']), 0..10),
         ) {
             proptest::prop_assert_eq!(wildmatch(&p, &t), naive(&p, 0, &t, 0));
         }
+    }
+
+    const NAMES: &[&str] = &[
+        "café.sql",
+        "cafe.sql",
+        "e/ä.sql",
+        "e/日本.sql",
+        "e/ab.sql",
+        "x1.sql",
+        "xx.sql",
+        "x:.sql",
+        "a",
+        "[",
+        ":",
+        "b",
+        "sp ace.sql",
+        "odd&name.sql",
+        "oddname.sql",
+        "dash-x.sql",
+        "#hash.sql",
+        "[abc",
+        "a\\",
+        "-",
+        "ax",
+        "zx",
+        "n.tmp",
+        "c.tmp",
+        "b.bak",
+        "sub/scratch",
+        "scratch",
+        "docs/drop.sql",
+        "docs",
+        "a/b",
+        "a/x/y/b",
+        "a (copy).sql",
+        "a.sql~",
+        "q]r.sql",
+        "x[1].sql",
+        "abc",
+        "a/bc",
+        "~x",
+        "~",
+    ];
+
+    #[test]
+    fn patterns_match_and_refuse_as_go_does() {
+        let table: &[(&str, Option<&[&str]>)] = &[
+            ("caf?.sql", Some(&["café.sql", "cafe.sql"][..])),
+            ("caf[é].sql", Some(&["café.sql"][..])),
+            ("caf[^e].sql", Some(&["café.sql"][..])),
+            ("caf[!e].sql", Some(&["café.sql"][..])),
+            ("e/?.sql", Some(&["e/ä.sql"][..])),
+            ("e/??.sql", Some(&["e/日本.sql", "e/ab.sql"][..])),
+            ("e/[ä].sql", Some(&["e/ä.sql"][..])),
+            ("e/日?.sql", Some(&["e/日本.sql"][..])),
+            ("[a[:b]", Some(&["a", "[", ":", "b", "a/b", "a/x/y/b"][..])),
+            ("odd[&&]name.sql", Some(&["odd&name.sql"][..])),
+            ("dash[--]x.sql", Some(&["dash-x.sql"][..])),
+            ("\\#hash.sql", Some(&["#hash.sql"][..])),
+            ("[z-a]", None),
+            ("[]", None),
+            ("[!]", None),
+            ("[^]", None),
+            ("[]a]", None),
+            ("a[]b", None),
+            ("[[:nosuch:]]", None),
+            ("[abc", Some(&["[abc"][..])),
+            ("[a-]", Some(&["a", "-"][..])),
+            ("[a-a]", Some(&["a"][..])),
+            ("[!a-z]x", Some(&["~x"][..])),
+            ("[!a-m]*.tmp", Some(&["n.tmp"][..])),
+            ("*.bak", Some(&["b.bak"][..])),
+            ("**/scratch", Some(&["sub/scratch", "scratch"][..])),
+            ("docs/**", Some(&["docs/drop.sql"][..])),
+            ("a/**/b", Some(&["a/b", "a/x/y/b"][..])),
+            ("* (copy)*", Some(&["a (copy).sql"][..])),
+            ("*~", Some(&["a.sql~", "~"][..])),
+            ("q]r.sql", Some(&["q]r.sql"][..])),
+            ("x[1].sql", Some(&["x1.sql"][..])),
+            (
+                "a**",
+                Some(
+                    &[
+                        "e/ab.sql",
+                        "a",
+                        "a\\",
+                        "ax",
+                        "a (copy).sql",
+                        "a.sql~",
+                        "abc",
+                    ][..],
+                ),
+            ),
+            ("[~]x", Some(&["~x"][..])),
+            ("[a~~b]", Some(&["a", "b", "a/b", "a/x/y/b", "~"][..])),
+        ];
+        for (pattern, want) in table {
+            let got = Rules::parse(pattern).ok().map(|r| {
+                NAMES
+                    .iter()
+                    .copied()
+                    .filter(|n| r.ignored(n, false))
+                    .collect::<Vec<_>>()
+            });
+            assert_eq!(got.as_deref(), *want, "{pattern}");
+        }
+    }
+
+    #[test]
+    fn posix_classes_keep_git_meaning_where_go_refuses_them() {
+        let r = Rules::parse("x[[:digit:]].sql\nsp[[:space:]]ace.sql\n").unwrap();
+        assert!(r.ignored("x1.sql", false));
+        assert!(!r.ignored("xx.sql", false));
+        assert!(r.ignored("sp ace.sql", false));
+        assert!(!r.ignored("spxace.sql", false));
     }
 
     #[test]

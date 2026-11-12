@@ -1,0 +1,18 @@
+description: in .pgmiignore, ? and [...] match one character of a file name, not one byte, so caf?.sql and e/[ä].sql hide café.sql and e/ä.sql, and e/?.sql hides a one-letter non-ASCII name
+project:
+  files:
+    .pgmiignore: "caf?.sql\ne/[ä].sql\nf/?.sql\n"
+    café.sql: SELECT 1;
+    e/ä.sql: SELECT 1;
+    f/日.sql: SELECT 1;
+    keep.sql: SELECT 1;
+    deploy.sql: CREATE TABLE seen AS SELECT path FROM pg_temp.pgmi_source_view;
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT path FROM seen ORDER BY path
+          rows: [[./keep.sql]]
