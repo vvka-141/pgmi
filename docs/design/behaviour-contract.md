@@ -173,7 +173,9 @@ cancelled and nothing more is read (Go stops reading only when an answer
 written by the reader fails, and then waits for the running calls). A failed
 read of stdin or write of stdout exits 1 with `pgmi: error: read request: ...`
 or `pgmi: error: write response: ...` (Go: the read or write error itself);
-end of input, a signal and a client dropped for not reading exit 0. Rust unit tests
+end of input, a signal and a client dropped for not reading exit 0. On Unix
+a stdout pipe the client closed is not a failed write: both binaries keep
+SIGPIPE's default action, so serve dies of the signal (a shell reports 141). Rust unit tests
 `a_client_that_stops_reading_does_not_hold_up_the_stop`,
 `an_output_failure_ends_the_session`, `a_failed_read_ends_the_session_with_exit_1`,
 `the_end_of_input_ends_the_session_successfully`,
@@ -819,7 +821,9 @@ of memory. The Rust binary bounds all three:
   and the session goes on.
 - With 32 tool calls running, another `tools/call` is answered at once with
   `-32000` (`32 tool calls are already running; wait for one to finish`).
-  `ping`, `tools/list` and `notifications/cancelled` are still served.
+  `ping`, `tools/list` and `notifications/cancelled` are still served. A
+  cancelled call that reads files keeps its place until its thread really
+  ends; `init`, which writes, finishes even when cancelled.
 - When 1024 answers are waiting, serve reads no further request until the
   client takes one; a client that takes none for 2 s ends the session:
   running calls are cancelled and serve exits 0 as at the end of input. A
@@ -830,6 +834,8 @@ reading client is served in full. Rust unit tests
 `a_client_that_reads_while_it_sends_a_burst_gets_every_answer`,
 `a_line_over_16_mib_is_refused_at_once_and_the_session_goes_on`,
 `calls_beyond_32_are_refused_and_cancels_still_get_through`,
+`a_cancelled_blocking_call_stops_waiting_but_keeps_its_slot`,
+`a_cancelled_init_still_writes_the_whole_project`,
 `a_client_that_never_reads_is_dropped_once_its_answers_pile_up`,
 `a_line_over_the_limit_is_dropped_and_counted_once`.
 
@@ -1003,8 +1009,8 @@ Cases: `connection/protocol-version`.
 After the user confirms replacing a `pgmi.yaml` it cannot read as settings, the Rust
 binary writes a fresh connection block; Go edits the file in place. `pgmi
 init`'s connection wizard asks no such question, so the Rust binary keeps a
-`pgmi.yaml` it cannot parse, warns `could not save connection` and still
-exits 0; Go replaces the file. An
+`pgmi.yaml` it cannot parse or read (invalid UTF-8, UTF-16, no permission),
+warns `could not save connection` and still exits 0; Go replaces the file. An
 `AZURE_TOKEN_CREDENTIALS` value that names no credential is refused before
 connecting with exit 10 (Go: 1). Both wizards draw full-screen, as Go's do.
 
