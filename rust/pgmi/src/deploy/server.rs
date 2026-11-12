@@ -7,7 +7,7 @@ use super::{Needs, created_elsewhere, sql_error, sql_error_needing};
 use crate::conn::dial::Session;
 use crate::error::{Error, Result};
 
-const CLEANUP: Duration = Duration::from_secs(3);
+pub(super) const CLEANUP: Duration = Duration::from_secs(3);
 
 pub(super) async fn create_database(maintenance: &Session, db: &str) -> Result<()> {
     maintenance

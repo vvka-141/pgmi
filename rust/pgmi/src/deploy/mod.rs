@@ -64,7 +64,7 @@ fn privilege_hint(code: &str, needs: Option<Needs>) -> Option<&'static str> {
     }
 }
 
-fn created_elsewhere(e: Error) -> Error {
+pub(super) fn created_elsewhere(e: Error) -> Error {
     match e.sql_diagnostics().and_then(|d| d.sqlstate.as_deref()) {
         Some("42P04" | "23505") => Error::new(
             Kind::Locked,
@@ -466,27 +466,34 @@ impl Steps<'_> {
         if let Some((provider, options)) = &cloud {
             spec.token = Some(self.sign_in(*provider, options).await?);
         }
-        let _maintenance = if request.overwrite {
+        let maintenance = if request.overwrite {
             Some(self.overwrite(st, &dialer, &spec).await?)
         } else {
             None
         };
-        let session = self.open(st, &dialer, &spec).await?;
-        st.server = Some(self.server_info(&session, &spec).await?);
-        self.lock(&session, &spec.target_db).await?;
-        let outcome = execute::run(execute::Input {
-            session: &session,
-            guard: self.guard,
-            reporter: self.reporter,
-            project: &loaded.project,
-            meta: &loaded.meta,
-            params: &params,
-            verbose: self.ctx.verbose,
-            files_loaded: loaded.files(),
-            execution: &mut st.execution,
-        })
+        let outcome = async {
+            let session = self.open(st, &dialer, &spec).await?;
+            st.server = Some(self.server_info(&session, &spec).await?);
+            self.lock(&session, &spec.target_db).await?;
+            let outcome = execute::run(execute::Input {
+                session: &session,
+                guard: self.guard,
+                reporter: self.reporter,
+                project: &loaded.project,
+                meta: &loaded.meta,
+                params: &params,
+                verbose: self.ctx.verbose,
+                files_loaded: loaded.files(),
+                execution: &mut st.execution,
+            })
+            .await;
+            release(&session).await;
+            outcome
+        }
         .await;
-        release(&session).await;
+        if let Some(m) = &maintenance {
+            overwrite::unlock(m, &spec.target_db).await;
+        }
         outcome
     }
 
@@ -646,6 +653,21 @@ impl Steps<'_> {
         let exists = guard
             .running(&maintenance, overwrite::claim(&maintenance, db))
             .await?;
+        if let Err(e) = self.recreate_claimed(st, &maintenance, db, exists).await {
+            overwrite::unlock(&maintenance, db).await;
+            return Err(e);
+        }
+        Ok(maintenance)
+    }
+
+    async fn recreate_claimed(
+        &self,
+        st: &mut Progress,
+        maintenance: &Session,
+        db: &str,
+        exists: bool,
+    ) -> Result<()> {
+        let guard = self.guard;
         let snapshot = if exists {
             guard
                 .waiting(
@@ -655,22 +677,21 @@ impl Steps<'_> {
                 )
                 .await?;
             guard
-                .running(&maintenance, overwrite::snapshot(&maintenance, db))
+                .running(maintenance, overwrite::snapshot(maintenance, db))
                 .await?
         } else {
             None
         };
         guard.check()?;
         overwrite::recreate(
-            &maintenance,
+            maintenance,
             db,
             snapshot.as_ref(),
             self.reporter,
             &mut st.provision,
         )
         .await?;
-        guard.check()?;
-        Ok(maintenance)
+        guard.check()
     }
 
     /// Connects to the target database, creating it first through the

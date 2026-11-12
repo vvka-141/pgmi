@@ -4,7 +4,8 @@ use std::time::Duration;
 use tokio_postgres::Row;
 use tokio_postgres::types::Type;
 
-use super::{Needs, Provision, quote_ident, sql_error, sql_error_needing};
+use super::server::CLEANUP;
+use super::{Needs, Provision, created_elsewhere, quote_ident, sql_error, sql_error_needing};
 use crate::conn::dial::Session;
 use crate::error::{Error, Kind, Result};
 use crate::output::Reporter;
@@ -117,7 +118,7 @@ pub(crate) fn refuse_maintenance(target: &str, maintenance: &str) -> Result<()> 
 }
 
 /// Takes the lock that serialises `--overwrite` runs on `db`, held until
-/// `maintenance` closes, and reports whether `db` exists.
+/// [`unlock`] or until `maintenance` closes, and reports whether `db` exists.
 pub(crate) async fn claim(maintenance: &Session, db: &str) -> Result<bool> {
     let c = &maintenance.client;
     let held = rows(
@@ -376,6 +377,23 @@ fn restore_sql(db: &str, s: &Snapshot) -> Vec<(String, String)> {
     out
 }
 
+/// Releases the [`claim`] on `db` explicitly: the server reaps a closed
+/// connection's locks only some time after it goes, so an immediate rerun
+/// could still find it held. A session that does not answer within
+/// `CLEANUP` is closed instead.
+pub(crate) async fn unlock(maintenance: &Session, db: &str) {
+    let sql = format!(
+        "SELECT pg_advisory_unlock(hashtextextended('pgmi.overwrite.{}', 0))",
+        db.replace('\'', "''")
+    );
+    if !matches!(
+        tokio::time::timeout(CLEANUP, maintenance.client.batch_execute(&sql)).await,
+        Ok(Ok(()))
+    ) {
+        maintenance.disconnect();
+    }
+}
+
 const RECREATE: Duration = Duration::from_secs(60);
 
 /// Drops `db` when there is a snapshot, creates it and puts the snapshot
@@ -400,7 +418,11 @@ pub(crate) async fn recreate(
         c.batch_execute(&create_sql(db, snapshot))
             .await
             .map_err(|e| {
-                sql_error_needing("create the target database", e, Some(Needs::CreateDb))
+                created_elsewhere(sql_error_needing(
+                    "create the target database",
+                    e,
+                    Some(Needs::CreateDb),
+                ))
             })?;
         *provision = if snapshot.is_some() {
             Provision::Recreated
@@ -442,6 +464,36 @@ pub(crate) async fn recreate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn unlock_releases_the_claim_on_the_same_key() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (listener, port) = crate::conn::dial::fake::listen().await;
+        let server = tokio::spawn(async move {
+            let mut s = crate::conn::dial::fake::signed_in(&listener).await.unwrap();
+            assert_eq!(s.read_u8().await.unwrap(), b'Q');
+            let len = s.read_u32().await.unwrap();
+            let mut body = vec![0; usize::try_from(len).unwrap() - 4];
+            s.read_exact(&mut body).await.unwrap();
+            s.write_all(b"C\0\0\0\x0dSELECT 1\0Z\0\0\0\x05I")
+                .await
+                .unwrap();
+            String::from_utf8(body).unwrap()
+        });
+        let spec = crate::conn::dial::fake::spec_for(&format!(
+            "host=127.0.0.1 port={port} user=u dbname=d sslmode=disable"
+        ));
+        let session = crate::conn::dial::fake::quiet()
+            .connect(&spec, "d")
+            .await
+            .unwrap();
+        unlock(&session, "o'app").await;
+        let sql = server.await.unwrap();
+        assert_eq!(
+            sql.trim_end_matches('\0'),
+            "SELECT pg_advisory_unlock(hashtextextended('pgmi.overwrite.o''app', 0))"
+        );
+    }
 
     #[test]
     fn list_settings_are_split_and_quoted() {
