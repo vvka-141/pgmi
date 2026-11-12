@@ -65,12 +65,16 @@ Cases: `commands/info`, `commands/info-scaffolded-by`, `commands/info-metadata-r
 and without a terminal it writes `minimal`; on a terminal it runs the wizard. A
 file named `<name>.scaffold` is written as `<name>`. A target holding anything
 but `pgmi.yaml`, `.env` or `.git` is exit 2; an unknown template is exit 2.
+A target that exists but cannot be listed, or is not a directory, is exit 1
+and nothing is written. The Rust binary creates every file exclusively, so a
+file that appears in the target meanwhile is never replaced: the write fails
+with exit 1.
 `{{PROJECT_NAME}}` in a template becomes the target folder's name, as is in
 text files and JSON-escaped in `.json` files. Answering Yes to "Set up the
 connection now?" runs the `config` wizard and writes its settings into the
 scaffolded `pgmi.yaml`.
 
-Cases: `commands/init`, `commands/init-unwritable`, `terminal/init-wizard`, `terminal/non-interactive`, `commands/init-project-name`, `terminal/init-wizard-connection`, `terminal/init-wizard-connection-esc`.
+Cases: `commands/init`, `commands/init-unwritable`, `commands/init-unlistable`, `terminal/init-wizard`, `terminal/non-interactive`, `commands/init-project-name`, `terminal/init-wizard-connection`, `terminal/init-wizard-connection-esc`.
 
 ### Template deployments
 
@@ -161,9 +165,10 @@ answered during a deploy, and `notifications/cancelled` stops a running deploy,
 which rolls back. End of input exits 0. Full reference: `docs/CLI.md`
 "pgmi serve".
 
-Once input ends or SIGINT/SIGTERM arrives and the running calls have ended,
-a client that no longer reads gets 2 s to take the remaining answers before
-serve exits. A failed write to stdout ends the session: running calls are
+Once input ends or SIGINT/SIGTERM arrives, serve keeps writing answers as
+long as the client takes them; a write that makes no progress for 2 s ends
+the session, running calls are cancelled and serve exits 0. A client that
+reads slowly but steadily gets every answer, however long that takes. A failed write to stdout ends the session: running calls are
 cancelled and nothing more is read (Go stops reading only when an answer
 written by the reader fails, and then waits for the running calls). A failed
 read of stdin or write of stdout exits 1 with `pgmi: error: read request: ...`
@@ -171,7 +176,9 @@ or `pgmi: error: write response: ...` (Go: the read or write error itself);
 end of input, a signal and a client dropped for not reading exit 0. Rust unit tests
 `a_client_that_stops_reading_does_not_hold_up_the_stop`,
 `an_output_failure_ends_the_session`, `a_failed_read_ends_the_session_with_exit_1`,
-`the_end_of_input_ends_the_session_successfully`.
+`the_end_of_input_ends_the_session_successfully`,
+`a_slow_steady_reader_gets_every_answer_after_the_input_ends`,
+`a_client_that_never_reads_ends_two_seconds_after_its_input`.
 
 Malformed input, each answered and the session continuing: text that is not
 JSON, including invalid UTF-8 outside a string, is -32700 with a null id;
@@ -574,14 +581,16 @@ single quotes literal, double quotes with escapes and multiple lines). `.env`
 expands `$NAME` and `${NAME}` in unquoted and double-quoted values from the
 lines above only (a name set only in the environment, or nowhere, expands to
 empty); a `.env` that does not parse applies nothing and prints a WARNING
-naming the file, never its text. `.env` values enter the process environment,
+naming the file, never its text. A NUL byte anywhere in the `.env` makes it
+unparseable in the Rust binary (Go drops a pair whose value holds one and
+applies the rest); neither binary prints the value. `.env` values enter the process environment,
 so they reach the cloud sign-in too; a params
 file additionally refuses, with exit 10, a backslash or `$` inside double quotes
 and an unquoted ` #`, which `.env` readers disagree on. `pgmi.yaml` values
 become text: `~` is empty, numbers and booleans as written (`5432.0` stays
 `5432.0`), block scalars keep their final newline.
 
-Cases: `formats/dotenv-edges`, `formats/dotenv-expansion`, `cloud/dotenv-feeds-sdk`, `formats/params-file-edges`, `formats/pgmi-yaml-edges`, `config/pgmi-yaml-invalid`.
+Cases: `formats/dotenv-edges`, `formats/dotenv-expansion`, `formats/dotenv-nul`, `cloud/dotenv-feeds-sdk`, `formats/params-file-edges`, `formats/pgmi-yaml-edges`, `config/pgmi-yaml-invalid`.
 
 ### Terminal behaviour
 
@@ -1154,6 +1163,8 @@ release notes take their "Behaviour changes" section from this table.
 | Confirmed replace of a `pgmi.yaml` that cannot be read as settings | edited in place | fresh connection block | owner 2026-11-11 |
 | `AZURE_TOKEN_CREDENTIALS` naming no credential | exit 1 | exit 10 | owner 2026-11-11 |
 | Wizards | full-screen | full-screen (kept) | owner 2026-11-11 |
+| A NUL byte in the project `.env` | in a key: nothing applied, WARNING; in a value: that pair dropped, the rest applied and listed | nothing applied, WARNING; exit 0 both, the value never printed | intended |
+| `pgmi init` into a directory that exists but cannot be listed | exit 1 both (Rust 0.20 alphas: files overwritten) | exit 1, nothing written; files created exclusively | intended |
 | TLS or cloud sign-in on an x86-64 CPU without AES-NI, PCLMULQDQ, SSSE3, AVX, AVX2, BMI1, BMI2, ADX (before about 2014), or an arm64 CPU without NEON, AES, PMULL, SHA2 | works | newly refused before connecting, exit 10, naming the missing features; `sslmode=disable` and commands without a database still run (record 0021) | owner 2026-11-11 |
 
 No case of its own: each row's section above names its cases or its Rust unit

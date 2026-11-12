@@ -19,6 +19,7 @@ pub(crate) enum Reason {
     EscapeInDoubleQuotes,
     UnquotedComment,
     Ambiguous { key: String, why: Ambiguity },
+    Nul,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +34,7 @@ impl std::fmt::Display for ParseError {
         write!(f, "line {}: ", self.line)?;
         match &self.reason {
             Reason::NoEquals => f.write_str("expected KEY=VALUE"),
+            Reason::Nul => f.write_str("a NUL byte cannot be put in the environment"),
             Reason::InvalidKey(key) => write!(f, "invalid key {key:?}"),
             Reason::Unterminated(q) => write!(f, "unterminated {q} quote"),
             Reason::EscapeInDoubleQuotes => f.write_str(
@@ -59,6 +61,19 @@ impl std::fmt::Display for ParseError {
 }
 
 impl std::error::Error for ParseError {}
+
+/// Reads a project `.env` for the process environment: what `parse` reads
+/// in dotenv mode, refused as a whole when the text holds a NUL byte, which
+/// no environment variable can.
+pub(crate) fn environment(text: &str) -> Result<Vec<(String, String)>, ParseError> {
+    if let Some(pos) = text.find('\0') {
+        return Err(ParseError {
+            line: text[..pos].matches('\n').count() + 1,
+            reason: Reason::Nul,
+        });
+    }
+    parse(text, Mode::Dotenv)
+}
 
 pub(crate) fn parse(text: &str, mode: Mode) -> Result<Vec<(String, String)>, ParseError> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);

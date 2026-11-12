@@ -1,0 +1,15 @@
+description: a NUL byte in the project .env never crashes and never prints the value; Go drops that pair, Rust applies nothing and warns
+project:
+  files:
+    .env: {hex: "50474d495f504152414d5f583d6162630068696464656e2d76616c75650a50474d495f504152414d5f593d310a"}
+    deploy.sql: |
+      DO $$ BEGIN RAISE NOTICE 'x=[%] y=[%]', current_setting('pgmi.x', true), current_setting('pgmi.y', true); END $$;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      stderr: ["x=\\[<NULL>\\] y=\\[1\\]"]
+      stderr_not: ["hidden-value", "panicked"]
+      stdout_not: ["hidden-value"]
+      rust:
+        stderr: ["WARNING: .*\\.env could not be parsed, so none of its values were applied", "x=\\[<NULL>\\] y=\\[<NULL>\\]"]

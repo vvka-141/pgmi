@@ -591,12 +591,27 @@ pub fn metadata_block(meta: &Meta) -> Checked {
 
 /// `.env` text is read or refused at a line of the text in both modes; what
 /// strict mode accepts, dotenv mode reads as the same keys, and as the same
-/// values when nothing can expand.
+/// values when nothing can expand. What a project `.env` puts in the process
+/// environment is what dotenv mode reads, and every pair of it can be
+/// exported.
 pub fn dotenv_text(text: &str) -> Checked {
     let lines = text.bytes().filter(|b| *b == b'\n').count() + 1;
     let loose = dotenv::parse(text, Mode::Dotenv);
     let strict = dotenv::parse(text, Mode::Strict);
-    for e in [&loose, &strict]
+    let exported = dotenv::environment(text);
+    if let Ok(pairs) = &exported {
+        ensure!(
+            loose.as_ref().ok() == Some(pairs),
+            "the environment got {pairs:?}, dotenv mode read {loose:?}"
+        );
+        for (k, v) in pairs {
+            ensure!(
+                !k.is_empty() && !k.contains(['=', '\0']) && !v.contains('\0'),
+                "{k:?}={v:?} cannot be exported"
+            );
+        }
+    }
+    for e in [&loose, &strict, &exported]
         .into_iter()
         .filter_map(|r| r.as_ref().err())
     {

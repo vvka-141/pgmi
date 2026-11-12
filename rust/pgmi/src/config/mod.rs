@@ -48,7 +48,7 @@ pub(crate) fn project_dotenv(project: &impl Vfs, env: &Env) -> Result<Vec<(Strin
             );
         }
     };
-    let Ok(pairs) = dotenv::parse(&text, dotenv::Mode::Dotenv) else {
+    let Ok(pairs) = dotenv::environment(&text) else {
         let _ = writeln!(
             std::io::stderr(),
             "WARNING: {} could not be parsed, so none of its values were applied",
@@ -108,6 +108,17 @@ mod tests {
         assert!(project_dotenv(&MemFs::default(), &env).unwrap().is_empty());
         let fs = MemFs::default().file(".env", "A=1\nnot a pair\n");
         assert!(project_dotenv(&fs, &env).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_nul_byte_anywhere_in_the_env_file_applies_nothing() {
+        for text in ["A=1\nPGPASSWORD=abc\0def\n", "A=1\nB\0C=2\n", "A=1\n# \0\n"] {
+            let fs = MemFs::default().file(".env", text);
+            assert!(
+                project_dotenv(&fs, &Env::default()).unwrap().is_empty(),
+                "{text:?}"
+            );
+        }
     }
 
     #[test]

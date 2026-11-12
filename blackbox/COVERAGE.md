@@ -30,7 +30,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 |---|---|
 | `deploy` | ✓ `exit-codes/*`, `deploy/*`, `params/*`; flags below |
 | `info`, `info --json`, missing path = 10 | ✓ `commands/info` |
-| `init` (no `-t` without a terminal = minimal; `-t basic\|advanced`; manifests written without `.scaffold`; non-empty target = 2; unknown template = 2; unwritable target = 1) | ✓ `commands/init`, `commands/init-unwritable` |
+| `init` (no `-t` without a terminal = minimal; `-t basic\|advanced`; manifests written without `.scaffold`; non-empty target = 2; unknown template = 2; unwritable target = 1; unlistable target = 1, nothing written) | ✓ `commands/init`, `commands/init-unwritable`, `commands/init-unlistable` |
 | `init` wizard (terminal, no `-t`) | ✓ `terminal/init-wizard`, `terminal/init-wizard-connection`, `terminal/init-wizard-connection-esc`, `terminal/init-wizard-keeps-unparseable-yaml` |
 | `config` (wizard: tests the connection, keeps pgmi.yaml comments and params, saves to `~/.pgpass`) | ✓ `terminal/config-wizard`, `terminal/config-refusals`, `terminal/config-replace-unparseable` |
 | `metadata plan` (+`--json`) | ✓ `commands/metadata`, `commands/metadata-invalid` |
@@ -190,7 +190,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 
 | Format | Coverage |
 |---|---|
-| `.env` edge cases | ✓ `formats/dotenv-edges` |
+| `.env` edge cases | ✓ `formats/dotenv-edges`; a NUL byte ✓ `formats/dotenv-nul` |
 | `--params-file` edge cases; refuses `\` or `$` in double quotes and an unquoted ` #` (10) | ✓ `formats/params-file-edges` |
 | `pgmi.yaml` edge cases (`~`, numbers, `5432.0`, booleans, folded and literal blocks) | ✓ `formats/pgmi-yaml-edges` |
 

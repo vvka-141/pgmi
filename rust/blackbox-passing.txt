@@ -38,6 +38,7 @@ commands/info-scaffolded-by
 commands/info-metadata-refusals
 commands/init
 commands/init-project-name
+commands/init-unlistable
 commands/init-unwritable
 commands/metadata
 commands/metadata-duplicate
@@ -152,6 +153,7 @@ flags/params-file
 flags/timeout-forms
 formats/dotenv-edges
 formats/dotenv-expansion
+formats/dotenv-nul
 formats/params-file-edges
 formats/pgmi-yaml-edges
 notices/pgpass-secret-redacted
