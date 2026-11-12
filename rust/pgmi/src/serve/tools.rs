@@ -410,6 +410,22 @@ fn path_argument(
     }
 }
 
+/// A connection from a tool call may not point the operator's password
+/// file elsewhere, or connect to an address other than the host whose
+/// `.pgpass` entry it gets.
+fn refuse_operator_keys(connection: &str) -> Result<(), Error> {
+    let fields = crate::conn::parse::parse(connection)?;
+    match ["hostaddr", "passfile"]
+        .into_iter()
+        .find(|k| fields.contains_key(*k))
+    {
+        Some(key) => Err(Error::config(format!(
+            "connection key \"{key}\" is not accepted from a tool call; set it in the environment pgmi serve runs in"
+        ))),
+        None => Ok(()),
+    }
+}
+
 fn deploy_context(
     arguments: Option<&RawValue>,
     env: &Env,
@@ -461,6 +477,9 @@ fn deploy_context(
         Some(p) if !p.is_empty() => PathBuf::from(p),
         _ => return Err(Error::config("path is required")),
     };
+    if let Some(c) = connection.as_deref() {
+        refuse_operator_keys(c)?;
+    }
     if !path.exists() {
         return Err(Error::config(format!(
             "project path {:?} does not exist",
@@ -668,6 +687,30 @@ mod tests {
         let e = err("{\"path\":\"/\",\"timeout\":\"soon\"}");
         assert!(e.text().starts_with("invalid timeout"), "{}", e.text());
         assert_eq!(e.exit_code(), 10);
+    }
+
+    #[test]
+    fn a_tool_call_cannot_pick_the_address_or_the_password_file() {
+        for connection in [
+            "host=prod.internal hostaddr=203.0.113.9 dbname=app",
+            "postgresql://prod.internal/app?hostaddr=203.0.113.9",
+            "host=db passfile=/home/op/.ssh/known_hosts dbname=app",
+        ] {
+            let e = err(&format!(
+                "{{\"path\":\"/\",\"connection\":{}}}",
+                serde_json::to_string(connection).unwrap()
+            ));
+            assert_eq!(e.exit_code(), 10, "{connection}");
+            assert!(e.text().contains("from a tool call"), "{}", e.text());
+        }
+        deploy_context(
+            Some(&raw(
+                "{\"path\":\"/\",\"connection\":\"host=db dbname=app\"}",
+            )),
+            &Env::default(),
+            false,
+        )
+        .unwrap();
     }
 
     #[test]
