@@ -1,0 +1,40 @@
+description: Rust only (contract "Whole-deployment retry"). A connection reset while the head runs, and one in the tail, end that attempt; the deploy runs again from the start on a new connection and succeeds, one stderr line per retried attempt, and --json lists every attempt
+impl: rust
+proxy:
+  - {query: head_sleep, do: reset, after: 0.5, times: 1, step: 1}
+  - {query: tail_sleep, do: reset, after: 0.5, times: 1, step: 2}
+project:
+  files:
+    deploy.sql: |
+      SET client_connection_check_interval = '100ms';
+      BEGIN;
+      CREATE TABLE IF NOT EXISTS marker (phase text);
+      INSERT INTO marker VALUES ('head');
+      SELECT pg_sleep(1) AS head_sleep;
+      COMMIT;
+      INSERT INTO marker VALUES ('tail-1');
+      SELECT pg_sleep(1) AS tail_sleep;
+      INSERT INTO marker VALUES ('tail-2');
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    timeout: 30
+    expect:
+      exit: 0
+      stderr: ["^pgmi: attempt 1 failed \\(connection lost\\); retrying in [0-9.]+s, [0-9ms.]+ left$"]
+      stderr_not: ["attempt 2 failed"]
+      sql:
+        - query: SELECT coalesce(string_agg(phase, ',' ORDER BY ctid), '') FROM marker
+          rows: [["head,tail-1,tail-2"]]
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}", --json]
+    delay: 1
+    timeout: 30
+    expect:
+      exit: 0
+      json: {status: success, exitCode: 0}
+      stdout: ['"attempts": \[\s*\{\s*"durationMs": \d+,\s*"message": "[^"]+",\s*"startedAt": "[^"]+"\s*\},\s*\{\s*"durationMs": \d+,\s*"startedAt": "[^"]+"\s*\}\s*\]', '"timeUsedMs": \d+']
+      stderr: ["^pgmi: attempt 1 failed \\(connection lost\\); retrying in"]
+      sql:
+        - query: SELECT coalesce(string_agg(phase, ',' ORDER BY ctid), '') FROM marker
+          rows: [["head,tail-1,tail-2,head,tail-1,head,tail-1,tail-2"]]

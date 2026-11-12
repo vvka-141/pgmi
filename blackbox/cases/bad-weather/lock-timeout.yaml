@@ -1,4 +1,4 @@
-description: a deploy whose lock_timeout runs out waiting for a lock another session holds is exit 13 with SQLSTATE 55P03 and the statement named; nothing of it is kept
+description: a deploy whose lock_timeout runs out waiting for a lock another session holds is exit 13 with SQLSTATE 55P03 and the statement named; nothing of it is kept (Rust runs the deploy again (contract "Whole-deployment retry") once the lock is free, exit 0)
 project:
   files:
     deploy.sql: |
@@ -19,4 +19,10 @@ steps:
       sql:
         - query: SELECT count(*) FROM t
           rows: [[1]]
+      rust:
+        exit: 0
+        stderr: ["^pgmi: attempt 1 failed \\(55P03 lock not available\\); retrying in"]
+        sql:
+          - query: SELECT count(*) FROM t
+            rows: [[2]]
   - sql: BEGIN; LOCK TABLE t IN ACCESS EXCLUSIVE MODE; SELECT pg_sleep(3); COMMIT;

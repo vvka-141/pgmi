@@ -1,6 +1,6 @@
-description: a connection reset while the head transaction runs is exit 13 and commits nothing; the server drops the orphaned session (client_connection_check_interval), then the next deploy runs (Rust exits 11, a lost connection; contract "Behaviour changes in 0.20")
+description: a connection reset while the head transaction runs is exit 13 and commits nothing; the server drops the orphaned session (client_connection_check_interval), then the next deploy runs (Rust runs the deploy again (contract "Whole-deployment retry") and succeeds; with retry off it is exit 11, contract "Behaviour changes in 0.20")
 proxy:
-  - {query: head_sleep, do: reset, after: 0.5, step: 1}
+  - {query: head_sleep, do: reset, after: 0.5, times: 1, step: 1}
 project:
   files:
     deploy.sql: |
@@ -19,10 +19,15 @@ steps:
   - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
     expect:
       exit: 13
-      rust: {exit: 11}
       sql:
         - query: SELECT to_regclass('marker') IS NULL
           rows: [[true]]
+      rust:
+        exit: 0
+        stderr: ["^pgmi: attempt 1 failed \\(connection lost\\); retrying in"]
+        sql:
+          - query: SELECT coalesce(string_agg(phase, ',' ORDER BY ctid), '') FROM marker
+            rows: [["head,tail-1,tail-2"]]
   - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
     delay: 1
     expect:
@@ -30,3 +35,8 @@ steps:
       sql:
         - query: SELECT coalesce(string_agg(phase, ',' ORDER BY ctid), '') FROM marker
           rows: [["head,tail-1,tail-2"]]
+      rust:
+        stderr: ['^relation "marker" already exists, skipping$']
+        sql:
+          - query: SELECT coalesce(string_agg(phase, ',' ORDER BY ctid), '') FROM marker
+            rows: [["head,tail-1,tail-2,head,tail-1,tail-2"]]

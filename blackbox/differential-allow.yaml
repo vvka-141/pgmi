@@ -132,12 +132,12 @@ accept:
     go: '(?<=: )invalid configuration: '
     go_as: ''
   - row: Driver error text in connection and retry lines
-    case: 'cases/(bad-weather|cloud|connection|env|errors|exit-codes|tls)/.*\.yaml|variant/connection: .*'
+    case: 'cases/(bad-weather|cloud|connection|env|errors|exit-codes|tls)/.*\.yaml|variant/(connection|pgmi\.yaml): .*'
     field: stderr
     go: '(?m)^(pgmi: error: connect to "[^"]*": |Connection attempt \d+ failed: ).*?(; retrying in <duration>)?$'
     go_as: '\1<driver text>\2'
   - row: Driver error text in connection and retry lines
-    case: 'cases/(bad-weather|cloud|connection|env|errors|exit-codes|tls)/.*\.yaml|variant/connection: .*'
+    case: 'cases/(bad-weather|cloud|connection|env|errors|exit-codes|tls)/.*\.yaml|variant/(connection|pgmi\.yaml): .*'
     field: stderr
     rust: '(?m)^(pgmi: error: connect to "[^"]*": |Connection attempt \d+ failed: ).*?(; retrying in <duration>)?$'
     rust_as: '\1<driver text>\2'
@@ -367,3 +367,31 @@ accept:
     field: stderr
     go: '\n\(connection defaults\)$'
     go_as: ''
+  - row: Whole-deployment retry
+    case: .*
+    field: json
+    rust: '(?m)^ "attempts": \[\n(?:  .*\n)*? \],\n'
+    rust_as: ''
+  - row: Whole-deployment retry
+    case: .*
+    field: json
+    rust: '(?m)^ "timeUsedMs": \d+,\n'
+    rust_as: ''
+  - row: Whole-deployment retry
+    case: cases/serve/.*
+    field: stdout
+    rust: '"attempts": \[\{.*?\}\], '
+    rust_as: ''
+  - row: Whole-deployment retry
+    case: cases/serve/.*
+    field: stdout
+    rust: '"timeUsedMs": \d+, '
+    rust_as: ''
+  - row: Whole-deployment retry
+    case: 'cases/(bad-weather/azure-managed-identity-gives-up|connection/(target-session-attrs|multi-host|connect-timeout-range|uri-scheme-case)|exit-codes/11-connection-failed|errors/(refusal-wording|connection-source)|env/pgconnect-timeout)\.yaml|variant/(connection|pgmi\.yaml): .*'
+    field: stderr
+    rust: '(?m)^pgmi: attempt 1 failed \('
+  - row: Whole-deployment retry
+    case: cases/(bad-weather/azure-managed-identity-gives-up|connection/(multi-host|connect-timeout-range|uri-scheme-case)|exit-codes/11-connection-failed|errors/(refusal-wording|connection-source)|env/pgconnect-timeout)\.yaml
+    field: json
+    rust: '"error": "time box of <duration> used up after \d+ attempts?; last error: '

@@ -1,9 +1,9 @@
-description: a connect_timeout up to 9223372036 seconds (the longest Go duration) is a timeout like any other; a longer one is refused before connecting under Rust, where Go wraps it around ("Behaviour changes in 0.20", connect_timeout beyond Go's range)
+description: a connect_timeout up to 9223372036 seconds (the longest Go duration) is a timeout like any other; a longer one is refused before connecting under Rust, where Go wraps it around ("Behaviour changes in 0.20", connect_timeout beyond Go's range); --timeout 2s bounds Rust's retry of the refused connection ("Whole-deployment retry")
 project:
   files:
     deploy.sql: SELECT 1;
 steps:
-  - pgmi: [deploy, "{project}", --connection, "host=127.0.0.1 port=1 user=u dbname=d sslmode=disable connect_timeout=9223372036"]
+  - pgmi: [deploy, "{project}", --connection, "host=127.0.0.1 port=1 user=u dbname=d sslmode=disable connect_timeout=9223372036", --timeout, 2s]
     expect: {exit: 11, stderr: ["connection refused to 127\\.0\\.0\\.1:1"]}
   - pgmi: [deploy, "{project}", --connection, "host=127.0.0.1 port=1 user=u dbname=d sslmode=disable connect_timeout=9223372036854775807"]
     expect:

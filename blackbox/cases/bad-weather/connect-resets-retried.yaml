@@ -1,4 +1,4 @@
-description: a connection reset before the server answers the startup is tried 4 times in all, each failure on stderr; three resets are survived, four are exit 11 (a fifth attempt would have been let through)
+description: a connection reset before the server answers the startup is tried 4 times in all, each failure on stderr; three resets are survived, four are exit 11 (a fifth attempt would have been let through; Rust runs the deploy again (contract "Whole-deployment retry") and its next connection is let through, so deploy.sql runs again and stops at its CREATE TABLE of the existing table, exit 13)
 proxy:
   - {at: startup, do: reset, times: 3, step: 1}
   - {at: startup, do: reset, times: 4, step: 2}
@@ -21,3 +21,4 @@ steps:
       exit: 11
       stderr: ["Connection attempt 3 failed: .*; retrying in"]
       stderr_not: ["Connection attempt 4 failed: .*; retrying"]
+      rust: {exit: 13, stderr: ["Connection attempt 3 failed: .*; retrying in", "^pgmi: attempt 1 failed \\(could not connect\\); retrying in", "relation \"marker\" already exists"]}

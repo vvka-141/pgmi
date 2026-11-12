@@ -423,7 +423,10 @@ hosts are tried in order and the error names every one tried;
 `standby`, `prefer-standby`. `options=` reaches the server. A connection that
 fails transiently (SQLSTATE class 08, 53300, 57P03, refused, reset, broken pipe,
 closed early, unreachable, timeout, a temporary name-lookup failure) is tried 4 times in all, waiting about 0.1 s, 0.2 s, 0.4 s, each line
-on stderr; other failures are not retried. `max_protocol_version` and
+on stderr; other failures are not retried. In the Rust binary, when those 4
+tries give up on a transient failure, the whole deploy runs again inside
+`--timeout` (see "Whole-deployment retry"), so a server that stays
+unreachable ends the run when the time box would end inside the next wait. `max_protocol_version` and
 `min_protocol_version` (`3.0`, `3.2`) are accepted, and a deploy and a cancel
 work with both set to `3.2` (Go speaks 3.2 then; the Rust binary refuses a
 minimum above 3.0, see "A minimum protocol above 3.0 is refused for now");
@@ -444,7 +447,7 @@ privilege gives the `GRANT CONNECT`, and a host DNS cannot find says to check
 its spelling, DNS and `$PGHOST`. The server's DETAIL follows the error as a
 `DETAIL:` line and is `detail` in `--json`.
 
-Cases: `errors/connection-failures`, `errors/connect-refusal-detail`, `connection/connect-timeout-range`, `env/pg-tls-protocol-variables`, `connection/pgpass`, `connection/pgpass-wildcard-and-file`, `connection/pgpass-world-readable`, `connection/multi-host`, `connection/target-session-attrs`, `connection/keywords`, `connection/unix-socket`, `env/pg-variables`, `env/pgappname`, `env/pgconnect-timeout`, `env/ignored-variables`, `errors/connection-failures`, `exit-codes/11-connection-failed`, `connection/protocol-version`, `bad-weather/connect-resets-retried`, `bad-weather/startup-refusals-retried`, `bad-weather/startup-refusals-final`.
+Cases: `errors/connection-failures`, `errors/connect-refusal-detail`, `connection/connect-timeout-range`, `env/pg-tls-protocol-variables`, `connection/pgpass`, `connection/pgpass-wildcard-and-file`, `connection/pgpass-world-readable`, `connection/multi-host`, `connection/target-session-attrs`, `connection/keywords`, `connection/unix-socket`, `env/pg-variables`, `env/pgappname`, `env/pgconnect-timeout`, `env/ignored-variables`, `errors/connection-failures`, `exit-codes/11-connection-failed`, `connection/protocol-version`, `bad-weather/connect-resets-retried`, `bad-weather/startup-refusals-retried`, `bad-weather/startup-refusals-final`, `retry/connect-gave-up`.
 
 ### TLS
 
@@ -653,9 +656,14 @@ that freezes, answering neither the session nor the cancel request, still ends
 the run within 2.5 s of `--timeout`. A signal while connecting, between
 connection attempts, while the session tables are created, in the tail or at
 the lock release is exit 130 at once; in the tail the running statement is
-cancelled and the earlier ones stay committed.
+cancelled and the earlier ones stay committed. In the Rust binary
+`--timeout` is the time box of every attempt of a whole-deployment retry and
+the waits between them (see "Whole-deployment retry"): a deadline inside an
+attempt after an earlier one failed says `time box of <d> used up after N
+attempts; last error: ...`, a wait is never started past the deadline, and a
+signal during a wait is exit 130 at once.
 
-Cases: `config/pgmi-yaml-timeout-too-long`, `exit-codes/16-timeout`, `errors/timeout-while-connecting`, `exit-codes/130-interrupted`, `exit-codes/130-sigterm`, `flags/timeout-forms`, `cancel/timeout-cancels`, `cancel/timeout-over-tls`, `cancel/sigint-twice`, `env/pgconnect-timeout`, `cancel/ctrl-c-json-exit-code`, `cancel/timeout-leaves-invalid-concurrent-index`, `cancel/stopped-record`, `bad-weather/frozen-server-timeout`, `bad-weather/signal-while-connecting`, `bad-weather/signal-during-connect-backoff`, `bad-weather/signal-during-session-setup`, `bad-weather/signal-in-tail`, `bad-weather/signal-at-lock-release`, `bad-weather/lock-wait-timeout`.
+Cases: `retry/deadline-during-an-attempt`, `retry/wait-cut-at-the-deadline`, `retry/signal-during-a-wait`, `config/pgmi-yaml-timeout-too-long`, `exit-codes/16-timeout`, `errors/timeout-while-connecting`, `exit-codes/130-interrupted`, `exit-codes/130-sigterm`, `flags/timeout-forms`, `cancel/timeout-cancels`, `cancel/timeout-over-tls`, `cancel/sigint-twice`, `env/pgconnect-timeout`, `cancel/ctrl-c-json-exit-code`, `cancel/timeout-leaves-invalid-concurrent-index`, `cancel/stopped-record`, `bad-weather/frozen-server-timeout`, `bad-weather/signal-while-connecting`, `bad-weather/signal-during-connect-backoff`, `bad-weather/signal-during-session-setup`, `bad-weather/signal-in-tail`, `bad-weather/signal-at-lock-release`, `bad-weather/lock-wait-timeout`.
 
 ### Checksums
 
@@ -1274,6 +1282,43 @@ reaches stderr, stdout or `--json`.
 
 Cases: `cloud/databricks-pat`, `cloud/databricks-refresh`, `cloud/databricks-m2m`, `cloud/databricks-cli`, `cloud/databricks-azure`, `cloud/databricks-errors`.
 
+### Whole-deployment retry (owner, 2026-11-12)
+
+New in the Rust binary (record 0025, PGMI-886); Go ends the run at the
+first failure. When an attempt fails for a transient reason, pgmi closes its
+session and runs the deploy again from the start on a new connection: a new
+session, the files loaded again, deploy.sql from its first line, exactly
+like a redeploy. Transient: SQLSTATE class 08 and a connection closed, reset
+or refused mid-run; 57P01, 57P02, 57P03; 53300; 40001, 40P01; 55P03; 25006
+only while the server reports `in_hot_standby = on` and the connection did
+not ask for a standby (`target_session_attrs` `read-only`, `standby`,
+`prefer-standby`); a cloud sign-in that still fails after its own retries
+(no answer, or a busy answer every time); the connect retry giving up on a
+transient failure. Never retried: any other SQL error, any failure inside a
+test (`phase` `test`), configuration errors (exit 10), a refused sign-in
+(28xxx, 401/403), a concurrent deploy (exit 15), anything after a signal or
+a cancel. `--overwrite` drops and recreates once, before the first attempt;
+its own failure is final, and a retry never drops again or asks again.
+
+`--timeout` is the wall-clock box for every attempt and every wait. The wait
+before attempt n+1 is `min(30 s, 1 s * 2^(n-1))` times a random factor in
+[0.8, 1.2]. A wait that would end after the deadline is not started: the run
+fails at once with the last attempt's error and exit code, the message
+`time box of <d> used up after N attempts; last error: ...`. A deadline in
+the middle of an attempt cancels it as before, exit 16 (11 while
+connecting), with that message when an earlier attempt failed. With
+`--timeout 0` the run stops after 5 attempts (`gave up after 5 attempts with
+no time box (--timeout 0); last error: ...`). Each retried attempt prints
+one stderr line, `pgmi: attempt N failed (<SQLSTATE> <reason>); retrying in
+<wait>, <left> left` (`<k> attempts left` with no box). `--json` and the
+`serve` deploy tool's `structuredContent` add `attempts` (each with
+`startedAt`, `durationMs`, and the `sqlstate` and `message` of a failed one)
+and `timeUsedMs`, present once an attempt started. SIGINT or SIGTERM during
+an attempt or a wait is exit 130 at once. `retry: false` in `pgmi.yaml`
+turns it off; there is no flag.
+
+Cases: `retry/connection-lost-mid-run`, `retry/server-shutdown-mid-run`, `retry/connect-gave-up`, `retry/concurrency-errors`, `retry/read-only-on-a-standby`, `retry/sign-in-unavailable`, `retry/deadline-during-an-attempt`, `retry/wait-cut-at-the-deadline`, `retry/signal-during-a-wait`, `retry/failing-test-not-retried`, `retry/retry-false`, `retry/no-time-box-five-attempts`. The table of transient failures, the backoff and the messages: the Rust unit tests of `deploy::retry`.
+
 ## Behaviour changes in 0.20
 
 ### Changed exit codes and newly refused input
@@ -1284,6 +1329,7 @@ release notes take their "Behaviour changes" section from this table.
 
 | Change | 0.14 (Go) | 0.20 (Rust) | Decided |
 |---|---|---|---|
+| Whole-deployment retry | the first failure ends the run | a transient failure (class 08, a lost connection, 57P01-57P03, 53300, 40001, 40P01, 55P03, 25006 on a hot standby, a sign-in or connect retry that gave up) runs the deploy again from the start inside `--timeout`, waiting 1 s doubling to 30 s; `retry: false` in `pgmi.yaml` turns it off; `--json` adds `attempts` and `timeUsedMs` | owner 2026-11-12 (record 0025) |
 | Google sign-in without Application Default Credentials | exit 1 | exit 11 | intended |
 | `deploy` on a terminal with no connection from flags, environment or `pgmi.yaml` | opens the connection wizard | never interactive: exit 10, listing the ways to set a connection; `pgmi init` and `pgmi config` keep their wizards | owner 2026-11-12 (PGMI-901) |
 | Connection reset with no error from the server, mid-deploy | exit 13 while deploy.sql runs, exit 1 during session setup | exit 11 (connection failed); `--json` still shows what committed | agent 2026-11-12 (PGMI-885), owner may revisit |

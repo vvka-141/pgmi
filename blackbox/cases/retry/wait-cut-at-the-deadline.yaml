@@ -1,0 +1,25 @@
+description: Rust only (contract "Whole-deployment retry"). A deploy that keeps failing with 40001 retries while the next wait still ends inside the time box, then stops at once rather than sleep past it, and fails with the last error's own exit code (13) and SQLSTATE, counting the attempts
+impl: rust
+proxy:
+  - {query: "INSERT INTO marker", do: {error: "40001", severity: ERROR}}
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS marker (n int);
+      INSERT INTO marker VALUES (1);
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}", --timeout, 2s, --json]
+    timeout: 15
+    expect:
+      exit: 13
+      stderr: ["^pgmi: attempt 1 failed \\(40001 serialization failure\\); retrying in", "^pgmi: error: time box of 2s used up after 2 attempts; last error: ERROR: .*\\(SQLSTATE 40001\\)"]
+      stderr_not: ["attempt 2 failed"]
+      stderr_within:
+        - {pattern: "^pgmi: error: time box", seconds: 1.9}
+      json: {exitCode: 13, sqlstate: "40001"}
+      stdout: ['"attempts": \[\s*\{[^}]*"sqlstate": "40001"[^}]*\},\s*\{[^}]*"sqlstate": "40001"[^}]*\}\s*\]']
+      sql:
+        - query: SELECT to_regclass('marker') IS NULL
+          rows: [[true]]

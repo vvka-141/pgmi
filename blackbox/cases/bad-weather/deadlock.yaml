@@ -1,4 +1,4 @@
-description: a deploy that deadlocks with another session and is chosen as the victim (it waits last, so its deadlock check finds the cycle) is exit 13 with SQLSTATE 40P01; its transaction is rolled back and the other session commits
+description: a deploy that deadlocks with another session and is chosen as the victim (it waits last, so its deadlock check finds the cycle) is exit 13 with SQLSTATE 40P01; its transaction is rolled back and the other session commits (Rust runs the deploy again (contract "Whole-deployment retry") after the other commits, exit 0)
 project:
   files:
     deploy.sql: |
@@ -27,5 +27,11 @@ steps:
       sql:
         - query: SELECT string_agg(who, ',') FROM done
           rows: [["other"]]
+      rust:
+        exit: 0
+        stderr: ["^pgmi: attempt 1 failed \\(40P01 deadlock detected\\); retrying in"]
+        sql:
+          - query: SELECT string_agg(who, ',' ORDER BY ctid) FROM done
+            rows: [["other,pgmi"]]
   - sql: BEGIN; LOCK TABLE a IN ACCESS EXCLUSIVE MODE; SELECT pg_sleep(3); LOCK TABLE b IN ACCESS EXCLUSIVE MODE; INSERT INTO done VALUES ('other'); COMMIT;
     delay: 1

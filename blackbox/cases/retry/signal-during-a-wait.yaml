@@ -1,0 +1,21 @@
+description: Rust only (contract "Whole-deployment retry"). SIGINT while pgmi waits before the next attempt (every attempt fails with 40P01) ends the run at once with exit 130, and no further attempt starts
+impl: rust
+proxy:
+  - {query: "INSERT INTO marker", do: {error: "40P01", severity: ERROR}}
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS marker (n int);
+      INSERT INTO marker VALUES (1);
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    signal: {name: SIGINT, after: 2.2}
+    timeout: 15
+    expect:
+      exit: 130
+      stderr: ["^pgmi: attempt 2 failed \\(40P01 deadlock detected\\); retrying in"]
+      stderr_not: ["attempt 3 failed"]
+      stderr_within:
+        - {pattern: "^pgmi: error: interrupted$", seconds: 2.7}

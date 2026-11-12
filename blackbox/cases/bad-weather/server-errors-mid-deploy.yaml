@@ -1,8 +1,8 @@
-description: a server that ends the session with FATAL 57P01 while the head runs, or with FATAL 08P01 in the tail, and one that answers the head with ERROR 25006 (read-only transaction) all fail the deploy with exit 13, the server's text and SQLSTATE, and only what was committed kept
+description: a server that ends the session with FATAL 57P01 while the head runs, or with FATAL 08P01 in the tail, and one that answers the head with ERROR 25006 (read-only transaction) all fail the deploy with exit 13, the server's text and SQLSTATE, and only what was committed kept (Rust runs the deploy again (contract "Whole-deployment retry") after 57P01 and 08P01 and succeeds; 25006 from a primary stays final)
 proxy:
-  - {query: head_sleep, do: {error: "57P01"}, after: 0.5, step: 1}
+  - {query: head_sleep, do: {error: "57P01"}, after: 0.5, times: 1, step: 1}
   - {query: head_sleep, do: {error: "25006", severity: ERROR}, step: 2}
-  - {query: tail_sleep, do: {error: "08P01"}, after: 0.5, step: 3}
+  - {query: tail_sleep, do: {error: "08P01"}, after: 0.5, times: 1, step: 3}
 project:
   files:
     deploy.sql: |
@@ -25,6 +25,12 @@ steps:
       sql:
         - query: SELECT to_regclass('marker') IS NULL
           rows: [[true]]
+      rust:
+        exit: 0
+        stderr: ["^pgmi: attempt 1 failed \\(57P01 admin shutdown\\); retrying in"]
+        sql:
+          - query: SELECT string_agg(phase, ',' ORDER BY ctid) FROM marker
+            rows: [["head,tail-1,tail-2"]]
   - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
     delay: 1
     expect:
@@ -33,6 +39,11 @@ steps:
       sql:
         - query: SELECT to_regclass('marker') IS NULL
           rows: [[true]]
+      rust:
+        stderr_not: ["attempt 1 failed"]
+        sql:
+          - query: SELECT string_agg(phase, ',' ORDER BY ctid) FROM marker
+            rows: [["head,tail-1,tail-2"]]
   - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
     expect:
       exit: 13
@@ -40,3 +51,9 @@ steps:
       sql:
         - query: SELECT string_agg(phase, ',' ORDER BY ctid) FROM marker
           rows: [["head,tail-1"]]
+      rust:
+        exit: 0
+        stderr: ["^pgmi: attempt 1 failed \\(08P01 connection exception\\); retrying in"]
+        sql:
+          - query: SELECT string_agg(phase, ',' ORDER BY ctid) FROM marker
+            rows: [["head,tail-1,tail-2,head,tail-1,head,tail-1,tail-2"]]

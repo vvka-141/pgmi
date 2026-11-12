@@ -65,6 +65,6 @@ steps:
   - pgmi: [deploy, "{project}", -d, "{db}", -h, "{host}"]
     env: {DATABASE_URL: "{conn}"}
     expect: {exit: 10, stderr: ['^pgmi: error: cannot combine -h with DATABASE_URL, which names its own server and login; unset DATABASE_URL to connect with the flags, or put the values in the string$']}
-  - pgmi: [deploy, "{project}/plain", --connection, "postgresql://u@127.0.0.1:1/postgres", -d, "{db}"]
+  - pgmi: [deploy, "{project}/plain", --connection, "postgresql://u@127.0.0.1:1/postgres", -d, "{db}", --timeout, 2s]
     timeout: 30
     expect: {exit: 11, stderr: ['^Connection attempt 1 failed: connection refused to 127\.0\.0\.1:1$']}

@@ -1,4 +1,4 @@
-description: Rust only (new scope; contract "Databricks Lakebase sign-in"). What Lakebase sign-in refuses before connecting (exit 10) and how a refusing workspace maps to exit 11 - 401, 403, 404, a 503 retried three times, no credential source at all, and a credential the database refuses for the user, with the hint naming Databricks, the database role and --username; no token is ever printed
+description: Rust only (new scope; contract "Databricks Lakebase sign-in"). What Lakebase sign-in refuses before connecting (exit 10) and how a refusing workspace maps to exit 11 - 401, 403, 404, a 503 retried three times (then the whole deploy again until --timeout, contract "Whole-deployment retry"), no credential source at all, and a credential the database refuses for the user, with the hint naming Databricks, the database role and --username; no token is ever printed
 impl: rust
 servers: [tls, fakes]
 project:
@@ -35,7 +35,7 @@ steps:
     env: {DATABRICKS_HOST: "{fake_https}", DATABRICKS_TOKEN: "{databricks_pat}", SSL_CERT_FILE: "{ca}"}
     timeout: 60
     expect: {exit: 11, stderr: ["has no Lakebase endpoint projects/p/branches/b/endpoints/missing \\(404 Not Found\\)"]}
-  - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/branches/b/endpoints/{db}-503", --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname=postgres sslmode=require"]
+  - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/branches/b/endpoints/{db}-503", --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname=postgres sslmode=require", --timeout, 8s]
     env: {DATABRICKS_HOST: "{fake_https}", DATABRICKS_TOKEN: "{databricks_pat}-503", SSL_CERT_FILE: "{ca}"}
     timeout: 60
     expect:

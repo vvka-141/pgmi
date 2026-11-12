@@ -1,9 +1,9 @@
-description: a server that refuses the connection is exit 11
+description: a server that refuses the connection is exit 11 (--timeout 2s bounds Rust, which retries a refused connection until the time box, contract "Whole-deployment retry")
 project:
   files:
     deploy.sql: SELECT 1;
 steps:
-  - pgmi: [deploy, "{project}", --connection, "postgresql://postgres@127.0.0.1:1/postgres", -d, "{db}"]
+  - pgmi: [deploy, "{project}", --connection, "postgresql://postgres@127.0.0.1:1/postgres", -d, "{db}", --timeout, 2s]
     timeout: 60
     expect:
       exit: 11

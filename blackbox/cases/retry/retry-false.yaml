@@ -1,0 +1,25 @@
+description: Rust only (contract "Whole-deployment retry"). retry false in pgmi.yaml turns whole-deployment retry off; a connection reset mid-run then ends the deploy with exit 11 after one attempt, nothing committed
+impl: rust
+proxy:
+  - {query: head_sleep, do: reset, after: 0.5, times: 1}
+project:
+  files:
+    pgmi.yaml: "retry: false\n"
+    deploy.sql: |
+      SET client_connection_check_interval = '100ms';
+      BEGIN;
+      CREATE TABLE IF NOT EXISTS marker (n int);
+      SELECT pg_sleep(1) AS head_sleep;
+      COMMIT;
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}", --json]
+    timeout: 30
+    expect:
+      exit: 11
+      stderr_not: ["attempt 1 failed"]
+      stdout: ['"attempts": \[\s*\{[^}]*\}\s*\]']
+      sql:
+        - query: SELECT to_regclass('marker') IS NULL
+          rows: [[true]]

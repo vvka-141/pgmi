@@ -1,0 +1,26 @@
+description: Rust only (contract "Whole-deployment retry"). A first attempt lost to a reset is retried; the time box then runs out while the second attempt's long statement runs, which is cancelled on the server and rolled back, exit 16 with the time box, the attempts and the last error; the database is left unchanged
+impl: rust
+proxy:
+  - {query: head_sleep, do: reset, after: 1, times: 1}
+project:
+  files:
+    deploy.sql: |
+      SET client_connection_check_interval = '100ms';
+      BEGIN;
+      CREATE TABLE marker (n int);
+      SELECT pg_sleep(30) AS head_sleep;
+      COMMIT;
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}", --timeout, 4s]
+    timeout: 15
+    expect:
+      exit: 16
+      stderr: ["^pgmi: attempt 1 failed \\(connection lost\\); retrying in", "^pgmi: error: time box of 4s used up after 2 attempts; last error: execute deploy.sql"]
+      stderr_not: ["attempt 2 failed"]
+      sql:
+        - query: SELECT to_regclass('marker') IS NULL
+          rows: [[true]]
+        - query: SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND query LIKE '%pg_sleep(30)%' AND pid <> pg_backend_pid()
+          rows: [[0]]

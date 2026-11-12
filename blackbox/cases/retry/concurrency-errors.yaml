@@ -1,0 +1,38 @@
+description: Rust only (contract "Whole-deployment retry"). A statement answered with 40001 (serialization failure), 40P01 (deadlock detected) or 55P03 (lock not available) fails that attempt; the deploy runs again from the start and commits once
+impl: rust
+proxy:
+  - {query: "INSERT INTO marker", do: {error: "40001", severity: ERROR}, times: 1, step: 1}
+  - {query: "INSERT INTO marker", do: {error: "40P01", severity: ERROR}, times: 1, step: 2}
+  - {query: "INSERT INTO marker", do: {error: "55P03", severity: ERROR}, times: 1, step: 3}
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS marker (n int);
+      INSERT INTO marker VALUES (1);
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    timeout: 30
+    expect:
+      exit: 0
+      stderr: ["^pgmi: attempt 1 failed \\(40001 serialization failure\\); retrying in"]
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[1]]
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    timeout: 30
+    expect:
+      exit: 0
+      stderr: ["^pgmi: attempt 1 failed \\(40P01 deadlock detected\\); retrying in"]
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[2]]
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    timeout: 30
+    expect:
+      exit: 0
+      stderr: ["^pgmi: attempt 1 failed \\(55P03 lock not available\\); retrying in"]
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[3]]

@@ -8,7 +8,7 @@ steps:
       exit: 10
       stderr_not: ["{password}@"]
       rust: {exit: 0}
-  - pgmi: [deploy, "{project}", --connection, "Postgres://u:SeCrEt99x@{host}:1/postgres?sslmode=disable", -d, "{db}"]
+  - pgmi: [deploy, "{project}", --connection, "Postgres://u:SeCrEt99x@{host}:1/postgres?sslmode=disable", -d, "{db}", --timeout, 2s]
     expect:
       exit: 10
       stderr_not: [SeCrEt99x]

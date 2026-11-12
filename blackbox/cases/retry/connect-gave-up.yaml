@@ -1,0 +1,38 @@
+description: Rust only (contract "Whole-deployment retry"). When the connect retry gives up on a transient failure (four startups refused with 53300 too many connections, or with 08P01), the whole deploy runs again after its own wait and succeeds; class 08 mid-run (FATAL 08P01 in the tail) is retried too
+impl: rust
+proxy:
+  - {at: startup, do: {error: "53300"}, times: 4, step: 1}
+  - {at: startup, do: {error: "08P01"}, times: 4, step: 2}
+  - {query: tail_sleep, do: {error: "08P01"}, after: 0.5, times: 1, step: 3}
+project:
+  files:
+    deploy.sql: |
+      SET client_connection_check_interval = '100ms';
+      CREATE TABLE IF NOT EXISTS marker (n int);
+      INSERT INTO marker VALUES (1);
+      COMMIT;
+      SELECT pg_sleep(1) AS tail_sleep;
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    timeout: 30
+    expect:
+      exit: 0
+      stderr: ["Connection attempt 3 failed: .*too many", "^pgmi: attempt 1 failed \\(could not connect\\); retrying in"]
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[1]]
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    timeout: 30
+    expect:
+      exit: 0
+      stderr: ["Connection attempt 3 failed: .*invalid frontend message type", "^pgmi: attempt 1 failed \\(could not connect\\); retrying in"]
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    timeout: 30
+    expect:
+      exit: 0
+      stderr: ["^pgmi: attempt 1 failed \\(08P01 connection exception\\); retrying in"]
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[4]]

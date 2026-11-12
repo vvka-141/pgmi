@@ -1,9 +1,9 @@
-description: with two hosts, a down first host is skipped; with both down, the error names both
+description: with two hosts, a down first host is skipped; with both down, the error names both (--timeout 2s bounds Rust, which retries a refused connection until the time box, contract "Whole-deployment retry")
 project:
   files:
     deploy.sql: SELECT 1;
 steps:
   - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:1,{host}:{port}/postgres", -d, "{db}"]
     expect: {exit: 0}
-  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:1,127.0.0.1:2/postgres", -d, "{db}"]
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:1,127.0.0.1:2/postgres", -d, "{db}", --timeout, 2s]
     expect: {exit: 11, stderr: ["127\\.0\\.0\\.1:1", "127\\.0\\.0\\.1:2"]}

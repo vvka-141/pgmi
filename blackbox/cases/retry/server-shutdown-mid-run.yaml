@@ -1,0 +1,44 @@
+description: Rust only (contract "Whole-deployment retry"). A server that ends the session with FATAL 57P01 (admin shutdown), 57P02 (crash shutdown) or 57P03 (cannot connect now) while the head runs is a transient failure; the deploy runs again from the start and succeeds, the head committed once
+impl: rust
+proxy:
+  - {query: head_sleep, do: {error: "57P01"}, after: 0.5, times: 1, step: 1}
+  - {query: head_sleep, do: {error: "57P02"}, after: 0.5, times: 1, step: 2}
+  - {query: head_sleep, do: {error: "57P03"}, after: 0.5, times: 1, step: 3}
+project:
+  files:
+    deploy.sql: |
+      SET client_connection_check_interval = '100ms';
+      BEGIN;
+      CREATE TABLE IF NOT EXISTS marker (phase text);
+      INSERT INTO marker VALUES ('head');
+      SELECT pg_sleep(1) AS head_sleep;
+      COMMIT;
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    timeout: 30
+    expect:
+      exit: 0
+      stderr: ["^pgmi: attempt 1 failed \\(57P01 admin shutdown\\); retrying in"]
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[1]]
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    delay: 1
+    timeout: 30
+    expect:
+      exit: 0
+      stderr: ["^pgmi: attempt 1 failed \\(57P02 crash shutdown\\); retrying in"]
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[2]]
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    delay: 1
+    timeout: 30
+    expect:
+      exit: 0
+      stderr: ["^pgmi: attempt 1 failed \\(57P03 cannot connect now\\); retrying in"]
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[3]]

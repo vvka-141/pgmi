@@ -1,4 +1,4 @@
-description: a repeatable-read deploy that updates a row another session changed after its snapshot is exit 13 with SQLSTATE 40001 (pgmi never retries it; deploy.sql decides), and only the other session's change is kept
+description: a repeatable-read deploy that updates a row another session changed after its snapshot is exit 13 with SQLSTATE 40001 (Go never retries it), and only the other session's change is kept (Rust runs the deploy again (contract "Whole-deployment retry") on a fresh snapshot, exit 0, both changes kept)
 project:
   files:
     deploy.sql: |
@@ -21,5 +21,11 @@ steps:
       sql:
         - query: SELECT n FROM counter
           rows: [[11]]
+      rust:
+        exit: 0
+        stderr: ["^pgmi: attempt 1 failed \\(40001 serialization failure\\); retrying in"]
+        sql:
+          - query: SELECT n FROM counter
+            rows: [[12]]
   - sql: UPDATE counter SET n = n + 10
     delay: 1.5

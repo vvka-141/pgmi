@@ -1,0 +1,20 @@
+description: Rust only (contract "Whole-deployment retry"). A test that fails inside pgmi_test() is never retried, even with a SQLSTATE that would be outside a test (40001); exit 13 names the test, one attempt in --json
+impl: rust
+project:
+  files:
+    deploy.sql: |
+      BEGIN;
+      CREATE TABLE IF NOT EXISTS marker (n int);
+      CALL pgmi_test();
+      COMMIT;
+    __test__/test_flaky.sql: |
+      DO $$ BEGIN RAISE EXCEPTION 'flaky' USING ERRCODE = 'serialization_failure'; END $$;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --json]
+    timeout: 30
+    expect:
+      exit: 13
+      json: {sqlstate: "40001", phase: test}
+      stdout: ['"attempts": \[\s*\{[^}]*"sqlstate": "40001"[^}]*\}\s*\]']
+      stderr: ["flaky"]
+      stderr_not: ["attempt 1 failed"]

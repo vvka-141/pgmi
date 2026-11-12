@@ -1,9 +1,9 @@
-description: a server that accepts but never answers holds the connection until PGCONNECT_TIMEOUT, or until --timeout, which while connecting is exit 11
+description: a server that accepts but never answers holds the connection until PGCONNECT_TIMEOUT, or until --timeout, which while connecting is exit 11 (Rust retries the timed-out connection until the 12s time box, contract "Whole-deployment retry")
 project:
   files:
     deploy.sql: SELECT 1;
 steps:
-  - pgmi: [deploy, "{project}", --connection, "postgresql://nobody@{silent}/postgres", -d, "{db}", --timeout, 60s]
+  - pgmi: [deploy, "{project}", --connection, "postgresql://nobody@{silent}/postgres", -d, "{db}", --timeout, 12s]
     env: {PGCONNECT_TIMEOUT: "2"}
     timeout: 30
     expect:

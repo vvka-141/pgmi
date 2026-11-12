@@ -318,12 +318,34 @@ expectation; `rust/blackbox-passing.txt` lists the ones Rust matches.
 | A06 | SIGINT between connection attempts is exit 130 at once | ✓ `bad-weather/signal-during-connect-backoff` |
 | A15 | a setup failure after the deploy lock releases it on the server, even when the close arrives late | ✓ `bad-weather/setup-failure-slow-close` |
 | A17 | a frozen server (session and cancel) still ends the run within 2.5 s of `--timeout` | ✓ `bad-weather/frozen-server-timeout` |
-| A21 | a session lost mid-deploy (reset or FATAL) is exit 13 with the server's text and severity; only what was committed stays | ✓ `bad-weather/reset-in-transaction`, `bad-weather/reset-in-tail`, `bad-weather/server-errors-mid-deploy`; lost during setup (exit 1) ✓ `bad-weather/reset-in-session-setup`; at the lock release ✓ `bad-weather/reset-at-lock-release` |
+| A21 | a session lost mid-deploy (reset or FATAL) is exit 13 with the server's text and severity; only what was committed stays (Rust: retried) | ✓ `bad-weather/reset-in-transaction`, `bad-weather/reset-in-tail`, `bad-weather/server-errors-mid-deploy`; lost during setup (exit 1) ✓ `bad-weather/reset-in-session-setup`; at the lock release ✓ `bad-weather/reset-at-lock-release` |
 | A24 | `--overwrite` then an immediate `--overwrite` through a slow close: both succeed | ✓ `bad-weather/overwrite-slow-close` |
 | A26 | a signal between DROP and CREATE: the database is recreated, exit 130 | ✓ `bad-weather/overwrite-signal-between-drop-and-create` |
 | A28 | `--overwrite` with a role limited to 2 connections | ✓ `flags/overwrite-connection-limit` |
-| A32 | lock waits, `lock_timeout` (55P03), deadlock (40P01), serialization failure (40001): waited for or exit 13, never retried | ✓ `bad-weather/lock-wait`, `bad-weather/lock-timeout`, `bad-weather/deadlock`, `bad-weather/serialization-failure`; `--timeout` during a lock wait ✓ `bad-weather/lock-wait-timeout` |
+| A32 | lock waits, `lock_timeout` (55P03), deadlock (40P01), serialization failure (40001): waited for or exit 13, never retried by Go (Rust: retried, see "Whole-deployment retry" below) | ✓ `bad-weather/lock-wait`, `bad-weather/lock-timeout`, `bad-weather/deadlock`, `bad-weather/serialization-failure`; `--timeout` during a lock wait ✓ `bad-weather/lock-wait-timeout` |
 | — | SIGTERM or SIGINT while connecting, during session setup, in the tail, at the lock release | ✓ `bad-weather/signal-while-connecting`, `bad-weather/signal-during-session-setup`, `bad-weather/signal-in-tail`, `bad-weather/signal-at-lock-release` |
 | B06 | a sign-in endpoint that fails briefly: AWS container credentials on 5xx | ✓ `bad-weather/aws-credential-endpoints-retried`; a transport error (reset) before any HTTP answer ✗ the fakes answer HTTP only |
 | B07 | Azure managed identity (App Service, Cloud Shell, Service Fabric) on 5xx and 429 is asked again; a dead endpoint is given up after 4 attempts | ✓ `bad-weather/azure-managed-identity-retries`, `bad-weather/azure-managed-identity-gives-up`, `cloud/azure-msi-retry` |
 | B08 | Cloud SQL Admin API on 5xx | ✗ Go's connector takes no Admin API endpoint, so a fake cannot reach it; Rust unit test `the_admin_api_is_asked_again_after_a_server_error` |
+
+
+## Whole-deployment retry (PGMI-886)
+
+Rust only (`impl: rust`, record 0025): one row per transient failure of the
+table, then the time box. Go ends the run at the first failure; the
+bad-weather cases above give Rust's retry under `expect.rust`.
+
+| Behaviour | Coverage |
+|---|---|
+| class 08, a connection reset mid-run (head and tail): run again from the start, one stderr line, `--json` `attempts` and `timeUsedMs` | ✓ `retry/connection-lost-mid-run`, `retry/connect-gave-up` |
+| 57P01, 57P02, 57P03 mid-run | ✓ `retry/server-shutdown-mid-run` |
+| 53300, and the connect retry giving up on a transient failure | ✓ `retry/connect-gave-up` |
+| 40001, 40P01, 55P03 | ✓ `retry/concurrency-errors`; with real sessions ✓ `bad-weather/deadlock`, `bad-weather/serialization-failure`, `bad-weather/lock-timeout` |
+| 25006 only on a hot standby not asked for; final from a primary | ✓ `retry/read-only-on-a-standby` |
+| a sign-in endpoint still busy after its own retries; a refused sign-in is final | ✓ `retry/sign-in-unavailable`; Azure, Google: Rust unit tests of `deploy::retry` |
+| the deadline inside an attempt: cancelled, rolled back, exit 16 counting the attempts | ✓ `retry/deadline-during-an-attempt` |
+| a wait that would pass the deadline is not started; the last error's exit code | ✓ `retry/wait-cut-at-the-deadline` |
+| SIGINT during a wait: exit 130 at once | ✓ `retry/signal-during-a-wait` |
+| a failing test is never retried | ✓ `retry/failing-test-not-retried` |
+| `retry: false` in `pgmi.yaml` | ✓ `retry/retry-false` |
+| `--timeout 0`: 5 attempts | ✓ `retry/no-time-box-five-attempts` |

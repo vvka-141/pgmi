@@ -1,0 +1,31 @@
+description: Rust only (contract "Whole-deployment retry"). 25006 (read-only transaction) from a server that reports in_hot_standby = on, reached with the default target_session_attrs, is retried until the time box would end inside the next wait, then is exit 13 counting the attempts; asked for a standby (read-only) it is final at once, and so is 25006 from a primary (the proxy answers it)
+impl: rust
+servers: [replica]
+proxy:
+  - {query: "INSERT INTO marker", do: {error: "25006", severity: ERROR}, step: 3}
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS marker (n int);
+      INSERT INTO marker VALUES (1);
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{primary_port}/postgres", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{standby_port}/postgres", -d, "{db}", --timeout, 3s]
+    delay: 2
+    timeout: 30
+    expect:
+      exit: 13
+      stderr: ["^pgmi: attempt 1 failed \\(25006 read-only transaction on a hot standby\\); retrying in", "time box of 3s used up after [23] attempts; last error: .*read-only"]
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{standby_port}/postgres?target_session_attrs=read-only", -d, "{db}", --timeout, 30s]
+    timeout: 30
+    expect:
+      exit: 13
+      stderr: ["read-only"]
+      stderr_not: ["attempt 1 failed"]
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    timeout: 30
+    expect:
+      exit: 13
+      stderr: ["\\(SQLSTATE 25006\\)"]
+      stderr_not: ["attempt 1 failed"]

@@ -1,0 +1,23 @@
+description: Rust only (contract "Whole-deployment retry"). A sign-in endpoint that still answers 503 after its own three tries (Databricks Lakebase) fails that attempt as transient; the deploy signs in again on the next attempt until the time box ends, exit 11 with the endpoint's answer; a refused sign-in (401) is final at once
+impl: rust
+servers: [tls, fakes]
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/branches/b/endpoints/{db}-503", --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname=postgres sslmode=require", --timeout, 8s]
+    env: {DATABRICKS_HOST: "{fake_https}", DATABRICKS_TOKEN: "{databricks_pat}-503", SSL_CERT_FILE: "{ca}"}
+    timeout: 30
+    expect:
+      exit: 11
+      stderr: ["^pgmi: attempt 1 failed \\(sign-in endpoint unavailable\\); retrying in", "time box of 8s used up after 2 attempts; last error: .*503 Service Unavailable"]
+      stderr_not: ["{databricks_pat}"]
+      files:
+        "{fake_https_log}": ['(endpoints/{db}-503"[\s\S]*){6}']
+  - pgmi: [deploy, "{project}", --databricks, --databricks-endpoint, "projects/p/branches/b/endpoints/e", --connection, "host=127.0.0.1 port={tls_port} user={lakebase_user} dbname=postgres sslmode=require"]
+    env: {DATABRICKS_HOST: "{fake_https}", DATABRICKS_TOKEN: unknown-pat-0815, SSL_CERT_FILE: "{ca}"}
+    timeout: 30
+    expect:
+      exit: 11
+      stderr: ["401 Unauthorized"]
+      stderr_not: ["attempt 1 failed", "unknown-pat-0815"]

@@ -117,7 +117,7 @@ def test_connection_strings(server, run, tally):
         return _variant(
             f"connection: {conn}",
             {"deploy.sql": "CREATE TABLE marker AS SELECT current_setting('application_name') AS app;\n"},
-            [{"pgmi": ["deploy", "{project}", "--connection", conn, "-d", "{db}"]}],
+            [{"pgmi": ["deploy", "{project}", "--connection", conn, "-d", "{db}", "--timeout", "5s"]}],
         )
 
     strategy = st.tuples(
@@ -155,10 +155,16 @@ END $$;
 
 def test_pgmi_yaml(server, run, tally):
     def build(doc):
+        unreachable = doc["connection"]["port"] == 1 and "timeout" not in doc
         return _variant(
             f"pgmi.yaml: {doc}",
             {"pgmi.yaml": yaml.safe_dump(doc), "deploy.sql": PARAMS_DEPLOY},
-            [{"pgmi": ["deploy", "{project}"], "env": {"PGPASSWORD": server.password}}],
+            [
+                {
+                    "pgmi": ["deploy", "{project}", *(["--timeout", "5s"] if unreachable else [])],
+                    "env": {"PGPASSWORD": server.password},
+                }
+            ],
         )
 
     connection = st.fixed_dictionaries(
