@@ -1,4 +1,4 @@
-description: a connection reset while the head transaction runs is exit 13 and commits nothing; the server drops the orphaned session (client_connection_check_interval), then the next deploy runs
+description: a connection reset while the head transaction runs is exit 13 and commits nothing; the server drops the orphaned session (client_connection_check_interval), then the next deploy runs (Rust exits 11, a lost connection; contract "Behaviour changes in 0.20")
 proxy:
   - {query: head_sleep, do: reset, after: 0.5, step: 1}
 project:
@@ -19,6 +19,7 @@ steps:
   - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
     expect:
       exit: 13
+      rust: {exit: 11}
       sql:
         - query: SELECT to_regclass('marker') IS NULL
           rows: [[true]]

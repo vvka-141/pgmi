@@ -1,4 +1,4 @@
-description: a connection reset while the session tables are created, after the deploy lock was taken, fails the deploy before deploy.sql runs (Go exits 1); the lock goes with the session, so the next deploy runs
+description: a connection reset while the session tables are created, after the deploy lock was taken, fails the deploy before deploy.sql runs (Go exits 1); the lock goes with the session, so the next deploy runs (Rust exits 11, a lost connection; contract "Behaviour changes in 0.20")
 proxy:
   - {query: "PGMI Session Schema", do: reset, step: 1}
 project:
@@ -19,6 +19,7 @@ steps:
   - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
     expect:
       exit: 1
+      rust: {exit: 11}
       sql:
         - query: SELECT to_regclass('marker') IS NULL
           rows: [[true]]

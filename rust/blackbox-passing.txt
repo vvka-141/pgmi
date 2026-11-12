@@ -276,3 +276,6 @@ bad-weather/signal-in-tail
 bad-weather/signal-while-connecting
 bad-weather/startup-refusals-final
 bad-weather/startup-refusals-retried
+bad-weather/reset-in-transaction
+bad-weather/reset-in-tail
+bad-weather/reset-in-session-setup

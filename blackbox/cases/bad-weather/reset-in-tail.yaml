@@ -1,4 +1,4 @@
-description: a connection reset in the autocommit tail is exit 13 and keeps what the head and the earlier tail statements committed; the next deploy runs once the server drops the orphaned session
+description: a connection reset in the autocommit tail is exit 13 and keeps what the head and the earlier tail statements committed; the next deploy runs once the server drops the orphaned session (Rust exits 11, a lost connection; contract "Behaviour changes in 0.20")
 proxy:
   - {query: tail_sleep, do: reset, after: 0.5, step: 1}
 project:
@@ -19,6 +19,7 @@ steps:
   - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
     expect:
       exit: 13
+      rust: {exit: 11}
       sql:
         - query: SELECT coalesce(string_agg(phase, ',' ORDER BY ctid), '') FROM marker
           rows: [["head,tail-1"]]
