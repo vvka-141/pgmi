@@ -10,7 +10,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-use super::{Ended, Outcome, Toolbox, serve};
+use super::{Ended, Outcome, Slot, Toolbox, serve};
 
 const MODERN_META: &str = r#""_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}"#;
 
@@ -71,6 +71,7 @@ impl Toolbox for Fakes {
         tool: Fake,
         arguments: Option<Box<RawValue>>,
         token: CancellationToken,
+        _slot: Slot,
     ) -> Outcome {
         self.calls.fetch_add(1, Ordering::SeqCst);
         match tool {
@@ -689,4 +690,73 @@ async fn the_end_of_input_ends_the_session_successfully() {
     .await;
     assert!(matches!(ended, Ended::EndOfInput), "{ended:?}");
     assert!(ended.into_result().is_ok());
+}
+
+fn pings(ids: std::ops::Range<u32>) -> String {
+    let mut lines = String::new();
+    for id in ids {
+        let _ = writeln!(
+            lines,
+            "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"ping\"}}"
+        );
+    }
+    lines
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_slow_steady_reader_gets_every_answer_after_the_input_ends() {
+    let (mut input, server_in) = tokio::io::duplex(64 * 1024);
+    let (server_out, output) = tokio::io::duplex(256);
+    let server = tokio::spawn(serve(
+        server_in,
+        server_out,
+        fakes().0,
+        CancellationToken::new(),
+    ));
+    input.write_all(pings(0..1000).as_bytes()).await.unwrap();
+    input.shutdown().await.unwrap();
+    let started = tokio::time::Instant::now();
+    let mut lines = BufReader::new(output).lines();
+    let mut ids = Vec::new();
+    while let Some(line) = lines.next_line().await.unwrap() {
+        let v: Value = serde_json::from_str(&line).unwrap();
+        ids.push(v["id"].as_u64().unwrap());
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(started.elapsed() > Duration::from_secs(5));
+    assert_eq!(ids, (0..1000).collect::<Vec<u64>>());
+    let ended = server.await.unwrap();
+    assert!(matches!(ended, Ended::EndOfInput), "{ended:?}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_client_that_never_reads_ends_two_seconds_after_its_input() {
+    let (mut input, server_in) = tokio::io::duplex(256 * 1024);
+    let (server_out, _unread) = tokio::io::duplex(64);
+    let server = tokio::spawn(serve(
+        server_in,
+        server_out,
+        fakes().0,
+        CancellationToken::new(),
+    ));
+    let mut burst = pings(0..1000);
+    for id in 1000..1030 {
+        let _ = writeln!(
+            burst,
+            r#"{{"jsonrpc":"2.0","id":{id},"method":"tools/call","params":{{"name":"echo"}}}}"#
+        );
+    }
+    input.write_all(burst.as_bytes()).await.unwrap();
+    input.shutdown().await.unwrap();
+    let started = tokio::time::Instant::now();
+    let ended = timeout(Duration::from_secs(60), server)
+        .await
+        .expect("serve waited for a client that never reads")
+        .unwrap();
+    assert!(matches!(ended, Ended::SlowReader), "{ended:?}");
+    let waited = started.elapsed();
+    assert!(
+        waited >= Duration::from_secs(2) && waited < Duration::from_secs(3),
+        "{waited:?}"
+    );
 }

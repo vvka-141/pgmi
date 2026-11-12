@@ -12,14 +12,15 @@ use serde_json::value::RawValue;
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::runtime::Runtime;
-use tokio::sync::mpsc::{Sender, channel};
+use tokio::sync::Semaphore;
+use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::VERSION;
 use crate::env::Env;
 use crate::error::Error;
-pub(crate) use tools::{Outcome, Toolbox};
+pub(crate) use tools::{Outcome, Slot, Toolbox};
 use wire::{Decoded, Field, INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, Request};
 
 const STATELESS: &str = "2026-07-28";
@@ -99,117 +100,167 @@ enum Delivery {
 struct Server<T> {
     out: Sender<String>,
     calls: Mutex<HashMap<CallId, CancellationToken>>,
+    slots: Arc<Semaphore>,
     root: CancellationToken,
     tools: Arc<T>,
+}
+
+/// The end of the client's input, as the writer sees it: until then it
+/// waits on the client as long as the client takes; after it, every write
+/// must make progress within `DRAIN`.
+#[derive(Clone, Default)]
+struct InputEnd(CancellationToken);
+
+impl InputEnd {
+    fn reached(&self) {
+        self.0.cancel();
+    }
+
+    /// Runs one write step; `None` once input has ended and the step made
+    /// no progress for `DRAIN`.
+    async fn progress<F: Future>(&self, step: F) -> Option<F::Output> {
+        tokio::pin!(step);
+        tokio::select! {
+            biased;
+            done = &mut step => return Some(done),
+            () = self.0.cancelled() => {}
+        }
+        tokio::time::timeout(DRAIN, step).await.ok()
+    }
 }
 
 /// Serves MCP over newline-delimited JSON-RPC until `input` ends, `stop` is
 /// cancelled or writing to `output` fails. Ending cancels every tool call in
 /// flight; a cancelled call is never answered. While 1024 answers wait, the
-/// reader waits for the client to take one, for at most `DRAIN`; a client that
-/// takes none by then ends the session. Returns once every call has ended and
-/// the answers are written, giving a client that stops reading `DRAIN` to take
-/// them, with the reason the session ended.
+/// reader waits for the client to take one, for at most `DRAIN`. Once input
+/// has ended, the session ends when a write makes no progress for `DRAIN`.
+/// Returns once every call has ended and the answers are written, with the
+/// reason the session ended.
 pub(crate) async fn serve<T: Toolbox>(
-    mut input: impl AsyncRead + Unpin,
-    mut output: impl AsyncWrite + Unpin,
+    input: impl AsyncRead + Unpin,
+    output: impl AsyncWrite + Unpin,
     tools: Arc<T>,
     stop: CancellationToken,
 ) -> Ended {
     let session = stop.child_token();
-    let finished = CancellationToken::new();
-    let (tx, mut rx) = channel::<String>(QUEUED_ANSWERS);
-    let server = Arc::new(Server {
-        out: tx,
-        calls: Mutex::new(HashMap::new()),
-        root: session.clone(),
-        tools,
-    });
-    let read = {
-        let finished = finished.clone();
-        async move {
-            let mut tasks = JoinSet::new();
-            let mut lines = wire::Lines::default();
-            let mut buf = vec![0u8; 64 * 1024];
-            let end = 'read: loop {
-                let n = tokio::select! {
-                    biased;
-                    () = server.root.cancelled() => break ReadEnd::Cancelled,
-                    n = input.read(&mut buf) => match n {
-                        Ok(n) => n,
-                        Err(e) => break ReadEnd::Failed(e),
-                    },
-                };
-                if n == 0 {
-                    if let Some(line) = lines.finish()
-                        && let Err(end) = server.deliver(server.handle(&line, &mut tasks)).await
-                    {
-                        break end;
-                    }
-                    break ReadEnd::Eof;
-                }
-                while tasks.try_join_next().is_some() {}
-                let read = lines.feed(&buf[..n]);
-                for _ in 0..lines.take_oversized() {
-                    let refusal = wire::error(
-                        None,
-                        INVALID_REQUEST,
-                        &format!(
-                            "invalid request: a message may hold at most {} MiB",
-                            wire::MAX_LINE >> 20
-                        ),
-                    );
-                    if let Err(end) = server.deliver(Some(refusal)).await {
-                        break 'read end;
-                    }
-                }
-                for line in read {
-                    if let Err(end) = server.deliver(server.handle(&line, &mut tasks)).await {
-                        break 'read end;
-                    }
-                }
-            };
-            if matches!(end, ReadEnd::Overflow) {
-                server.root.cancel();
-            }
-            while tasks.join_next().await.is_some() {}
-            drop(server);
-            finished.cancel();
-            end
-        }
+    let input_end = InputEnd::default();
+    let (tx, rx) = channel::<String>(QUEUED_ANSWERS);
+    let reader = Reader {
+        server: Arc::new(Server {
+            out: tx,
+            calls: Mutex::new(HashMap::new()),
+            slots: Arc::new(Semaphore::new(MAX_CALLS)),
+            root: session.clone(),
+            tools,
+        }),
+        tasks: JoinSet::new(),
+        lines: wire::Lines::default(),
     };
-    let write = async move {
-        let deliver = async {
-            while let Some(mut line) = rx.recv().await {
-                line.push('\n');
-                if let Err(e) = output.write_all(line.as_bytes()).await {
-                    return Delivery::Failed(e);
-                }
-                if let Err(e) = output.flush().await {
-                    return Delivery::Failed(e);
-                }
-            }
-            Delivery::Delivered
-        };
-        tokio::pin!(deliver);
-        let delivery = tokio::select! {
-            d = &mut deliver => d,
-            () = finished.cancelled() => tokio::time::timeout(DRAIN, &mut deliver)
-                .await
-                .unwrap_or(Delivery::TimedOut),
-        };
+    let write = async {
+        let delivery = writer(rx, output, &input_end).await;
         if !matches!(delivery, Delivery::Delivered) {
             session.cancel();
         }
         delivery
     };
-    match tokio::join!(read, write) {
+    match tokio::join!(reader.run(input, &input_end), write) {
         (_, Delivery::Failed(e)) => Ended::WriteFailed(e),
         (ReadEnd::Overflow, _) | (_, Delivery::TimedOut) => Ended::SlowReader,
         (ReadEnd::Failed(e), _) => Ended::ReadFailed(e),
         (ReadEnd::Cancelled, _) => Ended::Stopped,
         (ReadEnd::Eof, Delivery::Delivered) => Ended::EndOfInput,
     }
+}
+
+/// Reads requests, answers what needs no tool and starts a task per call.
+struct Reader<T> {
+    server: Arc<Server<T>>,
+    tasks: JoinSet<()>,
+    lines: wire::Lines,
+}
+
+impl<T: Toolbox> Reader<T> {
+    /// Reads until input ends or the session is cancelled, marks the input
+    /// end, then waits for every call. Dropping the server afterwards closes
+    /// the answer queue, which ends the writer.
+    async fn run(mut self, mut input: impl AsyncRead + Unpin, input_end: &InputEnd) -> ReadEnd {
+        let end = match self.read(&mut input).await {
+            Ok(()) => ReadEnd::Eof,
+            Err(end) => end,
+        };
+        input_end.reached();
+        if matches!(end, ReadEnd::Overflow) {
+            self.server.root.cancel();
+        }
+        while self.tasks.join_next().await.is_some() {}
+        end
+    }
+
+    async fn read(&mut self, input: &mut (impl AsyncRead + Unpin)) -> Result<(), ReadEnd> {
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            let n = tokio::select! {
+                biased;
+                () = self.server.root.cancelled() => return Err(ReadEnd::Cancelled),
+                n = input.read(&mut buf) => n.map_err(ReadEnd::Failed)?,
+            };
+            if n == 0 {
+                if let Some(line) = self.lines.finish() {
+                    self.answer(&line).await?;
+                }
+                return Ok(());
+            }
+            while self.tasks.try_join_next().is_some() {}
+            let read = self.lines.feed(buf.get(..n).unwrap_or_default());
+            for _ in 0..self.lines.take_oversized() {
+                let refusal = wire::error(
+                    None,
+                    INVALID_REQUEST,
+                    &format!(
+                        "invalid request: a message may hold at most {} MiB",
+                        wire::MAX_LINE >> 20
+                    ),
+                );
+                self.server.deliver(Some(refusal)).await?;
+            }
+            for line in read {
+                self.answer(&line).await?;
+            }
+        }
+    }
+
+    async fn answer(&mut self, line: &[u8]) -> Result<(), ReadEnd> {
+        let answer = self.server.handle(line, &mut self.tasks);
+        self.server.deliver(answer).await
+    }
+}
+
+/// Writes each answer as one flushed line until the queue closes. Fails
+/// with the write error, or times out once input has ended and a write
+/// made no progress for `DRAIN`.
+async fn writer(
+    mut answers: Receiver<String>,
+    mut output: impl AsyncWrite + Unpin,
+    input_end: &InputEnd,
+) -> Delivery {
+    while let Some(mut line) = answers.recv().await {
+        line.push('\n');
+        let mut rest = line.as_bytes();
+        while !rest.is_empty() {
+            match input_end.progress(output.write(rest)).await {
+                None => return Delivery::TimedOut,
+                Some(Ok(0)) => return Delivery::Failed(std::io::ErrorKind::WriteZero.into()),
+                Some(Ok(n)) => rest = rest.get(n..).unwrap_or_default(),
+                Some(Err(e)) => return Delivery::Failed(e),
+            }
+        }
+        match input_end.progress(output.flush()).await {
+            None => return Delivery::TimedOut,
+            Some(Err(e)) => return Delivery::Failed(e),
+            Some(Ok(())) => {}
+        }
+    }
+    Delivery::Delivered
 }
 
 async fn stop_signal() {
@@ -427,24 +478,24 @@ impl<T: Toolbox> Server<T> {
                 &format!("request id {id} is already in flight"),
             ));
         }
-        if tasks.len() >= MAX_CALLS {
+        let Ok(slot) = self.slots.clone().try_acquire_owned() else {
             return Some(wire::error(
                 Some(&id),
                 BUSY,
                 &format!("{MAX_CALLS} tool calls are already running; wait for one to finish"),
             ));
-        }
+        };
         calls.insert(key.clone(), token.clone());
         drop(calls);
         let server = self.clone();
         tasks.spawn(async move {
             let tools = server.tools.clone();
             let task_token = token.clone();
-            let outcome =
-                match crate::error::catching_async(tools.call(tool, arguments, task_token)).await {
-                    Ok(o) => o,
-                    Err(p) => Outcome::panicked(&p),
-                };
+            let work = tools.call(tool, arguments, task_token, Slot { _held: slot });
+            let outcome = match crate::error::catching_async(work).await {
+                Ok(o) => o,
+                Err(p) => Outcome::panicked(&p),
+            };
             if let Ok(mut calls) = server.calls.lock() {
                 calls.remove(&key);
             }
@@ -556,6 +607,7 @@ mod tests {
         let server = Arc::new(Server {
             out: tx,
             calls: Mutex::new(HashMap::new()),
+            slots: Arc::new(Semaphore::new(MAX_CALLS)),
             root: CancellationToken::new(),
             tools: Arc::new(tools::Tools {
                 env: Env::default(),

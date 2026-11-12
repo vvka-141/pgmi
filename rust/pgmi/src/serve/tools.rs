@@ -27,12 +27,21 @@ pub(crate) trait Toolbox: Send + Sync + 'static {
     fn tool(&self, name: &str) -> Option<Self::Tool>;
 
     /// Runs one call on its own task; a panic becomes the call's answer.
+    /// `slot` must be held until the call's work has ended, also when the
+    /// call stops waiting for it.
     fn call(
         &self,
         tool: Self::Tool,
         arguments: Option<Box<RawValue>>,
         token: CancellationToken,
+        slot: Slot,
     ) -> impl std::future::Future<Output = Outcome> + Send;
+}
+
+/// One of the server's `MAX_CALLS` places for running work; dropping it
+/// frees the place.
+pub(crate) struct Slot {
+    pub(super) _held: tokio::sync::OwnedSemaphorePermit,
 }
 
 /// pgmi's own tools.
@@ -57,8 +66,9 @@ impl Toolbox for Tools {
         tool: Tool,
         arguments: Option<Box<RawValue>>,
         token: CancellationToken,
+        slot: Slot,
     ) -> impl std::future::Future<Output = Outcome> + Send {
-        tool.call(arguments, self.env.clone(), self.verbose, token)
+        tool.call(arguments, self.env.clone(), self.verbose, token, slot)
     }
 }
 
@@ -114,9 +124,11 @@ impl Tool {
         env: Env,
         verbose: bool,
         token: CancellationToken,
+        slot: Slot,
     ) -> Outcome {
         let blocking = match self {
             Tool::Deploy => {
+                let _slot = slot;
                 return match deploy_context(arguments.as_deref(), &env, verbose) {
                     Ok(ctx) => run_deploy(ctx, token).await,
                     Err(e) => Outcome::failed(&e),
@@ -124,29 +136,51 @@ impl Tool {
             }
             Tool::Blocking(b) => b,
         };
-        on_blocking_thread(token, move || blocking.answer(arguments.as_deref(), &env)).await
+        let work = on_blocking_thread(slot, move || blocking.answer(arguments.as_deref(), &env));
+        if blocking.writes() {
+            return work.await;
+        }
+        until_cancelled(&token, work).await
     }
 }
 
-/// Runs `work` on the blocking pool; a cancelled call stops waiting for it,
-/// so a stalled filesystem never holds up the end of a session.
-async fn on_blocking_thread(
-    token: CancellationToken,
-    work: impl FnOnce() -> Outcome + Send + 'static,
+/// Waits for `work` unless the call is cancelled first.
+async fn until_cancelled(
+    token: &CancellationToken,
+    work: impl std::future::Future<Output = Outcome>,
 ) -> Outcome {
-    let work = tokio::task::spawn_blocking(move || crate::error::catching(work));
     tokio::select! {
         biased;
         () = token.cancelled() => Outcome::failed(&Error::new(Kind::Interrupted, "the tool call was cancelled")),
-        done = work => match done {
-            Ok(Ok(o)) => o,
-            Ok(Err(p)) => Outcome::panicked(&p),
-            Err(_) => Outcome::failed(&Error::internal("the tool call was aborted")),
-        },
+        done = work => done,
+    }
+}
+
+/// Runs `work` on the blocking pool, holding `slot` until it returns, also
+/// when the caller stops waiting for it.
+async fn on_blocking_thread(
+    slot: Slot,
+    work: impl FnOnce() -> Outcome + Send + 'static,
+) -> Outcome {
+    let work = tokio::task::spawn_blocking(move || {
+        let _slot = slot;
+        crate::error::catching(work)
+    });
+    match work.await {
+        Ok(Ok(o)) => o,
+        Ok(Err(p)) => Outcome::panicked(&p),
+        Err(_) => Outcome::failed(&Error::internal("the tool call was aborted")),
     }
 }
 
 impl Blocking {
+    /// A tool that writes files finishes even when its call is cancelled,
+    /// so a session never ends on a half-written project. The others are
+    /// left to run out on their own.
+    fn writes(self) -> bool {
+        matches!(self, Blocking::Init)
+    }
+
     fn answer(self, arguments: Option<&RawValue>, env: &Env) -> Outcome {
         match self {
             Blocking::Init => match init(arguments) {
@@ -538,14 +572,29 @@ async fn run_deploy(ctx: Context, token: CancellationToken) -> Outcome {
 mod tests {
     use super::*;
 
+    fn slots(n: usize) -> (std::sync::Arc<tokio::sync::Semaphore>, Slot) {
+        let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(n));
+        let slot = Slot {
+            _held: slots.clone().try_acquire_owned().unwrap(),
+        };
+        (slots, slot)
+    }
+
     #[tokio::test]
-    async fn a_cancelled_blocking_call_does_not_wait_for_its_thread() {
+    async fn a_cancelled_blocking_call_stops_waiting_but_keeps_its_slot() {
         let token = CancellationToken::new();
+        let (slots, slot) = slots(1);
         let (release, stalled) = std::sync::mpsc::channel::<()>();
-        let call = tokio::spawn(on_blocking_thread(token.clone(), move || {
-            let _ = stalled.recv_timeout(std::time::Duration::from_secs(30));
-            Outcome::json(&json!("finished"))
-        }));
+        let call = tokio::spawn({
+            let token = token.clone();
+            async move {
+                let work = on_blocking_thread(slot, move || {
+                    let _ = stalled.recv_timeout(std::time::Duration::from_secs(30));
+                    Outcome::json(&json!("finished"))
+                });
+                until_cancelled(&token, work).await
+            }
+        });
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         token.cancel();
         let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), call)
@@ -554,7 +603,32 @@ mod tests {
             .unwrap();
         assert!(outcome.is_error);
         assert!(outcome.text.contains("exit code 130"), "{}", outcome.text);
+        assert_eq!(
+            slots.available_permits(),
+            0,
+            "the slot was freed while the thread ran"
+        );
         drop(release);
+        let freed = tokio::time::timeout(std::time::Duration::from_secs(5), slots.acquire())
+            .await
+            .expect("the slot never came back");
+        assert!(freed.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_init_still_writes_the_whole_project() {
+        let dir = crate::testdir::TempDir::new("serve-init-cancelled");
+        let target = dir.path().join("project");
+        let token = CancellationToken::new();
+        token.cancel();
+        let (slots, slot) = slots(1);
+        let arguments = raw(&json!({"path": target, "template": "basic"}).to_string());
+        let outcome = Tool::Blocking(Blocking::Init)
+            .call(Some(arguments), Env::default(), false, token, slot)
+            .await;
+        assert!(!outcome.is_error, "{}", outcome.text);
+        assert!(target.join("deploy.sql").is_file());
+        assert_eq!(slots.available_permits(), 1);
     }
 
     fn raw(s: &str) -> Box<RawValue> {
@@ -747,6 +821,7 @@ mod tests {
                 Env::default(),
                 false,
                 CancellationToken::new(),
+                slots(1).1,
             )
             .await;
         let structured = o.structured.unwrap_or_else(|| {
