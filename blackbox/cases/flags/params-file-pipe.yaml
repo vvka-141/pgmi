@@ -1,0 +1,13 @@
+description: --params-file reads a non-seekable pipe, what a shell's process substitution <(...) hands the program (docs/SECURITY.md); /dev/stdin with stdin piped is that pipe
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE seen AS SELECT value FROM pg_temp.pgmi_parameter_view WHERE key = 'secret';
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --params-file, /dev/stdin]
+    stdin: "secret=from-a-pipe\n"
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT value FROM seen
+          rows: [[from-a-pipe]]

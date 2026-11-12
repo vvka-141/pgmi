@@ -238,7 +238,7 @@ deploy's error is `PASSWORD [redacted]` in the text, `message` and `error`.
 A client that reads its answers while it pipelines thousands of requests gets
 every answer in order.
 
-Cases: `serve/session`, `serve/burst`, `serve/slow-reader-many-answers`, `serve/slow-reader-huge-answer`, `serve/deploy-tool`, `serve/cancel`, `serve/malformed`, `serve/protocol-versions`, `serve/deploy-guards`, `serve/deploys-in-sequence`, `serve/concurrent-deploys`, `serve/deploy-timeout`, `serve/deploy-warning-lines`, `serve/deploy-param-key`, `serve/deploy-password-masked`.
+Cases: `serve/session`, `serve/deploy-verbose`, `serve/burst`, `serve/slow-reader-many-answers`, `serve/slow-reader-huge-answer`, `serve/deploy-tool`, `serve/cancel`, `serve/malformed`, `serve/protocol-versions`, `serve/deploy-guards`, `serve/deploys-in-sequence`, `serve/concurrent-deploys`, `serve/deploy-timeout`, `serve/deploy-warning-lines`, `serve/deploy-param-key`, `serve/deploy-password-masked`.
 
 ### config
 
@@ -327,7 +327,7 @@ letters, digits, underscores), and a value holding a NUL byte. All are refused
 before connecting. Full reference: `docs/CLI.md`
 "Parameter Flags".
 
-Cases: `params/env-var-reaches-session`, `params/precedence`, `params/invalid-key`, `params/case-twins`, `flags/params-file`, `config/precedence`, `config/dotenv`, `exit-codes/10-invalid-config`.
+Cases: `params/env-var-reaches-session`, `params/precedence`, `params/invalid-key`, `params/case-twins`, `flags/params-file`, `flags/params-file-pipe`, `config/precedence`, `config/dotenv`, `exit-codes/10-invalid-config`.
 
 ### Connection sources
 
@@ -438,7 +438,7 @@ nothing is dropped. A database PostgreSQL marked invalid (connection limit
 -2, left by an interrupted `DROP DATABASE`) comes back with no connection
 limit. Full reference: `docs/CLI.md` "--overwrite".
 
-Cases: `exit-codes/12-overwrite-denied`, `flags/overwrite-force`, `flags/overwrite-invalid-database`, `flags/overwrite-new-database`, `flags/overwrite-restores`, `terminal/overwrite-confirmation`, `terminal/force-banner`, `terminal/force-countdown-timeout`, `terminal/non-interactive`, `terminal/prompt-cancel`, `connection/maintenance-database-only-when-needed`. A signal after the drop: Rust integration test `a_signal_after_the_drop_still_recreates_and_restores_the_database` (a case cannot hold `CREATE DATABASE` on a lock).
+Cases: `exit-codes/12-overwrite-denied`, `flags/overwrite-force`, `flags/overwrite-connection-limit`, `flags/overwrite-invalid-database`, `flags/overwrite-new-database`, `flags/overwrite-restores`, `terminal/overwrite-confirmation`, `terminal/force-banner`, `terminal/force-countdown-timeout`, `terminal/non-interactive`, `terminal/prompt-cancel`, `connection/maintenance-database-only-when-needed`. A signal after the drop: Rust integration test `a_signal_after_the_drop_still_recreates_and_restores_the_database` (a case cannot hold `CREATE DATABASE` on a lock).
 
 ### Concurrency
 
@@ -674,8 +674,9 @@ got no answer, which Go's connector does not.
 Cases: `cloud/azure-msi-retry`, `cloud/azure-cli`, `cloud/azure-managed-identity`, `cloud/azure-powershell`, `cloud/azure-cloud-shell`, `cloud/azure-ml`, `cloud/azure-service-fabric`, `cloud/aws-iam-token`, `cloud/aws-credential-source`, `cloud/dotenv-feeds-sdk`, `cloud/token-auth-requires-tls`, `cloud/google-arguments`, `cloud/azure-client-id-never-uses-the-cli`, `cloud/aws-session-token-and-profile`, `cloud/cloud-ids-env-beats-yaml`.
 Service principal and the real Cloud SQL connector: no case; neither can be
 pointed at a local fake from the Go binary (see `blackbox/COVERAGE.md` "Cloud
-sign-in"); the Rust dialer is checked against the runner's fake Admin API by
-a Rust integration test. The
+sign-in"); the Rust binary is checked against the runner's fakes by Rust
+integration tests (`rust/pgmi/tests/google_cloud_sql.rs`, and
+`azure_client_secret.rs` for a service principal with `AZURE_CLIENT_SECRET`). The
 default sslmodes: no case; the fakes need an explicit sslmode to be reached.
 
 ## Intended changes

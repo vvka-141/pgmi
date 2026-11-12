@@ -53,6 +53,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `serve`: malformed input (not JSON, non-object, `jsonrpc`, id types, unknown method and tool, bad params, blank line, 2 MB line, invalid UTF-8) | ✓ `serve/malformed`; the bare value `null` (no answer) ✗ deliberately unpinned, see `rust/docs/decisions/go-review.md` |
 | `serve`: protocol versions, `server/discover`, the 2026-07-28 stateless era | ✓ `serve/protocol-versions` |
 | `serve`: no `.env`, overwrite needs `confirmDatabaseName` (12), unknown argument (10) | ✓ `serve/deploy-guards` |
+| `serve` deploy tool `verbose: true` passes `RAISE DEBUG`; without it, not | ✓ `serve/deploy-verbose` |
 | `serve`: a `params` key that is not an identifier (10); a `PASSWORD` literal masked in the text, `message` and `error` | ✓ `serve/deploy-param-key`, `serve/deploy-password-masked` |
 | `serve`: deploys in sequence after an open transaction or a failed tail block; overlapping deploys = 15 | ✓ `serve/deploys-in-sequence`, `serve/concurrent-deploys` |
 | `serve`: deploy `timeout` argument (16, not a duration = 10) | ✓ `serve/deploy-timeout` |
@@ -73,11 +74,13 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `--compat` (unknown = 10 with the target in the summary and `--json`) | ✓ `flags/compat`, `flags/compat-record` |
 | `--force` (alone; with `--overwrite`, no countdown without a terminal) | ✓ `flags/overwrite-force` |
 | `--overwrite` without `--force`, no terminal | ✓ `exit-codes/12-overwrite-denied` |
+| `--overwrite` under a role `CONNECTION LIMIT 2` | ✓ `flags/overwrite-connection-limit` |
 | `--overwrite` restores owner, connection limit, settings, role settings, comment, privileges; refuses (10) what it cannot restore | ✓ `flags/overwrite-restores` |
 | `--overwrite` of an invalid database (connection limit -2) recreates it without a limit | ✓ `flags/overwrite-invalid-database` |
 | `--json` | ✓ `deploy/json-success`, `deploy/json-failure` |
 | `--param` (never split on commas) | ✓ `params/precedence`, `commands/usage-errors` |
 | `--params-file` (file, `-` stdin, later file wins, case clash = 10, `-` twice = 10, missing file = 10); `--param` without `=` = 10 | ✓ `params/precedence`, `flags/params-file` |
+| `--params-file` reads a non-seekable pipe (process substitution `<(...)`) | ✓ `flags/params-file-pipe` |
 | `--timeout` (`3s`, `90s`, `1h30m`, `0`; not a duration, or longer than a Go duration, = 2) | ✓ `exit-codes/16-timeout`, `flags/timeout-forms`, `commands/usage-errors` |
 | `--sslmode`, `--sslcert`, `--sslkey`, `--sslrootcert`; `--sslmode` overrides `DATABASE_URL`'s, refused next to `--connection` (10) | ✓ `tls/client-certificate`, `tls/sslmode-flag-overrides` |
 | `--azure`, `--azure-client-id` | ✓ `cloud/azure-cli`, `cloud/azure-managed-identity`; `--azure-tenant-id` > `AZURE_TENANT_ID` > `azure_tenant_id`, and `AWS_REGION`/`AWS_DEFAULT_REGION` > `aws_region` ✓ `cloud/cloud-ids-env-beats-yaml` |

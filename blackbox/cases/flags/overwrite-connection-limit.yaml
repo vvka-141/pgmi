@@ -1,0 +1,19 @@
+description: --overwrite needs two connections, the maintenance session and the target session, so a login role with CONNECTION LIMIT 2 is enough (docs/CONNECTIONS.md)
+project:
+  files:
+    deploy.sql: CREATE TABLE marker AS SELECT current_user AS who;
+steps:
+  - sql: CREATE ROLE "{db}_two" LOGIN CREATEDB CONNECTION LIMIT 2 PASSWORD 'two-pw';
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{db}_two:two-pw@{host}:{port}/postgres", -d, "{db}", --overwrite, --force]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT who FROM marker
+          rows: [["{db}_two"]]
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{db}_two:two-pw@{host}:{port}/postgres", -d, "{db}", --overwrite, --force]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT who FROM marker
+          rows: [["{db}_two"]]

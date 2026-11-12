@@ -1,4 +1,4 @@
-description: --google needs --google-instance (exit 10); without Application Default Credentials the dialer fails with exit 1 (an unclassified error; see the contract notes)
+description: --google needs --google-instance (exit 10); without Application Default Credentials the dialer fails with exit 1 in Go (an unclassified error) and 11 in Rust (contract "Google sign-in failure is exit 11")
 project:
   files:
     deploy.sql: SELECT 1;
@@ -7,4 +7,7 @@ steps:
     expect: {exit: 10, stderr: ["google-instance"]}
   - pgmi: [deploy, "{project}", --google, --google-instance, "my-project:us-central1:my-instance", -U, someone, -d, "{db}"]
     timeout: 60
-    expect: {exit: 1, stderr: ["Cloud SQL dialer", "could not find default credentials"]}
+    expect:
+      exit: 1
+      stderr: ["Cloud SQL dialer", "could not find default credentials"]
+      rust: {exit: 11}

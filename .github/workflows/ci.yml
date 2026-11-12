@@ -413,6 +413,13 @@ jobs:
     name: Examples
     uses: ./.github/workflows/examples.yml
 
+  # Non-blocking until switch day (PGMI-835): no job needs it.
+  examples-rust:
+    name: Examples (Rust)
+    uses: ./.github/workflows/examples.yml
+    with:
+      impl: rust
+
   # Advisory here, like vulncheck: a CVE published overnight must not red-line
   # an unrelated branch. The weekly schedule fails on a finding.
   gateway-audit:

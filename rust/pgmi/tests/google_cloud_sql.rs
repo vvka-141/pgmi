@@ -1,44 +1,11 @@
 #![cfg(all(test, target_os = "linux"))]
 
-use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+mod fakes;
 
-struct Fakes {
-    child: Child,
-    values: serde_json::Value,
-}
+use fakes::Fakes;
 
-impl Drop for Fakes {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-impl Fakes {
-    fn start(root: &Path) -> std::io::Result<Self> {
-        let blackbox = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../blackbox");
-        let mut child = Command::new("python3")
-            .args(["-m", "pgmi_blackbox.fakes"])
-            .arg(root)
-            .current_dir(blackbox)
-            .env("PYTHONDONTWRITEBYTECODE", "1")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()?;
-        let mut line = String::new();
-        if let Some(out) = child.stdout.take() {
-            BufReader::new(out).read_line(&mut line)?;
-        }
-        let values = serde_json::from_str(&line)?;
-        Ok(Self { child, values })
-    }
-
-    fn get(&self, key: &str) -> String {
-        self.values[key].as_str().unwrap_or_default().to_string()
-    }
-}
+use std::path::PathBuf;
+use std::process::Command;
 
 struct Run {
     root: PathBuf,

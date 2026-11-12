@@ -1,0 +1,26 @@
+description: the deploy tool's verbose argument means what -v means on the CLI, RAISE DEBUG from deploy.sql reaches the notices (docs/CLI.md); without it, it does not
+project:
+  files:
+    deploy.sql: |
+      DO $$ BEGIN RAISE DEBUG 'debug-only-line-849'; RAISE NOTICE 'notice-line-849'; END $$;
+steps:
+  - pgmi: [serve]
+    stdin: |
+      {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"blackbox","version":"1"}}}
+      {"jsonrpc":"2.0","method":"notifications/initialized"}
+      {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"{conn}","database":"{db}","verbose":true}}}
+    timeout: 60
+    expect:
+      exit: 0
+      stdout: ['"id":2,"result".*debug-only-line-849', 'notice-line-849']
+      stdout_not: ['"isError":true']
+  - pgmi: [serve]
+    stdin: |
+      {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"blackbox","version":"1"}}}
+      {"jsonrpc":"2.0","method":"notifications/initialized"}
+      {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"{conn}","database":"{db}"}}}
+    timeout: 60
+    expect:
+      exit: 0
+      stdout: ['notice-line-849']
+      stdout_not: ['debug-only-line-849', '"isError":true']
