@@ -1,7 +1,7 @@
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 
-use super::lexer::{self, TokenKind};
+use super::lexer;
 
 pub(crate) fn raw(content: &[u8]) -> String {
     hex(&Sha256::digest(content))
@@ -20,39 +20,12 @@ fn hex(bytes: &[u8]) -> String {
         })
 }
 
+/// The text `pgmi_checksum` hashes: comments dropped, whitespace runs as
+/// one space, ASCII letters folded outside quotes. It must stay byte for
+/// byte what the Go binary hashed, or a redeploy reads run-once files as
+/// edited, so it has its own scanner rather than the SQL lexer.
 pub(crate) fn normalize(src: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(src.len());
-    let mut pending_space = false;
-    for t in lexer::tokens(src) {
-        match t.kind {
-            TokenKind::Space | TokenKind::LineComment | TokenKind::BlockComment => {
-                pending_space = true;
-            }
-            TokenKind::Str | TokenKind::QuotedIdent | TokenKind::Dollar => {
-                if pending_space {
-                    out.push(b' ');
-                    pending_space = false;
-                }
-                let text = t.text(src);
-                let quote = text
-                    .iter()
-                    .position(|b| matches!(b, b'\'' | b'"' | b'$'))
-                    .unwrap_or(0);
-                out.extend(text[..quote].iter().map(u8::to_ascii_lowercase));
-                out.extend_from_slice(&text[quote..]);
-            }
-            _ => {
-                if pending_space {
-                    out.push(b' ');
-                    pending_space = false;
-                }
-                out.extend(t.text(src).iter().map(u8::to_ascii_lowercase));
-            }
-        }
-    }
-    if pending_space {
-        out.push(b' ');
-    }
+    let out = scan(src);
     match String::from_utf8(out) {
         Ok(s) => s.trim_matches(char::is_whitespace).as_bytes().to_vec(),
         Err(e) => {
@@ -70,9 +43,263 @@ pub(crate) fn normalize(src: &[u8]) -> Vec<u8> {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum State {
+    Normal,
+    LineComment,
+    BlockComment { depth: usize },
+    Quote { escapes: bool },
+    QuotedIdent,
+    Dollar { tag_start: usize, tag_len: usize },
+}
+
+struct Scanner<'a> {
+    src: &'a [u8],
+    out: Vec<u8>,
+    state: State,
+    last_space: bool,
+    spaced: bool,
+    i: usize,
+}
+
+fn scan(src: &[u8]) -> Vec<u8> {
+    let mut s = Scanner {
+        src,
+        out: Vec::with_capacity(src.len()),
+        state: State::Normal,
+        last_space: false,
+        spaced: false,
+        i: 0,
+    };
+    while s.i < src.len() {
+        let written = s.out.len();
+        s.spaced = false;
+        match s.state {
+            State::Normal => s.normal(),
+            State::LineComment => s.line_comment(),
+            State::BlockComment { depth } => s.block_comment(depth),
+            State::Quote { escapes } => s.quoted(b'\'', escapes),
+            State::QuotedIdent => s.quoted(b'"', false),
+            State::Dollar { tag_start, tag_len } => s.dollar(tag_start, tag_len),
+        }
+        if s.out.len() != written && !s.spaced {
+            s.last_space = false;
+        }
+    }
+    s.out
+}
+
+impl Scanner<'_> {
+    fn next(&self) -> Option<u8> {
+        self.src.get(self.i + 1).copied()
+    }
+
+    fn space(&mut self) {
+        self.spaced = true;
+        if !self.last_space {
+            self.out.push(b' ');
+            self.last_space = true;
+        }
+    }
+
+    fn normal(&mut self) {
+        let ch = self.src[self.i];
+        let next = self.next();
+        if ch == b'-' && next == Some(b'-') {
+            self.state = State::LineComment;
+            self.space();
+            self.i += 2;
+        } else if ch == b'/' && next == Some(b'*') {
+            self.state = State::BlockComment { depth: 1 };
+            self.space();
+            self.i += 2;
+        } else if lexer::is_space(ch) {
+            self.space();
+            self.i += 1;
+        } else if ch == b'\'' {
+            self.state = State::Quote {
+                escapes: escape_prefixed(self.src, self.i),
+            };
+            self.out.push(ch);
+            self.i += 1;
+        } else if ch == b'"' {
+            self.state = State::QuotedIdent;
+            self.out.push(ch);
+            self.i += 1;
+        } else if let Some(len) = (ch == b'$' && !continues_identifier(self.src, self.i))
+            .then(|| dollar_tag(self.src, self.i))
+            .flatten()
+        {
+            self.state = State::Dollar {
+                tag_start: self.i,
+                tag_len: len,
+            };
+            self.out.extend_from_slice(&self.src[self.i..self.i + len]);
+            self.i += len;
+        } else {
+            self.out.push(ch.to_ascii_lowercase());
+            self.i += 1;
+        }
+    }
+
+    fn line_comment(&mut self) {
+        let ch = self.src[self.i];
+        if ch == b'\n' {
+            self.space();
+            self.state = State::Normal;
+            self.i += 1;
+        } else if ch == b'\r' && self.next() == Some(b'\n') {
+            self.space();
+            self.state = State::Normal;
+            self.i += 2;
+        } else {
+            self.i += 1;
+        }
+    }
+
+    fn block_comment(&mut self, depth: usize) {
+        let (ch, next) = (self.src[self.i], self.next());
+        if ch == b'/' && next == Some(b'*') {
+            self.state = State::BlockComment { depth: depth + 1 };
+            self.i += 2;
+        } else if ch == b'*' && next == Some(b'/') {
+            self.state = if depth == 1 {
+                State::Normal
+            } else {
+                State::BlockComment { depth: depth - 1 }
+            };
+            self.i += 2;
+        } else {
+            self.i += 1;
+        }
+    }
+
+    fn quoted(&mut self, quote: u8, escapes: bool) {
+        let ch = self.src[self.i];
+        if escapes && ch == b'\\' && self.i + 1 < self.src.len() {
+            self.out.extend_from_slice(&self.src[self.i..self.i + 2]);
+            self.i += 2;
+            return;
+        }
+        self.out.push(ch);
+        if ch != quote {
+            self.i += 1;
+        } else if self.next() == Some(quote) {
+            self.out.push(quote);
+            self.i += 2;
+        } else {
+            self.state = State::Normal;
+            self.i += 1;
+        }
+    }
+
+    fn dollar(&mut self, tag_start: usize, tag_len: usize) {
+        let tag = &self.src[tag_start..tag_start + tag_len];
+        if self.src[self.i..].starts_with(tag) {
+            self.out.extend_from_slice(tag);
+            self.i += tag_len;
+            self.state = State::Normal;
+        } else {
+            self.out.push(self.src[self.i]);
+            self.i += 1;
+        }
+    }
+}
+
+fn is_identifier_byte(b: u8) -> bool {
+    b == b'_' || b == b'$' || b >= 0x80 || b.is_ascii_alphanumeric()
+}
+
+fn escape_prefixed(src: &[u8], i: usize) -> bool {
+    i > 0 && matches!(src[i - 1], b'E' | b'e') && (i == 1 || !is_identifier_byte(src[i - 2]))
+}
+
+fn continues_identifier(src: &[u8], i: usize) -> bool {
+    let start = src[..i]
+        .iter()
+        .rposition(|b| !is_identifier_byte(*b))
+        .map_or(0, |p| p + 1);
+    start != i && {
+        let first = src[start];
+        first == b'_' || first >= 0x80 || first.is_ascii_alphabetic()
+    }
+}
+
+fn dollar_tag(src: &[u8], i: usize) -> Option<usize> {
+    for (n, &b) in src.iter().enumerate().skip(i + 1) {
+        if b == b'$' {
+            return Some(n + 1 - i);
+        }
+        let ok = if n == i + 1 {
+            b.is_ascii_alphabetic() || b == b'_'
+        } else {
+            b.is_ascii_alphanumeric() || b == b'_'
+        };
+        if !ok {
+            return None;
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const GO_PGMI_CHECKSUMS: &[(&str, &str)] = &[
+        (
+            "SELECT $1$a$ X  Y $a$",
+            "f80f7ecc42e12393a40c3143f39ed529f1d2ac1974905f677910b1d503d40ff7",
+        ),
+        (
+            "SELECT 1$a$ X  Y $a$",
+            "beced7df0ed0f977badee6246a80d5de72f1a0d3a2a1faa15adaf0a7b5feb82f",
+        ),
+        (
+            "SELECT $é$ X  -- c\n Y $é$",
+            "cd3cd14d4076fdef9c92f17b5cc96df2a1f348b39a35fdc9dcf8a2c0e3ab14b8",
+        ),
+        (
+            "CREATE FUNCTION f() RETURNS int LANGUAGE sql AS $тело$ SELECT  1 -- Комментарий\n $тело$;",
+            "8b42784046ddd15d91f4417543ece15dee86703bcd8cbf91ff93a47d0bba85ce",
+        ),
+        (
+            "SELECT $E'a\\'B -- x'",
+            "8be4c11f70caf712df511411dc13c3f6d001e150bb3d3ad887de2426ca6b379c",
+        ),
+        (
+            "SELECT x$a$ Y $a$",
+            "7406fc965f397eec67d6f512511edc7c27c35cfacf6dba262baf1a1dce0926d5",
+        ),
+        (
+            "$$$$$A$",
+            "79a9c392a7266e4823925de7816ac3d1421d9fd93f2b463134a7d43d7ff97b96",
+        ),
+        (
+            "SELECT E'x\\'y -- Z'",
+            "6adacdf125f3c13cbaf4140c16286025d5ac7666a8a84117ed437d47b9209b0b",
+        ),
+        (
+            "SELECT 'unterminated -- C",
+            "06549fb4abb466e2d9ac7ff0f991ce08ca94188d98215439bd45e0c031accf50",
+        ),
+        (
+            "SELECT $a$ never closed -- C",
+            "75c311d8d761fc4589ce5566f77115d4afb48166c161161953613ce6f69e191c",
+        ),
+        (
+            "/* unterminated ",
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        ),
+        (
+            "SELECT \"Q\"\"Q\" , U&'A' FROM T",
+            "d21dc6f7979b00e858ee986c0f115ae039de7feef2d1b39c3e5b3f80513f3661",
+        ),
+        (
+            "SELECT ab$c$ D $c$",
+            "25956496ca432917dbd4fc32fd5e11c014d95ee1b07dca631486ae8336989584",
+        ),
+    ];
 
     #[test]
     fn golden() {
@@ -158,6 +385,14 @@ mod tests {
                 "670f963c902a0eb71e7361b17f860ff224b1534d3e2e270c1f6f7b0e79547154",
             ),
         ];
+        for (text, pgmi) in GO_PGMI_CHECKSUMS {
+            assert_eq!(
+                normalized(text.as_bytes()),
+                *pgmi,
+                "pgmi_checksum of {text:?} differs from the Go binary's: {:?}",
+                String::from_utf8_lossy(&normalize(text.as_bytes()))
+            );
+        }
         for (text, sum, pgmi) in cases {
             assert_eq!(raw(text.as_bytes()), *sum, "checksum of {text:?}");
             assert_eq!(
