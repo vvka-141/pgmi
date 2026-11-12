@@ -294,10 +294,10 @@ land before or between steps, each with a black-box case.
     failure (`retry::transient_lookup`). Not ported from group 7: the
     `WrapConnectionError` texts that Rust words differently (`too many
     connections to database`, the pgpass and Azure hints); both are
-    behaviour, not structure. The other `Result<_, String>` functions
-    stay: no caller branches on them (`duration::parse` and `go_bool`
-    feed clap, `tap` and `wire` are fuzzed leaves, the cloud helpers
-    end as one connection error).
+    behaviour, not structure. `duration::parse` and `go_bool` keep
+    `Result<_, String>`: they feed clap, which wants the text. The cloud
+    providers, `serve::wire`, `.env` and the wizard's test got their own
+    error types in the gate 2 round below.
 11. **One runtime.** `lib::run` owns it; `deploy::run`, `serve::run`,
     `tui::connection::run` take a handle.
     Done 2026-11-11: `lib::runtime` builds the multi-thread runtime;
@@ -322,7 +322,8 @@ switch day. That port landed 2026-11-11 (PGMI-862): linters in
 - The hand-written JSON-RPC and its Go-compatible error texts (0017,
   contract); they stay inside `serve::wire`.
 - `conn::tap`, `conn::tls` adapters, `conn::dial` connection logic (spike
-  verified, fuzzed), the cloud providers' code.
+  verified, fuzzed); the cloud providers' sign-in flows (only their error
+  types and token renewal changed in the gate 2 round).
 - The pure cores: `lexer`, `ignore`, `checksum`, `script`, `metadata::parse`.
 - `pgmi-shared` as a data crate; no logic beyond lookups.
 - The TUI wizard state machines (`update` -> `Effect`).
@@ -338,7 +339,7 @@ these, allowed workspace-wide:
 | Lint | Why it stays allowed |
 |---|---|
 | `missing_errors_doc` | The library is pgmi's own; its `pub` surface exists for the fuzz targets (0001). |
-| `too_many_lines` | Test bodies and the phase-ordered orchestrators; splitting `deploy` into one function per phase is review B's m6, not done in PGMI-869. |
+| `too_many_lines` | Test bodies, and six straight-line functions that read as one pass: `dotenv::parse`, `params::collect` and `overrides::overrides` (Go's precedence order), `dial::attempt` (one connection attempt), `execute::run` (one plan) and the connection wizard's `update`. The deploy orchestrator and `resolve::finish` are split into steps (gate 2 round). |
 | `items_after_statements` | Integration tests declare a helper next to the step that uses it. |
 | `assert_is_empty` | `assert!(v.is_empty())` reads better than the `[] as [T; 0]` comparison the lint rewrites it to. |
 | `case_sensitive_file_extension_comparisons` | Extensions compare case-sensitively, as in Go; changing it changes which files run. |
@@ -351,32 +352,108 @@ these, allowed workspace-wide:
 
 ### Review B (PGMI-858) items PGMI-869 did not take
 
-- **m1** The remaining `Result<_, String>` (cloud providers, `serve::wire`,
-  `project::ignore`, `duration`, the dialer's address lookup, the wizard's
-  test) have no caller that branches on them; `conn::tap`, which had one,
-  now returns `tap::Error`. A `cloud::Error` with `#[source]` would keep
-  the reqwest chain but must render Go's texts unchanged; left for a
-  change that touches the cloud providers.
+- **m1** Done in the gate 2 round below, except `duration` and `go_bool`
+  (clap takes their text) and `project::ignore` (one caller, which
+  renders it).
 - **m2** `Error::source()` is implemented; `Display` still renders the
   chain, because every printer, the `--json` record and MCP read
   `Error::text()` and moving them to `error::chain` changes no output but
   every call site. `ResolveError::Env(Error)` stays: the only env failure
   is a non-UTF-8 value, already a config error.
-- **m4** `--params-file -` stays a string and `Context::stdin` a flag: the
-  "stdin given N times" refusal and its text live in `params::collect`,
-  as in Go, and an enum would only move that check.
-- **m6** The deploy orchestrator is still one function; `too_many_lines`
-  is allowed above. Splitting it into one function per phase is a
-  separate change.
+- **m4, m6** Done in the gate 2 round below (`deploy::Stdin`, `Steps`).
 - **m10** The unported Go groups (`internal/cli/pgpass_test.go`,
   `internal/ui/approver_test.go`, `internal/cli/serve_*_test.go`) are test
   porting, PGMI-863's kind of work; listed in `rust/docs/test-parity-units.md`.
-- **s1, s2, s3** `Progress`'s phase booleans, `Spec`'s TLS booleans and
-  `Env`'s per-lookup allocation are left: each is a local change with no
-  bug behind it. **s5** The DB tests still skip when `PGMI_TEST_CONN` is
+- **s1, s2** Done in the gate 2 round below. **s3** `Env`'s per-lookup
+  allocation is left: no bug behind it. **s5** The DB tests still skip when `PGMI_TEST_CONN` is
   unset; CI sets `PGMI_REQUIRE_DB`, which turns a skip into a failure.
 - Done elsewhere: m9 (`testdir::TempDir`, PGMI-870), m13 (CI lints the
   `testhooks` build and the fuzz crate).
+
+### Gate 2 round (2026-11-12)
+
+The structural review for maturity gate 2
+(`.private/reviews/rust-gates-2026-11-11.md`, section 3) listed the
+orchestrators, stringly state and string errors that still read as
+translated Go. What changed:
+
+- **Deploy phases.** `deploy::deploy` is `Steps::deploy`, about 60 lines.
+  `Steps` borrows the context, guard, reporter and secret set and has one
+  method per phase: `target` (`Target { spec, cloud }`),
+  `report_provenance`, `params`, `load` (`LoadedProject { project, meta
+  }`), `dialer`, `sign_in`, `overwrite`, `open` (connects, or creates the
+  database on 3D000 through `create_database`), `server_info`, `lock`, then
+  `execute::run` and `release` (roll back and unlock within `CLEANUP`, or
+  disconnect). `pgmi.yaml` is read once in `Run::deploy`, before the guard
+  is built, and its errors are no longer swallowed.
+- **Typed progress.** `Progress` holds `contract: Option<ContractVersion>`
+  and `phase: Phase` (ordered: `Preparing`, `Deploying`; read through
+  `reached`) instead of two booleans. `--json` is byte for byte the same.
+- **Stdin.** `Context.stdin` is `deploy::Stdin { Process, Unavailable }`;
+  `params::collect` takes `Option<&mut dyn Read>` and refuses `-` itself
+  when there is none.
+- **Secrets.** `deploy::Secrets` is an append-only set of strings, filled
+  where each secret becomes known: the spec's `password` and `sslpassword`
+  once resolved, and every password the dialer presents (pgpass, sign-in
+  tokens, renewed tokens) through `Dialer.secret`. It no longer clones the
+  `Spec`; the providers no longer keep their own lists of minted tokens.
+  It stays behind a short `std::sync::Mutex` because the dialer's
+  callbacks fill it from inside the connection future; no lock is held
+  across `.await`.
+- **Database booleans** are read as `bool` (`query_typed`, `try_get`), not
+  `::text` compared with `"true"`. `sql_error` and the blocking-pool
+  `JoinError` keep the driver error as the source.
+- **Resolve in steps.** `resolve::finish` is a sequence of named steps over
+  the field map (read the source, merge, databases, hosts, TLS, protocol),
+  each group taken by a `take(&mut Fields)` constructor because it removes
+  its keys. Whether a string was given is `Source::is_string()`.
+  `Spec::sslmode_source` is `SslModeSource { Flag, String(Source), Env,
+  Yaml { line } }`.
+- **Typed TLS and auth settings.** `sslnegotiation: SslNegotiation`,
+  `sslcertmode: SslCertMode`; `sslsni` stays a bool (an on/off switch,
+  rustls' `enable_sni`). `require_auth: RequireAuth { Any, Only(tap::Policy),
+  Invalid(tap::Error) }` is parsed in resolve; `Invalid` is refused when
+  `Dialer::connect` starts, where Go refuses it (after loading the
+  project, with the summary line).
+- **Dial failures.** Server refusals keep `Answer { message, code }`;
+  `connect_once` collects `Failed { Lookup | At { host, port, label,
+  failure } }` and `connect_error` renders them. Classification never reads
+  message text: a missing password is known from the tap
+  (`Shared::asked_password`) and the attempt having none, and a
+  certificate failure is a `rustls::Error` found in the source chain. The
+  remaining `String`s in `DialFailure` are only the per-host lines of the
+  combined message; nothing branches on them. The TLS hint still follows
+  Go and reads the rendered text, because it must also fire on server
+  messages about client certificates. `From<ResolveError> for Error` keeps
+  the parse error as the source. The one-field `tls::Tls` is gone.
+- **Trust-root seam.** `tls::config` reads the platform store through an
+  injected function, so tests cover both verify modes with a store that
+  has roots and with an empty one.
+- **Leaf errors.** The cloud providers (`aws::SignError`,
+  `azure::CredentialError`, `certificate::CertificateError`,
+  `azure_msi::{MsiError, ArcKeyError}`, databricks' `CliError`,
+  `AnswerError`, `SendError`, `cloud::TokenError`), `serve::wire`
+  (`SyntaxError`, `StructError`, in Go's `encoding/json` wording),
+  `.env` (`dotenv::ParseError { line, reason }`) and the wizard's
+  connection test (`TestError`) return their own types with `source()`.
+  Rendered strings remain only where the text is the product: the
+  per-credential lines of Azure's "no credential worked" message and the
+  PKCS#12 library's error.
+- **Enums.** `wire::JsonKind`; `serve::Era { Session, Stateless }`;
+  `Tool::Deploy | Tool::Blocking(Blocking)`, which removes the
+  unreachable deploy arm; a wizard `Select<T>` returns the chosen value,
+  never an index.
+- **Panics.** The hook leaves the message on the thread that panicked;
+  `error::catching` and `catching_async` read it right after unwinding on
+  that thread. The process-wide `LAST_PANIC` is gone, so two panicking
+  serve calls cannot swap messages.
+- **Token renewal.** `conn::cloud::renew::Renewing<M: Mint>` reuses a
+  sign-in token while it has more than five minutes left and fetches a new
+  one otherwise (always, without an expiry). Azure Entra ID and Databricks
+  Lakebase use it, so a connection opened after a long `--overwrite`
+  prompt never presents an expired token. `Mint` is the test seam.
+- **Project files** are converted from the owned buffer; the BOM is
+  drained in place.
 
 ## Consequences
 

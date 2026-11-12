@@ -952,6 +952,5 @@ mod tests {
         for secret in ["dapi-secret", "m2m-secret", "lakebase-secret"] {
             assert!(!text.contains(secret), "{text}");
         }
-        assert_eq!(source.minted(), ["lakebase-secret"]);
     }
 }

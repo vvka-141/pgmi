@@ -785,14 +785,9 @@ impl Steps<'_> {
     }
 
     async fn sign_in(&self, provider: Provider, options: &cloud::Options) -> Result<cloud::Token> {
-        let token = self
-            .guard
+        self.guard
             .connecting(Box::pin(cloud::token(provider, options, &self.ctx.env)))
-            .await?;
-        for secret in token.secrets() {
-            self.secrets.insert(&secret);
-        }
-        Ok(token)
+            .await
     }
 
     async fn overwrite(&self, st: &mut Progress, dialer: &Dialer, spec: &Spec) -> Result<Session> {

@@ -45,7 +45,6 @@ fn signing(e: impl std::error::Error + Send + Sync + 'static) -> SignError {
 pub(crate) struct Signer {
     credentials: Credentials,
     region: String,
-    minted: std::sync::Mutex<Vec<String>>,
 }
 
 pub(crate) fn region(req: &Options, env: &Env) -> Result<String> {
@@ -82,7 +81,6 @@ pub(crate) async fn signer(req: &Options, env: &Env) -> Result<Signer> {
     Ok(Signer {
         credentials,
         region,
-        minted: std::sync::Mutex::default(),
     })
 }
 
@@ -93,15 +91,7 @@ impl Signer {
         port: u16,
         user: &str,
     ) -> std::result::Result<String, SignError> {
-        let token = self.token_at(host, port, user, SystemTime::now())?;
-        if let Ok(mut m) = self.minted.lock() {
-            m.push(token.clone());
-        }
-        Ok(token)
-    }
-
-    pub(crate) fn minted(&self) -> Vec<String> {
-        self.minted.lock().map(|m| m.clone()).unwrap_or_default()
+        self.token_at(host, port, user, SystemTime::now())
     }
 
     fn token_at(
@@ -202,7 +192,6 @@ mod tests {
         let s = Signer {
             credentials: Credentials::new("AKIDEXAMPLE", "secret", None, None, "test"),
             region: "us-west-2".into(),
-            minted: std::sync::Mutex::default(),
         };
         let t = s
             .token_at(
@@ -216,7 +205,5 @@ mod tests {
             t.starts_with("127.0.0.1:5432?Action=connect&DBUser=iam%20user&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIDEXAMPLE%2F20231114%2Fus-west-2%2Frds-db%2Faws4_request&X-Amz-Date=20231114T221320Z&X-Amz-Expires=900&X-Amz-SignedHeaders=host&X-Amz-Signature="),
             "{t}"
         );
-        let minted = s.token("h", 5432, "u").unwrap();
-        assert_eq!(s.minted(), [minted]);
     }
 }

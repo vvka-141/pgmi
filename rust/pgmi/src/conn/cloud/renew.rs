@@ -20,11 +20,10 @@ pub(crate) trait Mint: Send + Sync {
 
 /// A provider's token for each connection: the last one while it has more
 /// than five minutes left, a new one otherwise (always, when its expiry is
-/// unknown). Every token handed out is kept for redaction.
+/// unknown).
 pub(crate) struct Renewing<M> {
     mint: M,
     current: Mutex<Option<Fetched>>,
-    minted: Mutex<Vec<String>>,
 }
 
 pub(crate) fn fresh(expires: Option<Timestamp>, now: Timestamp) -> bool {
@@ -44,7 +43,6 @@ impl<M: Mint> Renewing<M> {
         Renewing {
             mint,
             current: Mutex::new(None),
-            minted: Mutex::default(),
         }
     }
 
@@ -67,17 +65,10 @@ impl<M: Mint> Renewing<M> {
     async fn renew(&self) -> Result<String> {
         let fetched = self.mint.mint().await?;
         let token = fetched.token.expose().to_string();
-        if let Ok(mut m) = self.minted.lock() {
-            m.push(token.clone());
-        }
         if let Ok(mut c) = self.current.lock() {
             *c = Some(fetched);
         }
         Ok(token)
-    }
-
-    pub(crate) fn minted(&self) -> Vec<String> {
-        self.minted.lock().map(|m| m.clone()).unwrap_or_default()
     }
 
     #[cfg(test)]
@@ -88,9 +79,6 @@ impl<M: Mint> Renewing<M> {
     #[cfg(test)]
     pub(crate) fn holding(mint: M, fetched: Fetched) -> Self {
         let r = Self::idle(mint);
-        if let Ok(mut m) = r.minted.lock() {
-            m.push(fetched.token.expose().to_string());
-        }
         if let Ok(mut c) = r.current.lock() {
             *c = Some(fetched);
         }
@@ -159,7 +147,6 @@ mod tests {
             r.password_at(at("2026-11-11T11:30:00Z")).await.unwrap(),
             "token-2"
         );
-        assert_eq!(r.minted(), ["token-1", "token-2"]);
     }
 
     #[tokio::test]

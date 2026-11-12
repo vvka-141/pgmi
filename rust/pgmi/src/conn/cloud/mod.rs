@@ -120,17 +120,6 @@ impl Token {
         }
     }
 
-    pub(crate) fn secrets(&self) -> Vec<String> {
-        match self {
-            #[cfg(test)]
-            Token::Fixed(_, t) => vec![t.expose().to_string()],
-            Token::Azure(a) => a.minted(),
-            Token::Aws(s) => s.minted(),
-            Token::Google(d) => vec![d.password()],
-            Token::Databricks(l) => l.minted(),
-        }
-    }
-
     pub(crate) fn google(&self) -> Option<&Arc<google::Dialer>> {
         match self {
             Token::Google(d) => Some(d),
