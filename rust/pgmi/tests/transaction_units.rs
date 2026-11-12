@@ -117,3 +117,28 @@ CREATE TABLE tail_probe AS SELECT count(*)::int AS n FROM pg_temp.pgmi_source_vi
         "pgmi_source_view visible from tail reported {n} files, want 1"
     );
 }
+
+#[test]
+fn a_retry_keeps_what_an_earlier_attempt_committed_in_the_report() {
+    let Some(pg) = pg() else { return };
+    let db = pg.database("pgmi_rs_b_retry_keeps_commits");
+    let out = deploy_project(
+        &pg,
+        "
+BEGIN;
+CREATE TABLE once_t (id int);
+INSERT INTO once_t VALUES (1);
+COMMIT;
+DO $$ BEGIN RAISE EXCEPTION 'lock busy' USING ERRCODE = '55P03'; END $$;
+",
+        &[],
+        &db,
+    )
+    .fails(13);
+    out.says("attempt 1 committed 1 unit(s); the last attempt committed nothing")
+        .says("attempt 1 of 2 failed with: ERROR: lock busy (SQLSTATE 55P03)")
+        .never_says("nothing committed;")
+        .never_says("left empty");
+    let rows: i64 = db.client().one("SELECT count(*) FROM once_t", &[]);
+    assert_eq!(rows, 1);
+}
