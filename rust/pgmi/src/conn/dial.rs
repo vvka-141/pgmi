@@ -18,7 +18,7 @@ use tokio_postgres::{AsyncMessage, CancelToken, Client, Config, NoTls};
 use super::cloud::{self, TokenError};
 use super::pgpass;
 use super::resolve::{
-    ChannelBinding, LoadBalanceHosts, Spec, SslMode, SslNegotiation, TargetSessionAttrs,
+    ChannelBinding, Endpoint, LoadBalanceHosts, Spec, SslMode, SslNegotiation, TargetSessionAttrs,
 };
 use super::retry::{self, Cause};
 use super::socket::Tcp;
@@ -110,7 +110,7 @@ impl Drop for Session {
 enum Peer {
     Tcp(std::net::SocketAddr),
     Socket(String),
-    Google(Arc<cloud::CloudSql>),
+    Google(cloud::CloudSql),
 }
 
 pub(crate) fn notice_of(db: &DbError) -> Notice {
@@ -151,7 +151,7 @@ async fn dial(peer: &Peer, tcp: &Tcp) -> std::io::Result<Stream> {
         Peer::Socket(path) => Err(std::io::Error::other(format!(
             "Unix sockets are not supported here: {path}"
         ))),
-        Peer::Google(session) => Ok(Stream::CloudSql(Box::new(session.dial(tcp).await?))),
+        Peer::Google(route) => Ok(Stream::CloudSql(Box::new(route.dial(tcp).await?))),
     }
 }
 
@@ -273,8 +273,8 @@ enum Failed {
     Lookup(Unresolved),
     At {
         host: String,
+        addr: String,
         port: u16,
-        label: String,
         failure: DialFailure,
     },
 }
@@ -318,7 +318,18 @@ impl std::fmt::Display for Failed {
             } if failure.class() == Class::Refused => {
                 write!(f, "connection refused to {host}:{port}")
             }
-            Failed::At { label, failure, .. } => write!(f, "{label}: {failure}"),
+            Failed::At {
+                host,
+                addr,
+                port,
+                failure,
+            } if addr == host => write!(f, "{host}:{port}: {failure}"),
+            Failed::At {
+                host,
+                addr,
+                port,
+                failure,
+            } => write!(f, "{host} ({addr}):{port}: {failure}"),
         }
     }
 }
@@ -447,11 +458,6 @@ struct Attempt<'a> {
     secret: SecretSink,
 }
 
-struct Login {
-    password: Option<Secret>,
-    cloud_sql: Option<Arc<cloud::CloudSql>>,
-}
-
 struct Opened {
     client: Client,
     tls: Option<Connect>,
@@ -497,18 +503,19 @@ impl Attempt<'_> {
             .or_else(|| self.spec.pg_files.as_ref().map(|f| f.pgpass.clone()))
     }
 
-    /// The password this attempt presents: a sign-in token (with the Cloud
-    /// SQL session it opens), the one given, or the matching `.pgpass` line.
-    async fn login(&self, passfile: Option<&Path>) -> std::result::Result<Login, DialFailure> {
+    /// What this attempt presents: a sign-in token (with the Cloud SQL
+    /// route it opens), the password given, the matching `.pgpass` line
+    /// (read on a blocking thread), or nothing.
+    async fn login(
+        &self,
+        passfile: Option<&Path>,
+    ) -> std::result::Result<Option<cloud::Login>, DialFailure> {
         let spec = self.spec;
         if let Some(t) = &spec.token {
             return t
                 .login(self.name, self.port, &spec.user)
                 .await
-                .map(|l| Login {
-                    password: Some(l.password),
-                    cloud_sql: l.cloud_sql,
-                })
+                .map(Some)
                 .map_err(|e| DialFailure::Broken {
                     text: e.to_string(),
                     class: Class::Fatal,
@@ -519,17 +526,32 @@ impl Attempt<'_> {
             (Some(p), _) => Some(p.clone()),
             (None, None) => None,
             (None, Some(path)) => {
-                let found = pgpass::lookup(path, self.name, self.port, self.db, &spec.user);
+                let (path, host, db, user) = (
+                    path.to_path_buf(),
+                    self.name.to_string(),
+                    self.db.to_string(),
+                    spec.user.clone(),
+                );
+                let port = self.port;
+                let found = tokio::task::spawn_blocking(move || {
+                    pgpass::lookup(&path, &host, port, &db, &user)
+                })
+                .await
+                .map_err(|e| {
+                    let e = std::io::Error::other(e);
+                    DialFailure::Broken {
+                        text: e.to_string(),
+                        class: Class::Fatal,
+                        origin: Origin::Io(e),
+                    }
+                })?;
                 if let Some(w) = found.warning() {
                     (self.log)(w);
                 }
                 found.password()
             }
         };
-        Ok(Login {
-            password,
-            cloud_sql: None,
-        })
+        Ok(password.map(cloud::Login::password))
     }
 
     fn startup(&self, mode: SslMode, password: Option<&str>) -> Config {
@@ -571,12 +593,14 @@ impl Attempt<'_> {
     ) -> std::result::Result<Opened, DialFailure> {
         let spec = self.spec;
         let passfile = self.passfile();
-        let login = self.login(passfile.as_deref()).await?;
-        let password = login.password;
+        let (password, cloud_sql) = match self.login(passfile.as_deref()).await? {
+            Some(login) => (Some(login.password), login.cloud_sql),
+            None => (None, None),
+        };
         if let Some(p) = &password {
             (self.secret)(p);
         }
-        let mode = if self.host.starts_with('/') || login.cloud_sql.is_some() {
+        let mode = if self.host.starts_with('/') || cloud_sql.is_some() {
             SslMode::Disable
         } else {
             self.tls_mode
@@ -603,9 +627,9 @@ impl Attempt<'_> {
                 });
             }
         };
-        let opened = match login.cloud_sql {
-            Some(session) => {
-                let peer = Peer::Google(session);
+        let opened = match cloud_sql {
+            Some(route) => {
+                let peer = Peer::Google(route);
                 dial(&peer, &spec.tcp).await.map(|s| (s, peer))
             }
             None => open(self.host, self.port, &spec.tcp).await,
@@ -790,6 +814,8 @@ impl Dialer {
         }
     }
 
+    /// One round: each pass of `target_session_attrs`, each endpoint, each
+    /// of its addresses, until one gives a session.
     async fn connect_once(
         &self,
         spec: &Spec,
@@ -804,69 +830,18 @@ impl Dialer {
         };
         let mut failed: Vec<Failed> = Vec::new();
         for want in passes {
+            let round = Round {
+                dialer: self,
+                spec,
+                db,
+                tls,
+                want,
+            };
             let mut endpoints: Vec<_> = spec.hosts.endpoints().collect();
             balance(&mut endpoints, spec.load_balance_hosts);
-            for endpoint in endpoints {
-                let (host, port) = (endpoint.name.as_str(), endpoint.port);
-                let resolved = if spec.token.as_ref().is_some_and(cloud::Token::cloud_sql) {
-                    Ok(vec![host.to_string()])
-                } else if let Some(addr) = endpoint.addr {
-                    Ok(vec![addr.to_string()])
-                } else {
-                    addresses(host, port, deadline(spec.connect_timeout)).await
-                };
-                let mut addrs = match resolved {
-                    Ok(a) => a,
-                    Err(u) => {
-                        failed.push(Failed::Lookup(u));
-                        continue;
-                    }
-                };
-                balance(&mut addrs, spec.load_balance_hosts);
-                for addr in addrs {
-                    let label = if addr == host {
-                        format!("{host}:{port}")
-                    } else {
-                        format!("{host} ({addr}):{port}")
-                    };
-                    let mut modes = vec![spec.sslmode()];
-                    if spec.sslmode() == SslMode::Allow {
-                        modes.push(SslMode::Require);
-                    }
-                    let mut outcome = None;
-                    for mode in modes {
-                        let r = Attempt {
-                            spec,
-                            db,
-                            name: host,
-                            host: &addr,
-                            port,
-                            tls_mode: mode,
-                            tls: tls.cloned(),
-                            want,
-                            notices: self.notices.clone(),
-                            log: self.log.clone(),
-                            secret: self.secret.clone(),
-                        }
-                        .run()
-                        .await;
-                        let again = mode == SslMode::Allow
-                            && r.as_ref().is_err_and(DialFailure::auth_refused);
-                        outcome = Some(r);
-                        if !again {
-                            break;
-                        }
-                    }
-                    match outcome {
-                        Some(Ok(s)) => return Ok(s),
-                        Some(Err(failure)) => failed.push(Failed::At {
-                            host: host.to_string(),
-                            port,
-                            label,
-                            failure,
-                        }),
-                        None => {}
-                    }
+            for endpoint in &endpoints {
+                if let Some(session) = round.endpoint(endpoint, &mut failed).await {
+                    return Ok(session);
                 }
             }
         }
@@ -876,6 +851,101 @@ impl Dialer {
             failed,
             first: (first_host.to_string(), first_port),
         })
+    }
+}
+
+/// One pass over the servers for one `target_session_attrs`.
+struct Round<'a> {
+    dialer: &'a Dialer,
+    spec: &'a Spec,
+    db: &'a str,
+    tls: Option<&'a Arc<ClientConfig>>,
+    want: TargetSessionAttrs,
+}
+
+impl Round<'_> {
+    /// Tries every address of `endpoint`, recording each failure.
+    async fn endpoint(&self, endpoint: &Endpoint, failed: &mut Vec<Failed>) -> Option<Session> {
+        let mut addrs = match self.addresses(endpoint).await {
+            Ok(a) => a,
+            Err(u) => {
+                failed.push(Failed::Lookup(u));
+                return None;
+            }
+        };
+        balance(&mut addrs, self.spec.load_balance_hosts);
+        for addr in addrs {
+            match self.address(endpoint, &addr).await {
+                Ok(session) => return Some(session),
+                Err(failure) => failed.push(Failed::At {
+                    host: endpoint.name.clone(),
+                    addr,
+                    port: endpoint.port,
+                    failure,
+                }),
+            }
+        }
+        None
+    }
+
+    /// The addresses to dial: the Cloud SQL instance name as is, a given
+    /// `hostaddr`, or the host's lookup.
+    async fn addresses(&self, endpoint: &Endpoint) -> std::result::Result<Vec<String>, Unresolved> {
+        if self
+            .spec
+            .token
+            .as_ref()
+            .is_some_and(cloud::Token::cloud_sql)
+        {
+            return Ok(vec![endpoint.name.clone()]);
+        }
+        if let Some(addr) = endpoint.addr {
+            return Ok(vec![addr.to_string()]);
+        }
+        addresses(
+            &endpoint.name,
+            endpoint.port,
+            deadline(self.spec.connect_timeout),
+        )
+        .await
+    }
+
+    /// Connects to one address; `sslmode=allow` tries TLS when the server
+    /// refuses the plaintext login.
+    async fn address(
+        &self,
+        endpoint: &Endpoint,
+        addr: &str,
+    ) -> std::result::Result<Session, DialFailure> {
+        let mode = self.spec.sslmode();
+        let first = self.attempt(endpoint, addr, mode).await;
+        if mode == SslMode::Allow && first.as_ref().is_err_and(DialFailure::auth_refused) {
+            return self.attempt(endpoint, addr, SslMode::Require).await;
+        }
+        first
+    }
+
+    async fn attempt(
+        &self,
+        endpoint: &Endpoint,
+        addr: &str,
+        tls_mode: SslMode,
+    ) -> std::result::Result<Session, DialFailure> {
+        Attempt {
+            spec: self.spec,
+            db: self.db,
+            name: &endpoint.name,
+            host: addr,
+            port: endpoint.port,
+            tls_mode,
+            tls: self.tls.cloned(),
+            want: self.want,
+            notices: self.dialer.notices.clone(),
+            log: self.dialer.log.clone(),
+            secret: self.dialer.secret.clone(),
+        }
+        .run()
+        .await
     }
 }
 
@@ -1109,7 +1179,7 @@ mod tests {
         Failed::At {
             host: host.into(),
             port,
-            label: format!("{host}:{port}"),
+            addr: host.into(),
             failure,
         }
     }

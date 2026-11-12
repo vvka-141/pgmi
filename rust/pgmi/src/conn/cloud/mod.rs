@@ -6,8 +6,6 @@ mod google;
 mod http;
 mod renew;
 
-pub(crate) use google::Session as CloudSql;
-
 use std::sync::Arc;
 
 use crate::config::yaml::ProjectConfig;
@@ -74,18 +72,47 @@ impl std::fmt::Debug for Token {
 }
 
 /// What one connection presents: the password, and for Cloud SQL the
-/// session its socket is opened with.
+/// route its sockets are opened through.
 pub(crate) struct Login {
     pub(crate) password: Secret,
-    pub(crate) cloud_sql: Option<Arc<google::Session>>,
+    pub(crate) cloud_sql: Option<CloudSql>,
 }
 
 impl Login {
-    fn password(password: Secret) -> Self {
+    pub(crate) fn password(password: Secret) -> Self {
         Login {
             password,
             cloud_sql: None,
         }
+    }
+}
+
+/// Where a Cloud SQL socket is opened: through the session current when it
+/// is opened, so a cancel request an hour into a deploy presents a renewed
+/// client certificate, not the one the connection started with.
+#[derive(Clone)]
+pub(crate) enum CloudSql {
+    Signin(Arc<renew::Renewing<google::Signin>>),
+    #[cfg(test)]
+    Minted(Arc<renew::Renewing<google::tests::Sessions>>),
+}
+
+impl CloudSql {
+    async fn session(&self) -> Result<Arc<google::Session>> {
+        match self {
+            CloudSql::Signin(r) => r.current().await,
+            #[cfg(test)]
+            CloudSql::Minted(r) => r.current().await,
+        }
+    }
+
+    /// Opens a TLS socket to the instance with the current session.
+    pub(crate) async fn dial(
+        &self,
+        tcp: &crate::conn::socket::Tcp,
+    ) -> std::io::Result<tokio_rustls::client::TlsStream<tokio::net::TcpStream>> {
+        let session = self.session().await.map_err(std::io::Error::other)?;
+        session.dial(tcp).await
     }
 }
 
@@ -152,7 +179,7 @@ impl Token {
                 let session = g.current().await.map_err(TokenError::SignIn)?;
                 Ok(Login {
                     password: session.password().clone(),
-                    cloud_sql: Some(session),
+                    cloud_sql: Some(CloudSql::Signin(g.clone())),
                 })
             }
             Token::Databricks(l) => l
@@ -283,6 +310,36 @@ pub(crate) async fn token(provider: Provider, req: &Options, env: &Env) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn minted_on_dial(expires: jiff::Timestamp) -> usize {
+        crate::conn::tls::install();
+        let renewing = Arc::new(renew::Renewing::holding(
+            google::tests::Sessions::default(),
+            renew::Fetched {
+                value: google::tests::session(),
+                expires: Some(expires),
+            },
+        ));
+        let route = CloudSql::Minted(renewing.clone());
+        let _ = route.dial(&crate::conn::socket::Tcp::default()).await;
+        renewing
+            .mint_source()
+            .minted
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    #[tokio::test]
+    async fn a_cloud_sql_socket_opened_after_the_certificate_expired_uses_a_renewed_one() {
+        let now = jiff::Timestamp::now();
+        assert_eq!(
+            minted_on_dial(now - jiff::SignedDuration::from_mins(1)).await,
+            1
+        );
+        assert_eq!(
+            minted_on_dial(now + jiff::SignedDuration::from_hours(1)).await,
+            0
+        );
+    }
 
     fn yaml(text: &str) -> ProjectConfig {
         ProjectConfig::parse(text).unwrap()

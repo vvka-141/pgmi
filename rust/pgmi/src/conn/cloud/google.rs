@@ -371,8 +371,42 @@ fn not_after(cert: &CertificateDer<'_>) -> std::result::Result<jiff::Timestamp, 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
+
+    /// Mints sessions for 127.0.0.1, counting each.
+    #[derive(Default)]
+    pub(crate) struct Sessions {
+        pub(crate) minted: AtomicUsize,
+    }
+
+    pub(crate) fn session() -> Arc<Session> {
+        let config = ClientConfig::builder_with_provider(crate::conn::tls::provider())
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .unwrap()
+            .with_root_certificates(RootCertStore::empty())
+            .with_no_client_auth();
+        Arc::new(Session {
+            address: "127.0.0.1".into(),
+            config: Arc::new(config),
+            server_name: ServerName::try_from("localhost").unwrap(),
+            login_token: Secret::from("login"),
+        })
+    }
+
+    impl Mint for Sessions {
+        type Value = Arc<Session>;
+
+        fn mint(&self) -> impl std::future::Future<Output = Result<Fetched<Arc<Session>>>> + Send {
+            self.minted.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(Ok(Fetched {
+                value: session(),
+                expires: Some(jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1)),
+            }))
+        }
+    }
 
     #[test]
     fn a_session_expires_with_its_ephemeral_certificate() {
