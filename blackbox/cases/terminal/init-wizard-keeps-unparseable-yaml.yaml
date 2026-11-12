@@ -1,0 +1,47 @@
+description: init's connection wizard never replaces a pgmi.yaml it cannot parse; Go replaces it, the Rust binary keeps it and warns (contract, Behaviour changes in 0.20, "Three smaller differences")
+project:
+  files:
+    pgmi.yaml: |
+      connection: [broken
+steps:
+  - pgmi: [init, "{project}"]
+    tty: true
+    stdin:
+      - {wait: 2}
+      - "\x1b[B"
+      - {wait: 0.5}
+      - "\r"
+      - {wait: 1}
+      - "\x1b[B"
+      - {wait: 0.5}
+      - "\r"
+      - {wait: 1}
+      - "\r"
+      - {wait: 1}
+      - "\x15127.0.0.1"
+      - "\t"
+      - "\x15{port}"
+      - "\t"
+      - "{db}"
+      - "\t"
+      - "\t"
+      - "\x15{user}"
+      - "\t"
+      - "{password}"
+      - {wait: 0.5}
+      - "\r"
+      - {wait: 4}
+      - "\r"
+      - {wait: 2}
+      - "n\r"
+    timeout: 40
+    expect:
+      exit: 0
+      stdout: ["Connected to 127\\.0\\.0\\.1:{port}", "Wrote .*\\(basic template\\)", "Wrote .*pgmi\\.yaml"]
+      files:
+        project/pgmi.yaml: ["host: 127\\.0\\.0\\.1", "database: {db}"]
+      rust:
+        stdout: ["Connected to 127\\.0\\.0\\.1:{port}", "Wrote .*\\(basic template\\)", "WARNING: could not save connection: pgmi\\.yaml exists but could not be parsed"]
+        stdout_not: ["Wrote .*pgmi\\.yaml"]
+        files:
+          project/pgmi.yaml: ["^connection: \\[broken\\n$"]

@@ -188,6 +188,7 @@ terminal/force-countdown-timeout
 terminal/init-wizard
 terminal/init-wizard-connection
 terminal/init-wizard-connection-esc
+terminal/init-wizard-keeps-unparseable-yaml
 terminal/non-interactive
 terminal/no-terminal-queries
 terminal/overwrite-confirmation

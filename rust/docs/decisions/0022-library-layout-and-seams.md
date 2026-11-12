@@ -455,6 +455,34 @@ translated Go. What changed:
 - **Project files** are converted from the owned buffer; the BOM is
   drained in place.
 
+### Fix round 3 (2026-11-12)
+
+The second gate review (`.private/reviews/rust-gates-2026-11-12.md`) and an
+independent Codex review of 58bad99f. What changed:
+
+- **Redaction in one place.** `Error::redact` records the secrets and
+  `Error::text` (so `Display`) hides them in the whole rendering, the source
+  chain included. `error::chain` stops at a nested `Error`, which renders and
+  redacts its own sources.
+- **Terminal restore.** `tui::Screen` holds a `Restore` guard made as soon
+  as raw mode is on; a failing alternate-screen switch or `Terminal::new`
+  drops it and leaves raw mode. `opened` is the seam the test drives.
+- **Wizard pages.** `Steps::page` returns the wizard's own `Page` enum
+  (`connection::Page`, `init::Page` wrapping it) instead of `(u8, u8, u8)`;
+  a form's error is `Option<String>`.
+- **`pgmi.yaml` edits.** `config::edit::set_connection` returns a `Result`
+  and never falls back to a fresh file; `commands::config::save` refuses a
+  file `ProjectConfig::parse` rejects unless the caller passes `replace`,
+  which only `pgmi config` does after its confirmation. `init` therefore
+  keeps an unparseable file and warns (contract, "Three smaller
+  differences").
+- **Overwrite snapshot.** `manager/settings.sql` names its columns; the
+  snapshot reads them by name into two `Locale` values (target and
+  `template1`) and fails closed when the role settings do not decode.
+- **Summary.** `deploy::summary` returns `output::Summary { Done, Failed }`.
+- **CI.** The `blackbox-rust` job is blocking: every case on
+  `rust/blackbox-passing.txt` passes, so one dropping off fails CI.
+
 ## Consequences
 
 - Every Go unit test whose subject exists in Rust gets a Rust counterpart

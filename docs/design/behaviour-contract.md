@@ -967,11 +967,15 @@ Cases: `connection/protocol-version`.
 ### Three smaller differences (owner, 2026-11-11)
 
 After the user confirms replacing a `pgmi.yaml` it cannot read as settings, the Rust
-binary writes a fresh connection block; Go edits the file in place. An
+binary writes a fresh connection block; Go edits the file in place. `pgmi
+init`'s connection wizard asks no such question, so the Rust binary keeps a
+`pgmi.yaml` it cannot parse, warns `could not save connection` and still
+exits 0; Go replaces the file. An
 `AZURE_TOKEN_CREDENTIALS` value that names no credential is refused before
 connecting with exit 10 (Go: 1). Both wizards draw full-screen, as Go's do.
 
-Cases: `cloud/azure-token-credentials-invalid` (the exit code). The fresh
+Cases: `cloud/azure-token-credentials-invalid` (the exit code),
+`terminal/init-wizard-keeps-unparseable-yaml` (init keeps the file). The fresh
 block: `terminal/config-replace-unparseable` checks what both binaries keep;
 the replacement itself is recorded in `rust/docs/decisions/0013-yaml.md`.
 
