@@ -484,8 +484,7 @@ nothing is dropped. A database PostgreSQL marked invalid (connection limit
 -2, left by an interrupted `DROP DATABASE`) comes back with no connection
 limit. Full reference: `docs/CLI.md` "--overwrite".
 
-Cases: `exit-codes/12-overwrite-denied`, `flags/overwrite-force`, `flags/overwrite-connection-limit`, `flags/overwrite-invalid-database`, `flags/overwrite-new-database`, `flags/overwrite-restores`, `terminal/overwrite-confirmation`, `terminal/force-banner`, `terminal/force-countdown-timeout`, `terminal/non-interactive`, `terminal/prompt-cancel`, `connection/maintenance-database-only-when-needed`. A signal after the drop: `bad-weather/overwrite-signal-between-drop-and-create` (the fault-injecting proxy holds the `CREATE DATABASE`), and the Rust integration test `a_signal_after_the_drop_still_recreates_and_restores_the_database`.
-Cases: `exit-codes/12-overwrite-denied`, `flags/overwrite-force`, `flags/overwrite-connection-limit`, `flags/overwrite-invalid-database`, `flags/overwrite-new-database`, `flags/overwrite-restores`, `terminal/overwrite-confirmation`, `terminal/overwrite-prompt-and-countdown`, `terminal/force-banner`, `terminal/force-countdown-timeout`, `terminal/non-interactive`, `terminal/prompt-cancel`, `connection/maintenance-database-only-when-needed`. A signal after the drop: Rust integration test `a_signal_after_the_drop_still_recreates_and_restores_the_database` (a case cannot hold `CREATE DATABASE` on a lock).
+Cases: `exit-codes/12-overwrite-denied`, `flags/overwrite-force`, `flags/overwrite-connection-limit`, `flags/overwrite-invalid-database`, `flags/overwrite-new-database`, `flags/overwrite-restores`, `terminal/overwrite-confirmation`, `terminal/force-banner`, `terminal/force-countdown-timeout`, `terminal/non-interactive`, `terminal/prompt-cancel`, `connection/maintenance-database-only-when-needed`, `bad-weather/overwrite-signal-between-drop-and-create` (the fault-injecting proxy holds the `CREATE DATABASE`), `a_signal_after_the_drop_still_recreates_and_restores_the_database`, `terminal/overwrite-prompt-and-countdown`.
 
 ### Concurrency
 
@@ -571,8 +570,7 @@ left: ` — nothing committed` in atomic mode, ` (unit U of N failed; C earlier
 unit(s) already committed)` in psql mode, and `created database "<db>", left
 empty` when this run created it.
 
-Cases: `notices/streaming`, `notices/severity`, `notices/deploy-sql-message-level`, `commands/verbose`, `terminal/colors`, `notices/summary-line`, `notices/secrets-redacted`, `execution/pgmi-test-without-tests`, `execution/setup-psql-fixture`.
-Cases: `notices/streaming`, `notices/severity`, `commands/verbose`, `terminal/colors`, `terminal/no-color-words`, `notices/summary-line`, `notices/secrets-redacted`, `execution/pgmi-test-without-tests`, `execution/setup-psql-fixture`.
+Cases: `notices/streaming`, `notices/severity`, `notices/deploy-sql-message-level`, `commands/verbose`, `terminal/colors`, `notices/summary-line`, `notices/secrets-redacted`, `execution/pgmi-test-without-tests`, `execution/setup-psql-fixture`, `terminal/no-color-words`.
 
 ### The --json record
 

@@ -81,10 +81,10 @@ pub(crate) enum Style {
 fn style(env: &Env) -> Style {
     let term = std::io::stderr().is_terminal() && env.get("TERM").ok().flatten() != Some("dumb");
     let no_color = env.non_empty("NO_COLOR").ok().flatten().is_some();
-    match (term, no_color) {
-        (false, _) => Style::Plain,
-        (true, true) => Style::Glyphs,
-        (true, false) => Style::Colored,
+    if term && !no_color {
+        Style::Colored
+    } else {
+        Style::Plain
     }
 }
 
@@ -110,15 +110,6 @@ impl Reporter {
             stamped: false,
             ..Self::to(Box::new(std::io::stderr()), verbose, style(env))
         })
-        let term =
-            std::io::stderr().is_terminal() && env.get("TERM").ok().flatten() != Some("dumb");
-        let no_color = env.non_empty("NO_COLOR").ok().flatten().is_some();
-        let style = if term && !no_color {
-            Style::Colored
-        } else {
-            Style::Plain
-        };
-        Arc::new(Self::to(Box::new(std::io::stderr()), verbose, style))
     }
 
     pub(crate) fn to(sink: Box<dyn Write + Send>, verbose: bool, style: Style) -> Self {
