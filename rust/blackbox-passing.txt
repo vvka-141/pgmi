@@ -304,6 +304,7 @@ retry/connection-lost-mid-run
 retry/deadline-during-an-attempt
 retry/failing-test-not-retried
 retry/no-time-box-five-attempts
+retry/no-retry-after-commit
 retry/read-only-on-a-standby
 retry/retry-false
 retry/server-shutdown-mid-run

@@ -1,4 +1,4 @@
-description: Rust only (contract "Whole-deployment retry"). A first attempt that never reaches the server (four startups refused with 53300 too many connections, or with 08P01) fails fast as in Go, exit 11 with no whole-deploy retry (owner decision PGMI-909); once an attempt has connected, class 08 mid-run (FATAL 08P01 in the tail) is retried
+description: Rust only (contract "Whole-deployment retry"). A first attempt that never reaches the server (four startups refused with 53300 too many connections, or with 08P01) fails fast as in Go, exit 11 with no whole-deploy retry (owner decision PGMI-909); once an attempt has connected, class 08 mid-run (FATAL 08P01 in the tail, after the head committed, so with retry_after_commit) is retried
 impl: rust
 proxy:
   - {at: startup, do: {error: "53300"}, times: 4, step: 1}
@@ -6,6 +6,7 @@ proxy:
   - {query: tail_sleep, do: {error: "08P01"}, after: 0.5, times: 1, step: 3}
 project:
   files:
+    pgmi.yaml: "retry_after_commit: true\n"
     deploy.sql: |
       SET client_connection_check_interval = '100ms';
       CREATE TABLE IF NOT EXISTS marker (n int);

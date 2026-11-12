@@ -144,3 +144,18 @@ contract's "Behaviour changes in 0.20" table and a line in
   server (opened its session) is retried. A first attempt that never
   connects, or whose sign-in gives up, fails at once as Go does; the last two
   table rows apply only after an earlier attempt connected.
+
+## Changed by PGMI-918 (owner, 2026-11-12): no retry after a commit
+
+The review (finding D3) showed a retry after a committed head re-running
+committed work that Go would have stopped at. Owner decision, option 2:
+once any unit of the attempt has committed, a failure that would be
+retried ends the run as in Go (exit 13 for an SQL error, the summary names
+the committed units), with one stderr line
+`pgmi: attempt N failed (<why>); not retried: K unit(s) already committed
+(pgmi.yaml retry_after_commit: true allows it)`. A project whose whole
+deploy.sql is rerunnable opts back in with `retry_after_commit: true` in
+`pgmi.yaml`. Retries before any commit are unchanged. A unit whose answer
+never came counts as not committed here (record 0025: a lost COMMIT reply
+is found done by the next attempt). `retry: false` still turns all retrying
+off.

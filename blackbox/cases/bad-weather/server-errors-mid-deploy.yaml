@@ -1,4 +1,4 @@
-description: a server that ends the session with FATAL 57P01 while the head runs, or with FATAL 08P01 in the tail, and one that answers the head with ERROR 25006 (read-only transaction) all fail the deploy with exit 13, the server's text and SQLSTATE, and only what was committed kept (Rust runs the deploy again (contract "Whole-deployment retry") after 57P01 and 08P01 and succeeds; 25006 from a primary stays final)
+description: a server that ends the session with FATAL 57P01 while the head runs, or with FATAL 08P01 in the tail, and one that answers the head with ERROR 25006 (read-only transaction) all fail the deploy with exit 13, the server's text and SQLSTATE, and only what was committed kept (Rust runs the deploy again (contract "Whole-deployment retry") after 57P01 in the head and succeeds; 08P01 in the tail comes after the head committed, so it is not retried (PGMI-918); 25006 from a primary stays final)
 proxy:
   - {query: head_sleep, do: {error: "57P01"}, after: 0.5, times: 1, step: 1}
   - {query: head_sleep, do: {error: "25006", severity: ERROR}, step: 2}
@@ -52,8 +52,7 @@ steps:
         - query: SELECT string_agg(phase, ',' ORDER BY ctid) FROM marker
           rows: [["head,tail-1"]]
       rust:
-        exit: 0
-        stderr: ["^pgmi: attempt 1 failed \\(08P01 connection exception\\); retrying in"]
+        stderr: ["^pgmi: attempt 1 failed \\(08P01 connection exception\\); not retried: 2 unit\\(s\\) already committed"]
         sql:
           - query: SELECT string_agg(phase, ',' ORDER BY ctid) FROM marker
-            rows: [["head,tail-1,tail-2,head,tail-1,head,tail-1,tail-2"]]
+            rows: [["head,tail-1,tail-2,head,tail-1"]]

@@ -53,6 +53,8 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   endpoint that stays down) runs the deploy again from the start, exactly
   like a redeploy, waiting 1 s doubling to 30 s, until it succeeds or the
   time box ends. A failing test or any other SQL error is never retried.
+  Once a unit has committed, a failure is final as in Go unless
+  `retry_after_commit: true` in `pgmi.yaml` allows a rerun.
   `--json` lists the `attempts`; `retry: false` in `pgmi.yaml` turns it off.
   Pipelines need no retry step of their own. See
   [Time box and retries](switch-day/timeout-and-retry.md).

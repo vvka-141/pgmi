@@ -1,10 +1,11 @@
-description: Rust only (contract "Whole-deployment retry"). A connection reset while the head runs, and one in the tail, end that attempt; the deploy runs again from the start on a new connection and succeeds, one stderr line per retried attempt, and --json lists every attempt with the units it committed
+description: Rust only (contract "Whole-deployment retry"). A connection reset while the head runs, and (with retry_after_commit in pgmi.yaml, since the head has committed) one in the tail, end that attempt; the deploy runs again from the start on a new connection and succeeds, one stderr line per retried attempt, and --json lists every attempt with the units it committed
 impl: rust
 proxy:
   - {query: head_sleep, do: reset, after: 0.5, times: 1, step: 1}
   - {query: tail_sleep, do: reset, after: 0.5, times: 1, step: 2}
 project:
   files:
+    pgmi.yaml: "retry_after_commit: true\n"
     deploy.sql: |
       SET client_connection_check_interval = '100ms';
       BEGIN;

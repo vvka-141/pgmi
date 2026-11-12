@@ -377,6 +377,7 @@ impl Run {
             secrets: &self.secrets,
             retry: retry::Policy {
                 enabled: yaml.as_ref().and_then(|y| y.retry) != Some(false),
+                after_commit: yaml.as_ref().and_then(|y| y.retry_after_commit) == Some(true),
                 cap: (asked == Some(Duration::ZERO)).then_some(retry::UNBOXED_ATTEMPTS),
             },
         };
@@ -611,6 +612,13 @@ impl Steps<'_> {
                 None
             };
             let Some(why) = why else { return Err(e) };
+            let committed = st.execution.as_ref().map_or(0, |x| x.committed);
+            if committed > 0 && !self.retry.after_commit {
+                self.reporter.line(&format!(
+                    "pgmi: attempt {n} failed ({why}); not retried: {committed} unit(s) already committed (pgmi.yaml retry_after_commit: true allows it)"
+                ));
+                return Err(e);
+            }
             let attempts_left = match self.retry.cap {
                 Some(cap) if n >= cap => return Err(retry::gave_up(n, e)),
                 Some(cap) => Some(cap - n),

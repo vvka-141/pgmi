@@ -12,6 +12,7 @@ use crate::error::{Error, Kind};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Policy {
     pub(super) enabled: bool,
+    pub(super) after_commit: bool,
     pub(super) cap: Option<usize>,
 }
 

@@ -118,20 +118,34 @@ CREATE TABLE tail_probe AS SELECT count(*)::int AS n FROM pg_temp.pgmi_source_vi
     );
 }
 
+const COMMITS_THEN_LOCK_BUSY: &str = "
+BEGIN;
+CREATE TABLE once_t (id int);
+INSERT INTO once_t VALUES (1);
+COMMIT;
+DO $$ BEGIN RAISE EXCEPTION 'lock busy' USING ERRCODE = '55P03'; END $$;
+";
+
+#[test]
+fn a_deploy_that_committed_a_unit_is_not_retried_by_default() {
+    let Some(pg) = pg() else { return };
+    let db = pg.database("pgmi_rs_b_no_retry_after_commit");
+    let out = deploy_project(&pg, COMMITS_THEN_LOCK_BUSY, &[], &db).fails(13);
+    out.says("unit 2 of 2 failed; 1 earlier unit(s) already committed")
+        .says("not retried: 1 unit(s) already committed")
+        .never_says("retrying in");
+    let rows: i64 = db.client().one("SELECT count(*) FROM once_t", &[]);
+    assert_eq!(rows, 1);
+}
+
 #[test]
 fn a_retry_keeps_what_an_earlier_attempt_committed_in_the_report() {
     let Some(pg) = pg() else { return };
     let db = pg.database("pgmi_rs_b_retry_keeps_commits");
     let out = deploy_project(
         &pg,
-        "
-BEGIN;
-CREATE TABLE once_t (id int);
-INSERT INTO once_t VALUES (1);
-COMMIT;
-DO $$ BEGIN RAISE EXCEPTION 'lock busy' USING ERRCODE = '55P03'; END $$;
-",
-        &[],
+        COMMITS_THEN_LOCK_BUSY,
+        &[("pgmi.yaml", "retry_after_commit: true\n")],
         &db,
     )
     .fails(13);

@@ -119,6 +119,22 @@ stderr ends with the first attempt's error as well as the last:
 "timeUsedMs": 4260
 ```
 
+## After a commit
+
+Once a unit has committed (the head's `COMMIT`, or any statement of the
+autocommit tail), a failure is final even when it would otherwise be
+retried, as in Go: the summary names the committed units and stderr says
+
+```
+pgmi: attempt 1 failed (55P03 lock not available); not retried: 1 unit(s) already committed (pgmi.yaml retry_after_commit: true allows it)
+```
+
+A project whose whole deploy.sql can run again after a partial run opts in:
+
+```yaml
+retry_after_commit: true
+```
+
 ## Turning it off
 
 A project whose deploy must never run twice (a tail that is not rerunnable)

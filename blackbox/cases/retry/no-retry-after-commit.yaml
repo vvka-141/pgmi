@@ -1,0 +1,22 @@
+description: Rust only (contract "Whole-deployment retry", PGMI-918). Once a unit has committed, a failure that would be retried ends the deploy as in Go - exit 13, the earlier commit named, the committed work kept once - unless pgmi.yaml sets retry_after_commit
+impl: rust
+project:
+  files:
+    deploy.sql: |
+      BEGIN;
+      CREATE TABLE IF NOT EXISTS ledger (note text);
+      INSERT INTO ledger VALUES ('deployed');
+      COMMIT;
+      DO $$ BEGIN RAISE EXCEPTION 'lock busy' USING ERRCODE = '55P03'; END $$;
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    timeout: 30
+    expect:
+      exit: 13
+      stderr: ["not retried: 1 unit\\(s\\) already committed", "unit 2 of 2 failed; 1 earlier unit\\(s\\) already committed"]
+      stderr_not: ["retrying in"]
+      sql:
+        - query: SELECT count(*) FROM ledger
+          rows: [[1]]
