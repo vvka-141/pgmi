@@ -1,0 +1,13 @@
+description: with -v, the server's own DEBUG messages caused by the project's SQL (an implicit index for a primary key) stay back on stderr and in --json, while RAISE DEBUG from deploy.sql still arrives
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE keyed (id int PRIMARY KEY);
+      DO $$ BEGIN RAISE DEBUG 'raised-debug-903'; END $$;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", -v, --json]
+    expect:
+      exit: 0
+      stderr: ["raised-debug-903"]
+      stderr_not: ["will create implicit index", "building index"]
+      stdout_not: ["will create implicit index", "building index"]

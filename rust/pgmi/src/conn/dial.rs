@@ -113,6 +113,13 @@ enum Peer {
     Google(cloud::CloudSql),
 }
 
+/// The server's own DEBUG messages (index builds, implicit indexes) stay
+/// back; DEBUG raised by PL/pgSQL `RAISE` reaches the user, as in Go.
+fn forwarded(db: &DbError) -> bool {
+    db.parsed_severity() != Some(tokio_postgres::error::Severity::Debug)
+        || db.routine() == Some("exec_stmt_raise")
+}
+
 pub(crate) fn notice_of(db: &DbError) -> Notice {
     let severity = match db.parsed_severity() {
         Some(s) => Severity::from(s.to_string().as_str()),
@@ -716,7 +723,7 @@ where
     tokio::spawn(async move {
         while let Some(message) = poll_fn(|cx| connection.poll_message(cx)).await {
             match message {
-                Ok(AsyncMessage::Notice(n)) => notices(notice_of(&n)),
+                Ok(AsyncMessage::Notice(n)) if forwarded(&n) => notices(notice_of(&n)),
                 Ok(_) => {}
                 Err(_) => break,
             }

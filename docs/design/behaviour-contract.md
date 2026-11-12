@@ -152,7 +152,7 @@ per params file `[VERBOSE] Loading parameters from file: <path>` and
 `[VERBOSE] Loaded N parameter(s) from file (total: M)`, and
 `[VERBOSE] CLI parameters override N value(s)`.
 
-Cases: `commands/verbose`, `notices/verbose-elapsed`, `notices/verbose-no-internal-debug`, `params/verbose-counts`.
+Cases: `commands/verbose`, `notices/verbose-elapsed`, `notices/verbose-no-internal-debug`, `notices/verbose-no-server-debug`, `params/verbose-counts`.
 
 ### serve
 
