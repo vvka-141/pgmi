@@ -33,6 +33,14 @@ struct Setup {
     connection: Option<connection::Wizard>,
 }
 
+/// Which screen init shows; the screen is cleared when it changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Page {
+    Template,
+    Setup,
+    Connection(connection::Page),
+}
+
 /// Template, then [`Setup`]; Esc on the connection wizard's first screen
 /// comes back to the question.
 pub(crate) struct Wizard {
@@ -147,13 +155,13 @@ impl super::Steps for Wizard {
         }
     }
 
-    fn screen(&self) -> (u8, u8, u8) {
-        match self.connection() {
-            Some(c) => {
-                let (stage, test) = c.page();
-                (2, stage, test)
-            }
-            None => (u8::from(self.setup.is_some()), 0, 0),
+    type Page = Page;
+
+    fn page(&self) -> Page {
+        match (&self.setup, self.connection()) {
+            (_, Some(c)) => Page::Connection(c.page()),
+            (Some(_), None) => Page::Setup,
+            (None, None) => Page::Template,
         }
     }
 
@@ -235,7 +243,10 @@ mod tests {
     #[test]
     fn yes_runs_the_connection_wizard_and_finishes_with_its_settings() {
         let mut w = into_connection_wizard();
-        assert_eq!(super::super::Steps::screen(&w), (2, 0, 0));
+        assert_eq!(
+            super::super::Steps::page(&w),
+            Page::Connection(connection::Page::Provider)
+        );
         w.update(key(KeyCode::Enter));
         w.update(key(KeyCode::Enter));
         w.update(key(KeyCode::Enter));
@@ -269,7 +280,7 @@ mod tests {
                 .iter()
                 .any(|l| l.contains("Set up the connection now?"))
         );
-        assert_eq!(super::super::Steps::screen(&w), (1, 0, 0));
+        assert_eq!(super::super::Steps::page(&w), Page::Setup);
         assert_eq!(w.update(key(KeyCode::Up)), None);
         assert_eq!(
             w.update(key(KeyCode::Enter)),

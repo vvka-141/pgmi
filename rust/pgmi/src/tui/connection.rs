@@ -315,7 +315,7 @@ struct Form {
     subtitle: &'static str,
     inputs: Vec<Input>,
     focus: usize,
-    error: String,
+    error: Option<String>,
     notes: &'static [&'static str],
 }
 
@@ -462,7 +462,7 @@ impl Form {
             subtitle,
             inputs,
             focus: 0,
-            error: String::new(),
+            error: None,
             notes,
         }
     }
@@ -476,7 +476,7 @@ impl Form {
             KeyCode::Enter => return Some(FormOutcome::Submit),
             KeyCode::Esc => return Some(FormOutcome::Back),
             _ => {
-                self.error.clear();
+                self.error = None;
                 self.inputs[self.focus].edit(key);
             }
         }
@@ -612,9 +612,9 @@ impl Form {
             if let Some(h) = input.hint {
                 lines.push(detail(h));
             }
-            if !self.error.is_empty() {
+            if let Some(error) = &self.error {
                 lines.push(Line::from(Span::styled(
-                    format!("  Error: {}", self.error),
+                    format!("  Error: {error}"),
                     Style::new().fg(Color::Indexed(196)),
                 )));
             }
@@ -667,6 +667,17 @@ pub(crate) enum Effect<D = Done> {
     Done(D),
 }
 
+/// Which screen the wizard shows; the screen is cleared when it changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Page {
+    Provider,
+    Method,
+    Form,
+    Testing,
+    Passed,
+    Failed,
+}
+
 pub(crate) struct Wizard {
     provider: Select<&'static Provider>,
     auth: Option<(&'static Provider, Select<Method>)>,
@@ -693,21 +704,15 @@ impl Wizard {
         }
     }
 
-    pub(crate) fn page(&self) -> (u8, u8) {
-        let test = match &self.test {
-            Some((_, Test::Running(_))) => 1,
-            Some((_, Test::Passed(_))) => 2,
-            Some((_, Test::Failed(_))) => 3,
-            None => 0,
-        };
-        let stage = if self.test.is_some() {
-            3
-        } else if self.form.is_some() {
-            2
-        } else {
-            u8::from(self.auth.is_some())
-        };
-        (stage, test)
+    pub(crate) fn page(&self) -> Page {
+        match (&self.test, &self.form, &self.auth) {
+            (Some((_, Test::Running(_))), _, _) => Page::Testing,
+            (Some((_, Test::Passed(_))), _, _) => Page::Passed,
+            (Some((_, Test::Failed(_))), _, _) => Page::Failed,
+            (None, Some(_), _) => Page::Form,
+            (None, None, Some(_)) => Page::Method,
+            (None, None, None) => Page::Provider,
+        }
     }
 
     fn open_form(&mut self, provider: &Provider, method: Method) {
@@ -755,12 +760,12 @@ impl Wizard {
                 }
                 FormOutcome::Submit => match form.settings() {
                     Err((field, message)) => {
-                        form.error = message;
+                        form.error = Some(message);
                         form.focus = form.index(field);
                         None
                     }
                     Ok(mut s) => {
-                        form.error.clear();
+                        form.error = None;
                         if let Some(i) =
                             self.initial.as_ref().filter(|_| form.method != Method::Uri)
                         {
@@ -1002,9 +1007,10 @@ impl super::Steps for Wizard {
         Wizard::tick(self);
     }
 
-    fn screen(&self) -> (u8, u8, u8) {
-        let (stage, test) = self.page();
-        (0, stage, test)
+    type Page = Page;
+
+    fn page(&self) -> Page {
+        Wizard::page(self)
     }
 
     fn view(&self) -> Paragraph<'static> {
@@ -1085,7 +1091,7 @@ mod tests {
         assert_eq!(w.update(key(KeyCode::Enter)), None);
         let f = w.form.as_ref().unwrap();
         assert_eq!(f.focus, 2);
-        assert_eq!(f.error, "database name is required");
+        assert_eq!(f.error.as_deref(), Some("database name is required"));
     }
 
     #[test]
@@ -1273,7 +1279,7 @@ mod tests {
     fn the_wizard_starts_on_the_first_provider() {
         let w = Wizard::new(None);
         assert_eq!(w.provider.cursor, 0);
-        assert_eq!(w.page(), (0, 0));
+        assert_eq!(w.page(), Page::Provider);
         let mut w = Wizard::new(None);
         w.update(key(KeyCode::Down));
         assert_eq!(w.provider.cursor, 1);
@@ -1300,7 +1306,7 @@ mod tests {
             values(&w),
             ["localhost", "5432", "", "postgres", "postgres", ""]
         );
-        assert_eq!(w.page(), (2, 0));
+        assert_eq!(w.page(), Page::Form);
     }
 
     #[test]
@@ -1320,9 +1326,9 @@ mod tests {
             w.update(key(KeyCode::Enter)),
             Some(Effect::Test(Box::new(defaults("testdb"))))
         );
-        assert_eq!(w.page(), (3, 1));
+        assert_eq!(w.page(), Page::Testing);
         w.tested(Ok("PostgreSQL 16.1".into()));
-        assert_eq!(w.page(), (3, 2));
+        assert_eq!(w.page(), Page::Passed);
         assert_eq!(
             w.update(key(KeyCode::Enter)),
             Some(Effect::Done(Done::Finished(Box::new(defaults("testdb")))))
@@ -1351,8 +1357,8 @@ mod tests {
         assert_eq!(local_with_database(&mut w, ""), None);
         let f = w.form.as_ref().unwrap();
         assert_eq!(
-            (f.focus, f.error.as_str()),
-            (2, "database name is required")
+            (f.focus, f.error.as_deref()),
+            (2, Some("database name is required"))
         );
         let view = text(&f.lines());
         let (err, maint) = (
@@ -1361,7 +1367,7 @@ mod tests {
         );
         assert!(err < maint, "{view}");
         w.update(key(KeyCode::Char('x')));
-        assert_eq!(w.form.as_ref().unwrap().error, "");
+        assert_eq!(w.form.as_ref().unwrap().error, None);
     }
 
     #[test]
@@ -1381,7 +1387,7 @@ mod tests {
             Some(Effect::Test(_))
         ));
         w.tested(Err(TestError::Connect(Error::connection("refused"))));
-        assert_eq!(w.page(), (3, 3));
+        assert_eq!(w.page(), Page::Failed);
         assert!(
             text(&test_lines(
                 &defaults("trialb"),
@@ -1390,7 +1396,7 @@ mod tests {
             .contains("✗ Connection failed")
         );
         assert_eq!(w.update(key(KeyCode::Esc)), None);
-        assert_eq!(w.page(), (2, 0));
+        assert_eq!(w.page(), Page::Form);
         assert_eq!(values(&w), before);
         assert_eq!(focus(&w), 5);
     }
@@ -1407,7 +1413,7 @@ mod tests {
             w.update(key(KeyCode::Enter)),
             Some(Effect::Test(first.clone()))
         );
-        assert_eq!(w.page(), (3, 1));
+        assert_eq!(w.page(), Page::Testing);
         assert_eq!(w.update(key(KeyCode::Enter)), None);
         w.tested(Ok("PostgreSQL 16.1".into()));
         assert_eq!(
@@ -1441,7 +1447,10 @@ mod tests {
         w.update(key(KeyCode::Enter));
         w.update(key(KeyCode::Enter));
         assert_eq!(w.update(key(KeyCode::Enter)), None);
-        assert_eq!(w.form.as_ref().unwrap().error, "database name is required");
+        assert_eq!(
+            w.form.as_ref().unwrap().error.as_deref(),
+            Some("database name is required")
+        );
         assert_eq!(focus(&w), 1);
         typed(&mut w, "testdb");
         w.update(key(KeyCode::Enter));
@@ -1469,7 +1478,10 @@ mod tests {
             w.update(key(KeyCode::Enter));
         }
         assert_eq!(w.update(key(KeyCode::Enter)), None);
-        assert_eq!(w.form.as_ref().unwrap().error, "host is required");
+        assert_eq!(
+            w.form.as_ref().unwrap().error.as_deref(),
+            Some("host is required")
+        );
         assert_eq!(focus(&w), 0);
         typed(&mut w, "mydb.xxx.us-east-1.rds.amazonaws.com");
         w.update(key(KeyCode::Enter));
@@ -1509,8 +1521,8 @@ mod tests {
         w.update(key(KeyCode::Enter));
         assert_eq!(w.update(key(KeyCode::Enter)), None);
         assert_eq!(
-            w.form.as_ref().unwrap().error,
-            "instance connection name is required"
+            w.form.as_ref().unwrap().error.as_deref(),
+            Some("instance connection name is required")
         );
     }
 
@@ -1521,8 +1533,8 @@ mod tests {
         assert_eq!(w.form.as_ref().unwrap().inputs.len(), 1);
         assert_eq!(w.update(key(KeyCode::Enter)), None);
         assert_eq!(
-            w.form.as_ref().unwrap().error,
-            "connection string is required"
+            w.form.as_ref().unwrap().error.as_deref(),
+            Some("connection string is required")
         );
         typed(&mut w, "postgresql://user:pass@localhost:5432/mydb");
         let Some(Effect::Test(s)) = w.update(key(KeyCode::Enter)) else {
@@ -1538,7 +1550,7 @@ mod tests {
         provider(&mut w, 4);
         typed(&mut w, "not-a-valid-connection-string");
         assert_eq!(w.update(key(KeyCode::Enter)), None);
-        assert!(!w.form.as_ref().unwrap().error.is_empty());
+        assert!(w.form.as_ref().unwrap().error.is_some());
         assert!(w.test.is_none());
     }
 
@@ -1551,8 +1563,10 @@ mod tests {
             "postgresql://user:pa%ssword-SECRET@localhost:5432/db",
         );
         assert_eq!(w.update(key(KeyCode::Enter)), None);
-        let error = &w.form.as_ref().unwrap().error;
-        assert_eq!(error, "invalid percent-encoding in connection string");
+        assert_eq!(
+            w.form.as_ref().unwrap().error.as_deref(),
+            Some("invalid percent-encoding in connection string")
+        );
     }
 
     #[test]
@@ -1580,7 +1594,7 @@ mod tests {
     fn q_is_not_a_key_and_the_footer_does_not_offer_it() {
         let mut w = Wizard::new(None);
         assert_eq!(w.update(key(KeyCode::Char('q'))), None);
-        assert_eq!(w.page(), (0, 0));
+        assert_eq!(w.page(), Page::Provider);
         assert!(
             !w.provider
                 .view(TITLE)

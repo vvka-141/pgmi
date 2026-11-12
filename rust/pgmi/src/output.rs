@@ -148,7 +148,8 @@ impl Reporter {
         self.line(&text);
     }
 
-    pub(crate) fn summary(&self, ok: bool, text: &str) {
+    pub(crate) fn summary(&self, summary: &Summary) {
+        let ok = matches!(summary, Summary::Done(_));
         let (word, open, close) = match (ok, self.fancy, self.color) {
             (true, true, true) => ("✓", "\x1b[32m", "\x1b[0m"),
             (true, true, false) => ("✓", "", ""),
@@ -157,7 +158,22 @@ impl Reporter {
             (false, true, false) => ("✗", "", ""),
             (false, false, _) => ("FAILED", "", ""),
         };
-        self.line(&format!("{open}{word}{close} {text}"));
+        self.line(&format!("{open}{word}{close} {}", summary.text()));
+    }
+}
+
+/// The last line of a deploy: what it did, or how far it got.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Summary {
+    Done(String),
+    Failed(String),
+}
+
+impl Summary {
+    pub(crate) fn text(&self) -> &str {
+        match self {
+            Summary::Done(t) | Summary::Failed(t) => t,
+        }
     }
 }
 
@@ -282,7 +298,12 @@ mod tests {
             (true, true, false, "\x1b[31m✗\x1b[0m app: done\n"),
         ] {
             let (r, out) = Captured::reporter(false, fancy, color);
-            r.summary(ok, "app: done");
+            let summary = if ok {
+                Summary::Done("app: done".into())
+            } else {
+                Summary::Failed("app: done".into())
+            };
+            r.summary(&summary);
             assert_eq!(out.text(), want, "fancy={fancy} color={color} ok={ok}");
         }
     }

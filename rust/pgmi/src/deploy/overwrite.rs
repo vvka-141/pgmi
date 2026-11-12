@@ -30,7 +30,7 @@ pub(crate) struct Snapshot {
     acl: Option<Vec<(String, String, bool)>>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Debug, serde::Deserialize)]
 struct RoleSettings {
     role: String,
     options: Vec<String>,
@@ -50,13 +50,50 @@ async fn rows(client: &tokio_postgres::Client, sql: &str, db: &str) -> Result<Ve
         .map_err(|e| sql_error("read the target database", e))
 }
 
-fn get<'a, T: tokio_postgres::types::FromSql<'a>>(r: &'a Row, i: usize) -> Result<T> {
+fn get<'a, T: tokio_postgres::types::FromSql<'a>>(
+    r: &'a Row,
+    i: impl tokio_postgres::row::RowIndex + std::fmt::Display,
+) -> Result<T> {
     r.try_get(i)
         .map_err(|e| sql_error("read the target database", e))
 }
 
-fn text(r: &Row, i: usize) -> Result<String> {
-    Ok(get::<Option<String>>(r, i)?.unwrap_or_default())
+fn text(r: &Row, column: &str) -> Result<String> {
+    Ok(get::<Option<String>>(r, column)?.unwrap_or_default())
+}
+
+/// How a database stores and sorts text, as `CREATE DATABASE` takes it.
+#[derive(Debug, PartialEq, Eq)]
+struct Locale {
+    encoding: String,
+    collate: String,
+    ctype: String,
+    provider: String,
+    locale: String,
+    icu_rules: String,
+}
+
+impl Locale {
+    fn read(r: &Row, prefix: &str) -> Result<Self> {
+        let column = |name: &str| text(r, &format!("{prefix}{name}"));
+        Ok(Locale {
+            encoding: column("encoding")?,
+            collate: column("lc_collate")?,
+            ctype: column("lc_ctype")?,
+            provider: column("provider")?,
+            locale: column("locale")?,
+            icu_rules: column("icu_rules")?,
+        })
+    }
+}
+
+fn role_settings(json: Option<String>, db: &str) -> Result<Vec<RoleSettings>> {
+    let unreadable = || {
+        Error::general(format!(
+            "--overwrite could not read the role settings of \"{db}\"; nothing was dropped"
+        ))
+    };
+    serde_json::from_str(&json.ok_or_else(unreadable)?).map_err(|e| unreadable().with_source(e))
 }
 
 fn first<T: for<'a> tokio_postgres::types::FromSql<'a>>(rows: &[Row]) -> Result<Option<T>> {
@@ -135,21 +172,22 @@ pub(crate) async fn snapshot(maintenance: &Session, db: &str) -> Result<Option<S
 }
 
 async fn capture(c: &tokio_postgres::Client, r: &Row, db: &str) -> Result<Snapshot> {
-    let own: Vec<String> = (0..6).map(|i| text(r, i)).collect::<Result<_>>()?;
-    let template: Vec<String> = (10..16).map(|i| text(r, i)).collect::<Result<_>>()?;
-    let role_settings = first::<String>(
-        &rows(
-            c,
-            &format!(
-                "SELECT v::text FROM ({}) AS q(v)",
-                manager_sql("role_settings")?
-            ),
-            db,
-        )
-        .await?,
-    )?
-    .and_then(|v| serde_json::from_str(&v).ok())
-    .unwrap_or_default();
+    let own = Locale::read(r, "")?;
+    let template = Locale::read(r, "template_")?;
+    let role_settings = role_settings(
+        first::<String>(
+            &rows(
+                c,
+                &format!(
+                    "SELECT v::text FROM ({}) AS q(v)",
+                    manager_sql("role_settings")?
+                ),
+                db,
+            )
+            .await?,
+        )?,
+        db,
+    )?;
     let acl_rows = rows(c, manager_sql("acl")?, db).await?;
     let acl = match acl_rows.first() {
         Some(r) if get::<bool>(r, 0)? => {
@@ -169,10 +207,10 @@ async fn capture(c: &tokio_postgres::Client, r: &Row, db: &str) -> Result<Snapsh
     };
     Ok(Snapshot {
         locale: (own != template).then(|| locale_clause(&own)),
-        owner: text(r, 6)?,
-        connlimit: get(r, 7)?,
-        settings: get(r, 8)?,
-        comment: get(r, 9)?,
+        owner: text(r, "owner")?,
+        connlimit: get(r, "connlimit")?,
+        settings: get(r, "settings")?,
+        comment: get(r, "comment")?,
         role_settings,
         acl,
     })
@@ -182,26 +220,29 @@ fn literal(s: &str) -> String {
     format!("E'{}'", s.replace('\\', "\\\\").replace('\'', "''"))
 }
 
-fn locale_clause(own: &[String]) -> String {
-    let field = |i: usize| own.get(i).map(String::as_str).unwrap_or_default();
+fn locale_clause(own: &Locale) -> String {
     let mut out = format!(
         " TEMPLATE template0 ENCODING {} LC_COLLATE {} LC_CTYPE {}",
-        literal(field(0)),
-        literal(field(1)),
-        literal(field(2))
+        literal(&own.encoding),
+        literal(&own.collate),
+        literal(&own.ctype)
     );
-    match field(3) {
+    match own.provider.as_str() {
         "i" => {
-            let _ = write!(out, " LOCALE_PROVIDER icu ICU_LOCALE {}", literal(field(4)));
-            if !field(5).is_empty() {
-                let _ = write!(out, " ICU_RULES {}", literal(field(5)));
+            let _ = write!(
+                out,
+                " LOCALE_PROVIDER icu ICU_LOCALE {}",
+                literal(&own.locale)
+            );
+            if !own.icu_rules.is_empty() {
+                let _ = write!(out, " ICU_RULES {}", literal(&own.icu_rules));
             }
         }
         "b" => {
             let _ = write!(
                 out,
                 " LOCALE_PROVIDER builtin BUILTIN_LOCALE {}",
-                literal(field(4))
+                literal(&own.locale)
             );
         }
         _ => out.push_str(" LOCALE_PROVIDER libc"),
@@ -402,9 +443,14 @@ mod tests {
 
     #[test]
     fn create_keeps_locale_owner_and_limit() {
-        let own: Vec<String> = ["UTF8", "C", "C", "i", "de-DE", "&a < b"]
-            .map(String::from)
-            .to_vec();
+        let own = Locale {
+            encoding: "UTF8".into(),
+            collate: "C".into(),
+            ctype: "C".into(),
+            provider: "i".into(),
+            locale: "de-DE".into(),
+            icu_rules: "&a < b".into(),
+        };
         let s = Snapshot {
             locale: Some(locale_clause(&own)),
             owner: "o\"w".into(),
@@ -419,6 +465,26 @@ mod tests {
             "CREATE DATABASE \"d\" TEMPLATE template0 ENCODING E'UTF8' LC_COLLATE E'C' LC_CTYPE E'C' LOCALE_PROVIDER icu ICU_LOCALE E'de-DE' ICU_RULES E'&a < b' OWNER \"o\"\"w\" CONNECTION LIMIT 3"
         );
         assert_eq!(create_sql("d", None), "CREATE DATABASE \"d\"");
+    }
+
+    #[test]
+    fn role_settings_that_do_not_decode_stop_the_overwrite() {
+        let ok = role_settings(Some(r#"[{"role":"r","options":["a=b"]}]"#.into()), "d").unwrap();
+        assert_eq!(
+            (ok[0].role.as_str(), ok[0].options.as_slice()),
+            ("r", &["a=b".to_string()][..])
+        );
+        for bad in [Some("{\"role\":1}".to_string()), None] {
+            let e = role_settings(bad, "d").unwrap_err();
+            assert_eq!(e.kind(), Kind::General);
+            assert!(
+                e.text().starts_with(
+                    "--overwrite could not read the role settings of \"d\"; nothing was dropped"
+                ),
+                "{}",
+                e.text()
+            );
+        }
     }
 
     #[test]

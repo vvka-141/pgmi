@@ -48,20 +48,20 @@ fn scalar(v: &str) -> String {
     }
 }
 
-pub(crate) fn set_connection(text: &str, values: &[(&str, Option<String>)]) -> String {
+pub(crate) fn set_connection(text: &str, values: &[(&str, Option<String>)]) -> Result<String> {
     if text.trim().is_empty() {
-        return fresh(values);
+        return Ok(fresh(values));
     }
-    let Some(root) = Document::from_str(text).ok().and_then(|d| {
-        let m = d.as_mapping()?;
-        Some((d, m))
-    }) else {
-        return fresh(values);
+    let doc = Document::from_str(text)
+        .map_err(|e| Error::config("pgmi.yaml could not be edited").with_source(e))?;
+    let Some(root) = doc.as_mapping() else {
+        return Err(Error::config(
+            "pgmi.yaml could not be edited: its top level is not a mapping",
+        ));
     };
-    let (doc, root) = root;
     let Some(section) = root.get_mapping("connection") else {
         root.remove("connection");
-        return format!("{}{}", fresh(values), doc);
+        return Ok(format!("{}{}", fresh(values), doc));
     };
     let mut added = Vec::new();
     for key in KEYS {
@@ -85,9 +85,10 @@ pub(crate) fn set_connection(text: &str, values: &[(&str, Option<String>)]) -> S
         }
     }
     let out = doc.to_string();
-    out.split_inclusive('\n')
+    Ok(out
+        .split_inclusive('\n')
         .filter(|line| !added.iter().any(|k| placeholder(line, k)))
-        .collect()
+        .collect())
 }
 
 fn placeholder(line: &str, key: &str) -> bool {
@@ -178,7 +179,8 @@ mod tests {
         let out = set_connection(
             "# Team notes\nparams:\n  env: dev   # inline note\n",
             &local(),
-        );
+        )
+        .unwrap();
         assert!(out.contains("# Team notes"), "{out}");
         assert!(out.contains("env: dev   # inline note"), "{out}");
         assert!(out.contains("host: 127.0.0.1\n"), "{out}");
@@ -194,7 +196,7 @@ mod tests {
         let template = std::str::from_utf8(pgmi_shared::file("templates/basic/pgmi.yaml").unwrap())
             .unwrap()
             .to_string();
-        let out = set_connection(&template, &local());
+        let out = set_connection(&template, &local()).unwrap();
         assert!(out.contains("# pgmi project configuration"), "{out}");
         assert!(out.contains("# Target database"), "{out}");
         assert!(!out.contains("# username:"), "{out}");
@@ -211,6 +213,13 @@ mod tests {
     }
 
     #[test]
+    fn a_top_level_that_is_not_a_mapping_is_refused_not_replaced() {
+        let e = set_connection("- a\n- b\n", &local()).unwrap_err();
+        assert_eq!(e.kind(), crate::error::Kind::Config);
+        assert!(e.text().contains("not a mapping"), "{}", e.text());
+    }
+
+    #[test]
     fn removes_keys_left_empty() {
         let out = set_connection(
             "connection:\n  host: old\n  aws_region: eu-west-1\n  database: x\n",
@@ -218,7 +227,8 @@ mod tests {
                 ("google_instance", Some("p:r:i".into())),
                 ("database", Some("d".into())),
             ],
-        );
+        )
+        .unwrap();
         let cfg = ProjectConfig::parse(&out).unwrap();
         assert_eq!(cfg.connection.host, None);
         assert_eq!(cfg.connection.aws_region, None);
@@ -235,7 +245,7 @@ mod tests {
             ("sslmode", Some("require".into())),
         ];
         for text in ["", "params:\n  a: b\n", "connection: ~\ntimeout: 1m\n"] {
-            let out = set_connection(text, &values);
+            let out = set_connection(text, &values).unwrap();
             let cfg = ProjectConfig::parse(&out).unwrap_or_else(|e| panic!("{out}\n{}", e.text()));
             assert_eq!(cfg.connection.host.as_deref(), Some("my host:1"), "{out}");
             assert_eq!(cfg.connection.database.as_deref(), Some("it's"), "{out}");

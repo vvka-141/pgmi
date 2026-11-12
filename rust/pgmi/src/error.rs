@@ -67,6 +67,7 @@ pub(crate) struct Error {
     message: String,
     source: Option<Box<dyn std::error::Error + Send + Sync>>,
     sql: Option<Box<SqlDiagnostics>>,
+    secrets: Vec<String>,
 }
 
 impl Error {
@@ -76,6 +77,7 @@ impl Error {
             message: message.into(),
             source: None,
             sql: None,
+            secrets: Vec::new(),
         }
     }
 
@@ -115,11 +117,14 @@ impl Error {
             message: message.into(),
             source: None,
             sql: self.sql,
+            secrets: self.secrets,
         }
     }
 
+    /// Hides `secrets` wherever the error is rendered: the message and every
+    /// source in the chain.
     pub(crate) fn redact(mut self, secrets: &[String]) -> Self {
-        self.message = redact(&self.message, secrets);
+        self.secrets.extend_from_slice(secrets);
         self
     }
 
@@ -136,10 +141,11 @@ impl Error {
     }
 
     pub(crate) fn text(&self) -> String {
-        match &self.source {
+        let text = match &self.source {
             Some(s) => format!("{}: {}", self.message, chain(s.as_ref())),
             None => self.message.clone(),
-        }
+        };
+        redact(&text, &self.secrets)
     }
 }
 
@@ -206,16 +212,17 @@ pub(crate) fn redact(text: &str, secrets: &[String]) -> String {
 }
 
 /// Joins an error and its sources with `: `, leaving out a source whose text
-/// an earlier one already contains.
+/// an earlier one already contains. An [`Error`] renders its own sources,
+/// redacted, so the walk stops there.
 pub(crate) fn chain(e: &(dyn std::error::Error + 'static)) -> String {
     let mut parts = vec![e.to_string()];
-    let mut cur = e.source();
+    let mut cur = e.source().filter(|_| !e.is::<Error>());
     while let Some(c) = cur {
         let t = c.to_string();
         if !parts.iter().any(|p| p.contains(&t)) {
             parts.push(t);
         }
-        cur = c.source();
+        cur = c.source().filter(|_| !c.is::<Error>());
     }
     parts.join(": ")
 }
@@ -302,6 +309,18 @@ mod tests {
         let e = Error::connection("connect").with_source(std::io::Error::other("refused"));
         assert_eq!(e.text(), "connect: refused");
         assert_eq!(e.exit_code(), 11);
+    }
+
+    #[test]
+    fn a_redacted_error_hides_the_secret_in_its_sources_too() {
+        let inner = Error::config("bad value pw=hunter2");
+        let e = Error::connection("cannot connect")
+            .with_source(inner)
+            .redact(&["hunter2".into()]);
+        assert_eq!(e.text(), "cannot connect: bad value pw=***");
+        assert_eq!(e.to_string(), e.text());
+        let outer = Error::general("deploy failed").with_source(e);
+        assert!(!outer.text().contains("hunter2"), "{}", outer.text());
     }
 
     #[test]

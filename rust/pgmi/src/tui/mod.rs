@@ -22,12 +22,13 @@ use crate::error::{Error, Result};
 /// or a result out.
 pub(crate) trait Steps {
     type Done;
+    type Page: PartialEq + Copy;
 
     fn update(&mut self, key: KeyEvent) -> Option<connection::Effect<Self::Done>>;
     fn tested(&mut self, result: connection::TestResult);
     fn tick(&mut self);
     /// Changes whenever the screen must be cleared before the next draw.
-    fn screen(&self) -> (u8, u8, u8);
+    fn page(&self) -> Self::Page;
     fn view(&self) -> Paragraph<'static>;
 }
 
@@ -38,10 +39,10 @@ pub(crate) fn drive<S: Steps>(
 ) -> Result<S::Done> {
     let mut screen = Screen::open()?;
     let (tx, rx) = mpsc::channel();
-    let mut page = steps.screen();
+    let mut page = steps.page();
     loop {
         screen
-            .0
+            .terminal
             .draw(|f| f.render_widget(steps.view(), f.area()))
             .map_err(io)?;
         if let Ok(result) = rx.try_recv() {
@@ -63,8 +64,8 @@ pub(crate) fn drive<S: Steps>(
         } else {
             steps.tick();
         }
-        if steps.screen() != page {
-            page = steps.screen();
+        if steps.page() != page {
+            page = steps.page();
             screen.reset()?;
         }
     }
@@ -90,7 +91,10 @@ pub(crate) fn io(e: std::io::Error) -> Error {
     Error::general("terminal").with_source(e)
 }
 
-pub(crate) struct Screen(pub Terminal<CrosstermBackend<Stdout>>);
+pub(crate) struct Screen {
+    terminal: Terminal<CrosstermBackend<Stdout>>,
+    _restore: Restore,
+}
 
 thread_local! {
     static OPEN: Cell<bool> = const { Cell::new(false) };
@@ -112,34 +116,50 @@ fn restoring(previous: Hook, leave: impl Fn() + Sync + Send + 'static) -> Hook {
     })
 }
 
+/// Raw mode is on: dropping this leaves the alternate screen and raw mode,
+/// unless the panic hook already did.
+#[derive(Debug)]
+struct Restore(fn());
+
+impl Drop for Restore {
+    fn drop(&mut self) {
+        if OPEN.replace(false) {
+            (self.0)();
+        }
+    }
+}
+
+fn opened<T>(
+    enter: impl FnOnce() -> std::io::Result<()>,
+    leave: fn(),
+    show: impl FnOnce() -> std::io::Result<T>,
+) -> Result<(T, Restore)> {
+    enter().map_err(io)?;
+    OPEN.set(true);
+    let restore = Restore(leave);
+    let shown = show().map_err(io)?;
+    Ok((shown, restore))
+}
+
 impl Screen {
     pub(crate) fn open() -> Result<Self> {
         static HOOK: Once = Once::new();
         HOOK.call_once(|| std::panic::set_hook(restoring(std::panic::take_hook(), leave)));
-        terminal::enable_raw_mode().map_err(io)?;
-        let mut out = std::io::stdout();
-        if let Err(e) = execute!(out, EnterAlternateScreen, cursor::Hide) {
-            let _ = terminal::disable_raw_mode();
-            return Err(io(e));
-        }
-        OPEN.set(true);
-        Terminal::new(CrosstermBackend::new(out))
-            .map(Self)
-            .map_err(io)
+        let (terminal, restore) = opened(terminal::enable_raw_mode, leave, || {
+            let mut out = std::io::stdout();
+            execute!(out, EnterAlternateScreen, cursor::Hide)?;
+            Terminal::new(CrosstermBackend::new(out))
+        })?;
+        Ok(Screen {
+            terminal,
+            _restore: restore,
+        })
     }
 
     pub(crate) fn reset(&mut self) -> Result<()> {
         execute!(std::io::stdout(), terminal::Clear(terminal::ClearType::All)).map_err(io)?;
-        self.0 = Terminal::new(CrosstermBackend::new(std::io::stdout())).map_err(io)?;
+        self.terminal = Terminal::new(CrosstermBackend::new(std::io::stdout())).map_err(io)?;
         Ok(())
-    }
-}
-
-impl Drop for Screen {
-    fn drop(&mut self) {
-        if OPEN.replace(false) {
-            leave();
-        }
     }
 }
 
@@ -148,6 +168,31 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
+
+    #[test]
+    fn a_screen_that_fails_to_start_leaves_raw_mode() {
+        thread_local! {
+            static LEFT: Cell<u8> = const { Cell::new(0) };
+        }
+        fn left() {
+            LEFT.set(LEFT.get() + 1);
+        }
+        let failed = opened(
+            || Ok(()),
+            left,
+            || -> std::io::Result<()> { Err(std::io::Error::other("no size")) },
+        );
+        assert_eq!(failed.unwrap_err().kind(), crate::error::Kind::General);
+        assert_eq!(LEFT.get(), 1);
+        assert!(!OPEN.get());
+        let refused = opened(|| Err(std::io::Error::other("not a tty")), left, || Ok(()));
+        assert!(refused.is_err());
+        assert_eq!(LEFT.get(), 1);
+        let ((), restore) = opened(|| Ok(()), left, || Ok(())).unwrap();
+        assert_eq!(LEFT.get(), 1);
+        drop(restore);
+        assert_eq!(LEFT.get(), 2);
+    }
 
     #[test]
     fn a_panic_leaves_the_screen_before_its_message_prints() {

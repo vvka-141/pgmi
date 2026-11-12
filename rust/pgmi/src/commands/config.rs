@@ -30,13 +30,7 @@ pub(crate) fn run(a: &ConfigArgs, env: &Env, runtime: &tokio::runtime::Handle) -
                 initial = Some(cfg.connection);
             }
             Err(e) => {
-                let text = e.text();
-                let reason = text
-                    .strip_prefix("failed to load pgmi.yaml: ")
-                    .unwrap_or(&text);
-                stderr(&format!(
-                    "pgmi.yaml exists but could not be parsed: {reason}\n"
-                ));
+                stderr(&format!("{}\n", unparseable(&e)));
                 if !crate::tui::confirm("Overwrite the unparseable pgmi.yaml?") {
                     return Err(stopped("config", false));
                 }
@@ -63,11 +57,25 @@ pub(crate) fn stopped(what: &str, interrupted: bool) -> Error {
     }
 }
 
+fn unparseable(e: &Error) -> String {
+    let text = e.text();
+    let reason = text
+        .strip_prefix("failed to load pgmi.yaml: ")
+        .unwrap_or(&text);
+    format!("pgmi.yaml exists but could not be parsed: {reason}")
+}
+
+/// Writes the connection settings into `target/pgmi.yaml`, keeping the rest
+/// of an existing file. An existing file that does not parse is replaced
+/// only when `replace` says the user agreed to it; otherwise it is refused.
 pub(crate) fn save(target: &Path, s: &Settings, replace: bool) -> Result<()> {
     let path = target.join("pgmi.yaml");
     let values = s.yaml();
     let text = match std::fs::read_to_string(&path) {
-        Ok(existing) if !replace => edit::set_connection(&existing, &values),
+        Ok(existing) if !replace => {
+            ProjectConfig::parse(&existing).map_err(|e| Error::config(unparseable(&e)))?;
+            edit::set_connection(&existing, &values)?
+        }
         _ => edit::fresh(&values),
     };
     edit::write_atomic(&path, &text)
@@ -133,6 +141,26 @@ mod tests {
             password: Some("trial".into()),
             ..Settings::default()
         }
+    }
+
+    #[test]
+    fn save_refuses_an_unparseable_pgmi_yaml_unless_replacing_was_confirmed() {
+        let dir = TempDir::new("config-unparseable");
+        let path = dir.join("pgmi.yaml");
+        let broken = "params:\n  env: dev\nconnection: [\n";
+        std::fs::write(&path, broken).unwrap();
+        let e = save(dir.path(), &settings("appdb", "postgres"), false).unwrap_err();
+        assert_eq!(e.kind(), Kind::Config);
+        assert!(
+            e.text()
+                .starts_with("pgmi.yaml exists but could not be parsed: "),
+            "{}",
+            e.text()
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), broken);
+        save(dir.path(), &settings("appdb", "postgres"), true).unwrap();
+        let cfg = ProjectConfig::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(cfg.connection.database.as_deref(), Some("appdb"));
     }
 
     #[test]

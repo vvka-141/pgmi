@@ -29,7 +29,7 @@ use crate::conn::resolve::{self, Source, Spec};
 use crate::env::Env;
 use crate::error::redact;
 use crate::error::{Error, Kind, Result, SqlDiagnostics};
-use crate::output::{Notice, NoticeLog, Reporter, seconds};
+use crate::output::{Notice, NoticeLog, Reporter, Summary, seconds};
 use crate::project::{metadata, walk};
 use crate::vfs::OsFs;
 
@@ -1049,8 +1049,8 @@ fn finish(ctx: &Context, run: &Run, result: &Result<()>, reporter: &Reporter) ->
         Err(e) => e.exit_code(),
     };
     let secrets = run.secrets();
-    if let Some((ok, text)) = summary(st, result, elapsed) {
-        reporter.summary(ok, &text);
+    if let Some(s) = summary(st, result, elapsed) {
+        reporter.summary(&s);
     }
     let note = result.as_ref().err().and_then(|e| st.connection_note(e));
     if let Err(e) = result {
@@ -1073,7 +1073,7 @@ fn finish(ctx: &Context, run: &Run, result: &Result<()>, reporter: &Reporter) ->
     code
 }
 
-fn summary(p: &Progress, result: &Result<()>, elapsed: Duration) -> Option<(bool, String)> {
+fn summary(p: &Progress, result: &Result<()>, elapsed: Duration) -> Option<Summary> {
     let db = p.database()?;
     if result.is_ok() {
         let (files, ignored) = p
@@ -1084,13 +1084,10 @@ fn summary(p: &Progress, result: &Result<()>, elapsed: Duration) -> Option<(bool
             0 => String::new(),
             n => format!(", {n} paths ignored"),
         };
-        return Some((
-            true,
-            format!(
-                "{db}: {files} files loaded{ignored} in {}",
-                seconds(elapsed)
-            ),
-        ));
+        return Some(Summary::Done(format!(
+            "{db}: {files} files loaded{ignored} in {}",
+            seconds(elapsed)
+        )));
     }
     let mut text = format!("{db}: failed after {}", seconds(elapsed));
     let committed = p.execution.as_ref().map_or(0, |x| x.committed);
@@ -1119,7 +1116,7 @@ fn summary(p: &Progress, result: &Result<()>, elapsed: Duration) -> Option<(bool
     if !notes.is_empty() {
         let _ = write!(text, " — {}", notes.join("; "));
     }
-    Some((false, text))
+    Some(Summary::Failed(text))
 }
 
 #[cfg(test)]
@@ -1319,7 +1316,7 @@ mod tests {
         }
     }
 
-    fn summary_of(p: &Progress, result: &Result<()>) -> Option<(bool, String)> {
+    fn summary_of(p: &Progress, result: &Result<()>) -> Option<Summary> {
         summary(p, result, Duration::from_millis(1234))
     }
 
@@ -1327,7 +1324,7 @@ mod tests {
     fn the_summary_counts_files_and_ignored_paths() {
         assert_eq!(
             summary_of(&loaded("app"), &Ok(())),
-            Some((true, "app: 3 files loaded in 1.23s".into()))
+            Some(Summary::Done("app: 3 files loaded in 1.23s".into()))
         );
         let ignored = |path: &str| walk::Ignored {
             path: path.into(),
@@ -1341,7 +1338,7 @@ mod tests {
             ..loaded("app")
         };
         assert_eq!(
-            summary_of(&p, &Ok(())).unwrap().1,
+            summary_of(&p, &Ok(())).unwrap().text(),
             "app: 3 files loaded, 2 paths ignored in 1.23s"
         );
         assert_eq!(summary_of(&Progress::default(), &Ok(())), None);
@@ -1356,14 +1353,16 @@ mod tests {
         };
         assert_eq!(
             summary_of(&atomic, &sql),
-            Some((false, "app: failed after 1.23s — nothing committed".into()))
+            Some(Summary::Failed(
+                "app: failed after 1.23s — nothing committed".into()
+            ))
         );
         for stopped in [
             Error::new(Kind::Timeout, "the deploy exceeded --timeout 2s"),
             Error::new(Kind::Interrupted, "interrupted"),
         ] {
             assert_eq!(
-                summary_of(&atomic, &Err(stopped)).unwrap().1,
+                summary_of(&atomic, &Err(stopped)).unwrap().text(),
                 "app: failed after 1.23s — nothing committed"
             );
         }
@@ -1372,7 +1371,7 @@ mod tests {
             ..loaded("app")
         };
         assert_eq!(
-            summary_of(&psql, &sql).unwrap().1,
+            summary_of(&psql, &sql).unwrap().text(),
             "app: failed after 1.23s (unit 3 of 3 failed; 2 earlier unit(s) already committed)"
         );
         let created = Progress {
@@ -1382,7 +1381,7 @@ mod tests {
         assert_eq!(
             summary_of(&created, &Err(Error::connection("refused")))
                 .unwrap()
-                .1,
+                .text(),
             "app: failed after 1.23s — created database \"app\", left empty"
         );
         let recreated = Progress {
@@ -1395,7 +1394,7 @@ mod tests {
                 &Err(Error::new(Kind::Interrupted, "interrupted"))
             )
             .unwrap()
-            .1,
+            .text(),
             "app: failed after 1.23s — recreated database \"app\", left empty"
         );
         let created_then_sql = Progress {
@@ -1403,7 +1402,7 @@ mod tests {
             ..created
         };
         assert_eq!(
-            summary_of(&created_then_sql, &sql).unwrap().1,
+            summary_of(&created_then_sql, &sql).unwrap().text(),
             "app: failed after 1.23s — nothing committed; created database \"app\", left empty"
         );
     }
