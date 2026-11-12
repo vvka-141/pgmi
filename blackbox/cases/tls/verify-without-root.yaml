@@ -1,4 +1,4 @@
-description: verify-ca and verify-full with no sslrootcert and no ~/.postgresql/root.crt check the server against the system trust store, which SSL_CERT_FILE replaces (as pgx does; Azure relies on it)
+description: verify-ca and verify-full with no sslrootcert and no ~/.postgresql/root.crt check the server against the system trust store, which SSL_CERT_FILE replaces (as pgx does; Azure relies on it). Against the system store Rust's verify-ca also checks the host name, so 127.0.0.1 with a localhost certificate is refused (Go accepts it; contract "Behaviour changes in 0.20", PGMI-923); with an explicit root file verify-ca checks no name
 servers: [tls]
 project:
   files:
@@ -12,3 +12,10 @@ steps:
     expect: {exit: 0}
   - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@localhost:{tls_port}/postgres?sslmode=verify-full", -d, "{db}"]
     expect: {exit: 11, stderr: ["unknown authority|refused"]}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=verify-ca", -d, "{db}"]
+    env: {SSL_CERT_FILE: "{ca}"}
+    expect:
+      exit: 0
+      rust: {exit: 11, stderr: ["not valid for|NotValidForName|certificate"]}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=verify-ca&sslrootcert={ca}", -d, "{db}"]
+    expect: {exit: 0}

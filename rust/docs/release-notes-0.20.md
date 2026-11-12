@@ -47,6 +47,10 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   and Node get thin wrappers over `deploy --json` (PGMI-850).
 - **Google Cloud SQL** goes through pgmi's own dialer, and a transient
   connection failure is retried like on every other route.
+- **`sslmode=verify-ca` without a root file checks the host name.** When no
+  `sslrootcert` is given, the system trust store vouches for the server, so
+  pgmi also checks the server's name, as `verify-full` does. With an
+  explicit root file `verify-ca` is unchanged.
 - **Whole-deployment retry inside `--timeout`.** A transient failure (a lost
   connection, a server restart, too many connections, a deadlock or
   serialization failure, a lock timeout, a failover to a standby, a sign-in

@@ -92,7 +92,7 @@ pub(crate) fn require_cpu() -> Result<()> {
     )))
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Names {
     Ignore,
     Check,
@@ -323,6 +323,17 @@ fn check_key_mode(_: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Which names the server certificate must carry. `verify-ca` against the
+/// system trust store also checks the host name: any public CA would
+/// otherwise vouch for any server.
+fn names_for(mode: SslMode, system_store: bool) -> Names {
+    match mode {
+        SslMode::VerifyFull => Names::Check,
+        SslMode::VerifyCa if system_store => Names::Check,
+        _ => Names::Ignore,
+    }
+}
+
 pub(crate) fn config(spec: &Spec) -> Result<Arc<ClientConfig>> {
     config_with(spec, || rustls_native_certs::load_native_certs().certs)
 }
@@ -334,6 +345,7 @@ fn config_with(
     let provider = provider();
     let mode = effective_mode(spec);
     let verify = matches!(mode, SslMode::VerifyCa | SslMode::VerifyFull);
+    let system_store = verify && root_path(spec).is_none();
     let chain = if verify {
         let mut roots = RootCertStore::empty();
         match root_path(spec).as_deref() {
@@ -363,14 +375,7 @@ fn config_with(
     } else {
         None
     };
-    let verifier = Verifier::new(
-        chain,
-        if mode == SslMode::VerifyFull {
-            Names::Check
-        } else {
-            Names::Ignore
-        },
-    );
+    let verifier = Verifier::new(chain, names_for(mode, system_store));
     let builder = ClientConfig::builder_with_provider(provider)
         .with_protocol_versions(&spec.tls_versions)
         .map_err(|e| Error::config(format!("TLS setup: {e}")))?
@@ -628,6 +633,15 @@ mod tests {
         CertificateDer::pem_slice_iter(include_bytes!("cloud/testdata/sp.crt"))
             .collect::<std::result::Result<_, _>>()
             .unwrap()
+    }
+
+    #[test]
+    fn verify_ca_checks_the_host_name_only_when_the_root_is_the_system_store() {
+        assert_eq!(names_for(SslMode::VerifyFull, false), Names::Check);
+        assert_eq!(names_for(SslMode::VerifyFull, true), Names::Check);
+        assert_eq!(names_for(SslMode::VerifyCa, true), Names::Check);
+        assert_eq!(names_for(SslMode::VerifyCa, false), Names::Ignore);
+        assert_eq!(names_for(SslMode::Require, false), Names::Ignore);
     }
 
     #[test]
