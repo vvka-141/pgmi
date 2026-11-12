@@ -1,7 +1,8 @@
 name: Release (Rust)
 
 # The Rust binary's release (record 0018, PGMI-925). Until switch day
-# (PGMI-835) it runs only by hand and only `publish: true` writes anything;
+# (PGMI-835) it runs by hand, or as a dry run when a branch changes the
+# release files; only `publish: true` writes anything;
 # the Go release (release.yml) stays the one a v* tag triggers. Switch day
 # moves the tag trigger here.
 #
@@ -11,6 +12,9 @@ name: Release (Rust)
 # rust/release/package.sh writes the archives under the Go release's names,
 # which scripts/install.sh and install.ps1 expect.
 on:
+  push:
+    branches-ignore: [main]
+    paths: ['.github/workflows/release-rust.yml', 'rust/release/**']
   workflow_dispatch:
     inputs:
       tag:
@@ -41,7 +45,11 @@ jobs:
 
       - id: version
         name: Tag equals the Cargo version
-        run: echo "version=$(rust/release/check-version.sh "$TAG")" >> "$GITHUB_OUTPUT"
+        run: |
+          if [ -z "$TAG" ]; then
+            TAG="v$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version = "\(.*\)"$/\1/p}' Cargo.toml)"
+          fi
+          echo "version=$(rust/release/check-version.sh "$TAG")" >> "$GITHUB_OUTPUT"
 
       - name: Commit is on main
         if: inputs.publish
