@@ -166,9 +166,12 @@ which rolls back. End of input exits 0. Full reference: `docs/CLI.md`
 "pgmi serve".
 
 Once input ends or SIGINT/SIGTERM arrives, serve keeps writing answers as
-long as the client takes them; a write that makes no progress for 2 s ends
+long as the client takes them; a client that takes nothing for 2 s ends
 the session, running calls are cancelled and serve exits 0. A client that
-reads slowly but steadily gets every answer, however long that takes. A failed write to stdout ends the session: running calls are
+reads slowly but steadily gets every answer, each a complete line, however
+long that takes: 8 KB a second through eight 16 KB answers, 800 KB a second
+through one 3.5 MB answer. In the Rust binary a second SIGINT or SIGTERM ends
+serve at once (see "serve quits at a second signal"). A failed write to stdout ends the session: running calls are
 cancelled and nothing more is read (Go stops reading only when an answer
 written by the reader fails, and then waits for the running calls). A failed
 read of stdin or write of stdout exits 1 with `pgmi: error: read request: ...`
@@ -180,7 +183,13 @@ SIGPIPE's default action, so serve dies of the signal (a shell reports 141). Rus
 `an_output_failure_ends_the_session`, `a_failed_read_ends_the_session_with_exit_1`,
 `the_end_of_input_ends_the_session_successfully`,
 `a_slow_steady_reader_gets_every_answer_after_the_input_ends`,
-`a_client_that_never_reads_ends_two_seconds_after_its_input`.
+`a_client_that_never_reads_ends_two_seconds_after_its_input`,
+`a_steady_reader_behind_a_buffering_stdout_gets_a_huge_answer_whole`; Rust
+integration tests over the real binary's pipes (`rust/pgmi/tests/serve_pipes.rs`):
+`a_reader_taking_8_kb_a_second_gets_every_answer_after_the_input_ends`,
+`a_huge_answer_reaches_a_reader_taking_800_kb_a_second_whole`,
+`a_burst_of_3000_requests_with_a_reader_gets_every_answer`,
+`a_client_that_never_reads_ends_about_two_seconds_after_its_input`.
 
 Malformed input, each answered and the session continuing: text that is not
 JSON, including invalid UTF-8 outside a string, is -32700 with a null id;
@@ -225,7 +234,7 @@ deploy's error is `PASSWORD [redacted]` in the text, `message` and `error`.
 A client that reads its answers while it pipelines thousands of requests gets
 every answer in order.
 
-Cases: `serve/session`, `serve/burst`, `serve/deploy-tool`, `serve/cancel`, `serve/malformed`, `serve/protocol-versions`, `serve/deploy-guards`, `serve/deploys-in-sequence`, `serve/concurrent-deploys`, `serve/deploy-timeout`, `serve/deploy-warning-lines`, `serve/deploy-param-key`, `serve/deploy-password-masked`.
+Cases: `serve/session`, `serve/burst`, `serve/slow-reader-many-answers`, `serve/slow-reader-huge-answer`, `serve/deploy-tool`, `serve/cancel`, `serve/malformed`, `serve/protocol-versions`, `serve/deploy-guards`, `serve/deploys-in-sequence`, `serve/concurrent-deploys`, `serve/deploy-timeout`, `serve/deploy-warning-lines`, `serve/deploy-param-key`, `serve/deploy-password-masked`.
 
 ### config
 
@@ -821,13 +830,19 @@ of memory. The Rust binary bounds all three:
   and the session goes on.
 - With 32 tool calls running, another `tools/call` is answered at once with
   `-32000` (`32 tool calls are already running; wait for one to finish`).
-  `ping`, `tools/list` and `notifications/cancelled` are still served. A
-  cancelled call that reads files keeps its place until its thread really
-  ends; `init`, which writes, finishes even when cancelled.
-- When 1024 answers are waiting, serve reads no further request until the
-  client takes one; a client that takes none for 2 s ends the session:
-  running calls are cancelled and serve exits 0 as at the end of input. A
-  client that reads is never dropped, however many requests it pipelines.
+  A call keeps its place until its answer is queued, so finished calls
+  whose answers wait count too. `ping`, `tools/list` and
+  `notifications/cancelled` are still served. A cancelled call that reads
+  files keeps its place until its thread really ends; `init`, which writes,
+  finishes even when cancelled.
+- When 1024 answers are waiting, serve reads no further request, and a
+  finished call does not queue its answer, until the client takes one; a
+  client that takes nothing for 2 s ends the session: running calls are
+  cancelled and serve exits 0 as at the end of input. A client that keeps
+  sending tool calls and never reads is therefore dropped about 2 s after
+  its answers fill the queue, holding at most 1024 answers and 32 calls. A
+  client that reads is never dropped, however many requests it pipelines
+  and however long one answer takes to read.
 
 Cases: none for the limits (Go accepts all three); `serve/burst` pins that a
 reading client is served in full. Rust unit tests
@@ -837,7 +852,26 @@ reading client is served in full. Rust unit tests
 `a_cancelled_blocking_call_stops_waiting_but_keeps_its_slot`,
 `a_cancelled_init_still_writes_the_whole_project`,
 `a_client_that_never_reads_is_dropped_once_its_answers_pile_up`,
-`a_line_over_the_limit_is_dropped_and_counted_once`.
+`a_client_that_keeps_calling_and_never_reads_is_dropped_with_its_calls_bounded`,
+`a_reader_keeps_its_session_while_a_huge_answer_holds_up_a_full_queue`,
+`a_line_over_the_limit_is_dropped_and_counted_once`; Rust integration tests
+`a_client_that_keeps_calling_and_never_reads_is_dropped_with_bounded_memory`
+(RSS stays under 150 MB; it peaked near 32 MB in a release build),
+`a_reader_taking_800_kb_a_second_is_kept_while_a_huge_answer_holds_up_a_full_queue`.
+
+### serve quits at a second signal
+
+Owner-decided 2026-11-12 (fix round 5).
+
+At the first SIGINT or SIGTERM both binaries stop reading, cancel running
+calls and keep writing the answers already made to a client that takes them.
+Go keeps writing until every answer is taken, however slowly, and ignores
+further signals (with input still open it does not exit at all). The Rust
+binary ends at once with exit 130 at a second SIGINT or SIGTERM, as `deploy`
+does; answers not yet written are lost.
+
+Cases: `serve/second-signal`; Rust integration test
+`a_second_signal_ends_serve_at_once_while_it_drains_to_a_slow_reader`.
 
 ### Two metadata elements in one comment are refused
 
@@ -1130,6 +1164,7 @@ release notes take their "Behaviour changes" section from this table.
 | `serve`: a line over 16 MiB | read | newly refused with `-32600`, session goes on | owner 2026-11-11 |
 | `serve`: a `tools/call` while 32 calls run | runs | newly refused with `-32000` | owner 2026-11-11 |
 | `serve`: 1024 answers the client has not read | queued | the session ends | owner 2026-11-11 |
+| `serve`: a second SIGINT or SIGTERM while answers are written | ignored, answers drained, exit 0 | ends at once, exit 130 | owner 2026-11-12 |
 | `serve`: a line holding only `null` | no answer | `-32600` with a null id | owner 2026-11-11 |
 | `serve`: an id holding invalid UTF-8 | echoed as raw bytes (invalid JSON) | echoed with U+FFFD | owner 2026-11-11 |
 | `serve`: a `tools/call` whose id is still running | both run, two answers | second refused with `-32600` | owner 2026-11-11 |

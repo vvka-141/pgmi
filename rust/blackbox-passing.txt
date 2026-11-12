@@ -182,7 +182,10 @@ serve/deploy-warning-lines
 serve/malformed
 serve/null-request
 serve/protocol-versions
+serve/second-signal
 serve/session
+serve/slow-reader-huge-answer
+serve/slow-reader-many-answers
 terminal/colors
 terminal/config-esc
 terminal/config-refusals

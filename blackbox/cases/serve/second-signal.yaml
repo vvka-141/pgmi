@@ -1,0 +1,39 @@
+description: after a first SIGINT serve keeps writing answers to a client that reads 20 KB a second; a second SIGINT ends it at once with exit 130 in the Rust binary (Go drains every answer and exits 0); see "serve quits at a second signal" in the behaviour contract
+steps:
+  - pgmi: [serve]
+    stdin:
+      - "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}"
+      - "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"ai_overview\",\"arguments\":{}}}"
+      - "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"ai_overview\",\"arguments\":{}}}"
+      - "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"ai_overview\",\"arguments\":{}}}"
+      - "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"ai_overview\",\"arguments\":{}}}"
+      - "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"ai_overview\",\"arguments\":{}}}"
+      - "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"ai_overview\",\"arguments\":{}}}"
+      - "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"ai_overview\",\"arguments\":{}}}"
+      - "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"ai_overview\",\"arguments\":{}}}"
+      - "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"ai_overview\",\"arguments\":{}}}"
+      - "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{\"name\":\"ai_overview\",\"arguments\":{}}}"
+      - "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tools/call\",\"params\":{\"name\":\"ai_overview\",\"arguments\":{}}}"
+      - "{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"tools/call\",\"params\":{\"name\":\"ai_overview\",\"arguments\":{}}}"
+      - "{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"tools/call\",\"params\":{\"name\":\"ai_overview\",\"arguments\":{}}}"
+      - "{\"jsonrpc\":\"2.0\",\"id\":14,\"method\":\"tools/call\",\"params\":{\"name\":\"ai_overview\",\"arguments\":{}}}"
+      - "{\"jsonrpc\":\"2.0\",\"id\":15,\"method\":\"tools/call\",\"params\":{\"name\":\"ai_overview\",\"arguments\":{}}}"
+      - "{\"jsonrpc\":\"2.0\",\"id\":16,\"method\":\"tools/call\",\"params\":{\"name\":\"ai_overview\",\"arguments\":{}}}"
+      - "{\"jsonrpc\":\"2.0\",\"id\":17,\"method\":\"tools/call\",\"params\":{\"name\":\"ai_overview\",\"arguments\":{}}}"
+      - "{\"jsonrpc\":\"2.0\",\"id\":18,\"method\":\"tools/call\",\"params\":{\"name\":\"ai_overview\",\"arguments\":{}}}"
+      - "{\"jsonrpc\":\"2.0\",\"id\":19,\"method\":\"tools/call\",\"params\":{\"name\":\"ai_overview\",\"arguments\":{}}}"
+      - "{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"tools/call\",\"params\":{\"name\":\"ai_overview\",\"arguments\":{}}}"
+    read_rate: 20000
+    signal:
+      - {name: SIGINT, after: 3}
+      - {name: SIGINT, after: 4}
+    expect:
+      exit: 0
+      stdout:
+        - '\A\{"jsonrpc":"2\.0","id":0,"result":\{[^\n]*\}\n(?:\{"jsonrpc":"2\.0","id":[0-9]+,"result":\{"content":[^\n]*\}\}\n){20}\Z'
+      rust:
+        exit: 130
+        stdout:
+          - '\A\{"jsonrpc":"2\.0","id":0,"result":'
+        stdout_not:
+          - '(?:\{"jsonrpc":"2\.0","id":[0-9]+,"result":\{"content":[^\n]*\}\}\n){20}'

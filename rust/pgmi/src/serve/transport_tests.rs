@@ -1,11 +1,15 @@
 use std::fmt::Write as _;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
 use serde_json::value::RawValue;
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream};
+use tokio::io::{
+    AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, DuplexStream,
+};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
@@ -19,6 +23,7 @@ enum Fake {
     Echo,
     EchoLen,
     Slow,
+    Big,
     Panic,
 }
 
@@ -61,6 +66,7 @@ impl Toolbox for Fakes {
             "echo" => Fake::Echo,
             "echo_len" => Fake::EchoLen,
             "slow" => Fake::Slow,
+            "big" => Fake::Big,
             "panic" => Fake::Panic,
             _ => return None,
         })
@@ -90,6 +96,7 @@ impl Toolbox for Fakes {
                     }
                 }
             }
+            Fake::Big => Outcome::json(&json!({"blob": "x".repeat(3 << 20)})),
             Fake::Panic => panic!("the tool blew up"),
         }
     }
@@ -759,4 +766,179 @@ async fn a_client_that_never_reads_ends_two_seconds_after_its_input() {
         waited >= Duration::from_secs(2) && waited < Duration::from_secs(3),
         "{waited:?}"
     );
+}
+
+/// Writes as tokio's `Stdout` does: a write of up to 2 MiB is taken at once,
+/// and the next write or flush waits until it has reached the pipe.
+struct StdoutLike {
+    pipe: DuplexStream,
+    held: Vec<u8>,
+    sent: usize,
+}
+
+impl StdoutLike {
+    fn new(pipe: DuplexStream) -> Self {
+        StdoutLike {
+            pipe,
+            held: Vec::new(),
+            sent: 0,
+        }
+    }
+
+    fn poll_drain(&mut self, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        while self.sent < self.held.len() {
+            let n = ready!(Pin::new(&mut self.pipe).poll_write(cx, &self.held[self.sent..]))?;
+            if n == 0 {
+                return Poll::Ready(Err(std::io::ErrorKind::WriteZero.into()));
+            }
+            self.sent += n;
+        }
+        self.held.clear();
+        self.sent = 0;
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl AsyncWrite for StdoutLike {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let this = self.get_mut();
+        ready!(this.poll_drain(cx))?;
+        let n = buf.len().min(2 << 20);
+        this.held.extend_from_slice(&buf[..n]);
+        Poll::Ready(Ok(n))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        ready!(this.poll_drain(cx))?;
+        Pin::new(&mut this.pipe).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        ready!(this.poll_drain(cx))?;
+        Pin::new(&mut this.pipe).poll_shutdown(cx)
+    }
+}
+
+/// Reads `output` at `bytes_per_second`, counting what it took in `taken`.
+fn paced_reader(
+    mut output: DuplexStream,
+    bytes_per_second: u64,
+    taken: Arc<AtomicUsize>,
+) -> tokio::task::JoinHandle<Vec<u8>> {
+    tokio::spawn(async move {
+        let mut data = Vec::new();
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            let n = output.read(&mut buf).await.unwrap();
+            if n == 0 {
+                return data;
+            }
+            data.extend_from_slice(&buf[..n]);
+            taken.store(data.len(), Ordering::SeqCst);
+            let n = u64::try_from(n).unwrap();
+            tokio::time::sleep(Duration::from_micros(n * 1_000_000 / bytes_per_second)).await;
+        }
+    })
+}
+
+fn whole_lines(data: &[u8]) -> Vec<Value> {
+    assert!(data.ends_with(b"\n"), "the last answer was cut");
+    data.split(|b| *b == b'\n')
+        .filter(|l| !l.is_empty())
+        .map(|l| serde_json::from_slice(l).unwrap())
+        .collect()
+}
+
+const BIG: &[u8] = br#"{"jsonrpc":"2.0","id":0,"method":"tools/call","params":{"name":"big"}}
+"#;
+
+#[tokio::test(start_paused = true)]
+async fn a_steady_reader_behind_a_buffering_stdout_gets_a_huge_answer_whole() {
+    let (mut input, server_in) = tokio::io::duplex(64 * 1024);
+    let (server_out, output) = tokio::io::duplex(64 * 1024);
+    let server = tokio::spawn(serve(
+        server_in,
+        StdoutLike::new(server_out),
+        fakes().0,
+        CancellationToken::new(),
+    ));
+    input.write_all(BIG).await.unwrap();
+    input.shutdown().await.unwrap();
+    let data = paced_reader(output, 800_000, Arc::default()).await.unwrap();
+    let answers = whole_lines(&data);
+    assert_eq!(answers.len(), 1);
+    assert_eq!(answers[0]["id"], 0);
+    let ended = server.await.unwrap();
+    assert!(matches!(ended, Ended::EndOfInput), "{ended:?}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_reader_keeps_its_session_while_a_huge_answer_holds_up_a_full_queue() {
+    let (mut input, server_in) = tokio::io::duplex(256 * 1024);
+    let (server_out, output) = tokio::io::duplex(64 * 1024);
+    let server = tokio::spawn(serve(
+        server_in,
+        StdoutLike::new(server_out),
+        fakes().0,
+        CancellationToken::new(),
+    ));
+    input.write_all(BIG).await.unwrap();
+    let taken = Arc::new(AtomicUsize::new(0));
+    let reader = paced_reader(output, 800_000, taken.clone());
+    while taken.load(Ordering::SeqCst) < 256 * 1024 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    input.write_all(pings(1..1300).as_bytes()).await.unwrap();
+    input.shutdown().await.unwrap();
+    let mut ids: Vec<u64> = whole_lines(&reader.await.unwrap())
+        .iter()
+        .map(|v| v["id"].as_u64().unwrap())
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(ids, (0..1300).collect::<Vec<u64>>());
+    let ended = server.await.unwrap();
+    assert!(matches!(ended, Ended::EndOfInput), "{ended:?}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_client_that_keeps_calling_and_never_reads_is_dropped_with_its_calls_bounded() {
+    let (tools, _probes) = fakes();
+    let (mut input, server_in) = tokio::io::duplex(64 * 1024);
+    let (server_out, _unread) = tokio::io::duplex(64 * 1024);
+    let server = tokio::spawn(serve(
+        server_in,
+        StdoutLike::new(server_out),
+        tools.clone(),
+        CancellationToken::new(),
+    ));
+    let sender = tokio::spawn(async move {
+        for id in (0..40_000).step_by(4) {
+            let mut batch = String::new();
+            for i in id..id + 4 {
+                let _ = writeln!(
+                    batch,
+                    r#"{{"jsonrpc":"2.0","id":{i},"method":"tools/call","params":{{"name":"echo"}}}}"#
+                );
+            }
+            if input.write_all(batch.as_bytes()).await.is_err() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        input
+    });
+    let ended = timeout(Duration::from_secs(30), server)
+        .await
+        .expect("serve kept taking calls from a client that never reads")
+        .unwrap();
+    assert!(matches!(ended, Ended::SlowReader), "{ended:?}");
+    let ran = tools.calls.load(Ordering::SeqCst);
+    assert!(ran < 3000, "{ran} calls ran for a client that never reads");
+    drop(sender);
 }

@@ -59,6 +59,7 @@ class Step:
     tty: bool
     maintenance: bool
     expect: Expect
+    read_rate: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,6 +290,7 @@ def _step(r: _Reader, value: Any, field: str) -> Step:
             "cwd",
             "binary",
             "tty",
+            "read_rate",
             "expect",
         },
     )
@@ -306,6 +308,9 @@ def _step(r: _Reader, value: Any, field: str) -> Step:
     stdin = _stdin(r, value["stdin"], f"{field}.stdin") if "stdin" in value else None
     if value.get("tty") and any(isinstance(c, Until) for c in stdin or ()):
         raise r.fail(f"{field}.stdin", "until does not go with tty")
+    read_rate = r.number(value["read_rate"], f"{field}.read_rate") if "read_rate" in value else None
+    if read_rate is not None and (read_rate == 0 or value.get("tty") or args is None):
+        raise r.fail(f"{field}.read_rate", "is a positive number of bytes per second, for a pgmi step without tty")
     return Step(
         args=args,
         sql=sql,
@@ -320,6 +325,7 @@ def _step(r: _Reader, value: Any, field: str) -> Step:
         tty=_flag(r, value.get("tty", False), f"{field}.tty"),
         maintenance=value.get("database") == "maintenance",
         expect=_expect(r, value.get("expect", {}), f"{field}.expect", pgmi=args is not None),
+        read_rate=read_rate,
     )
 
 

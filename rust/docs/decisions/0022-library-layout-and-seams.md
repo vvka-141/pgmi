@@ -592,6 +592,57 @@ independent Codex review of 100d33ef. What changed:
   = ..)]` (`dotenv::parse`, `params::collect`, `overrides::overrides`,
   `execute::run`, the wizard form's `new`, and test bodies).
 
+### Fix round 5 (2026-11-12)
+
+The fourth gate review (`.private/reviews/rust-gates-2026-11-12c.md`) and a
+Codex review of 6f94c1ad. Three rounds had moved serve's end-of-session bug
+instead of removing it, because the transport tests used an in-memory duplex
+with tiny lines, unlike a real stdout pipe. This round wrote the tests first:
+`rust/pgmi/tests/serve_pipes.rs` runs the real binary over OS pipes (an
+8 KB/s and an 800 KB/s reader, a 3.5 MB answer, a paced client that never
+reads, a 3000-request burst, a non-reading client after EOF, two signals),
+and the unit tests gained `StdoutLike`, a transport that takes a 2 MiB write
+at once and blocks the next one, as tokio's `Stdout` does. Both HIGHs
+reproduced on 6f94c1ad before the fix. What changed:
+
+- **Serve's progress is bytes the client took.** The writer writes each
+  answer in flushed slices of 4 KiB; each slice taken counts in a
+  `watch` channel. tokio's `Stdout` copies up to 2 MiB per write, so one
+  `write` returning said nothing about the client; a 4 KiB slice flushed
+  means the client took about 4 KiB (a reader of about 2 KB a second
+  always keeps its session).
+- **A call is counted until its answer is queued.** `Slot` is a shared
+  permit: the call's task keeps one clone until its answer is in the queue,
+  the work (and a cancelled blocking thread) another. `Server::queue` is the
+  one way an answer enters the queue, for the reader and for call tasks:
+  it waits for room while the writer keeps making progress and ends the
+  session as `SlowReader` after `DRAIN` without any. So a client that keeps
+  sending calls and never reads is dropped with at most 1024 answers and
+  32 calls held (RSS peaked near 32 MB, it grew past 600 MB before).
+- **Second signal.** `serve::run`'s signal task cancels the session at the
+  first SIGINT or SIGTERM and exits 130 at the second, as `deploy` does.
+- **`Reply`.** `Server::handle` returns `Reply { Now, Later, Never }`
+  instead of an `Option<String>` whose `None` meant both "a task answers"
+  and "no answer"; the call map's lock recovers from poisoning instead of
+  dropping the call.
+- **Cloud SQL.** The sign-in renews in the background five minutes before
+  the ephemeral certificate expires, as Go's cloudsqlconn does:
+  `Renewing::renew_ahead` holds a weak reference and its abort handle dies
+  with the `Renewing`. Sockets, including the cancel's, use
+  `Renewing::valid()`, the certificate in hand until it really expires, so
+  a cancel never waits for a sign-in within its 2 s.
+- **`Env`** prints only variable names in `{:?}`; its values (PGPASSWORD,
+  cloud secrets, `PGMI_PARAM_*`) never reach Debug output.
+- **Typed errors.** A connection refusal turned into an `Error` keeps its
+  `ResolveError` variant as the cause. `pgmi.yaml` parsing returns a typed
+  `YamlError`, and `pgmi config` builds its "could not be parsed" message
+  from it, not from rendered text.
+- **Named types.** The ledger's small tuple and bool signatures became
+  `Origin` (`LineMap::original`), `Style` (`Reporter::to`), `Databases`,
+  `&Endpoint` from `first()`, and `Grant`, with `None` as PUBLIC instead of
+  an empty string. The `*_for(windows)` test seams and `asked_before` stay,
+  as recorded.
+
 ## Consequences
 
 - Every Go unit test whose subject exists in Rust gets a Rust counterpart

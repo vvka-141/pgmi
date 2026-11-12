@@ -38,10 +38,20 @@ pub(crate) trait Toolbox: Send + Sync + 'static {
     ) -> impl std::future::Future<Output = Outcome> + Send;
 }
 
-/// One of the server's `MAX_CALLS` places for running work; dropping it
-/// frees the place.
+/// One of the server's `MAX_CALLS` places for a call; the place is freed
+/// when the last clone is dropped. The server keeps one until the call's
+/// answer is queued, the call's work one until that work ends.
+#[derive(Clone)]
 pub(crate) struct Slot {
-    pub(super) _held: tokio::sync::OwnedSemaphorePermit,
+    _permit: std::sync::Arc<tokio::sync::OwnedSemaphorePermit>,
+}
+
+impl From<tokio::sync::OwnedSemaphorePermit> for Slot {
+    fn from(permit: tokio::sync::OwnedSemaphorePermit) -> Self {
+        Slot {
+            _permit: std::sync::Arc::new(permit),
+        }
+    }
 }
 
 /// pgmi's own tools.
@@ -574,9 +584,7 @@ mod tests {
 
     fn slots(n: usize) -> (std::sync::Arc<tokio::sync::Semaphore>, Slot) {
         let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(n));
-        let slot = Slot {
-            _held: slots.clone().try_acquire_owned().unwrap(),
-        };
+        let slot = Slot::from(slots.clone().try_acquire_owned().unwrap());
         (slots, slot)
     }
 

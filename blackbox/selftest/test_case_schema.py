@@ -46,6 +46,17 @@ def test_project_files_take_text_hex_symlinks_fifos_and_dirs():
     }
 
 
+def test_read_rate_paces_stdout_of_a_pgmi_step():
+    doc = {**MINIMAL, "steps": [{"pgmi": ["serve"], "read_rate": 8000, "expect": {"exit": 0}}]}
+    assert parse_case("cases/x.yaml", doc).steps[0].read_rate == 8000.0
+    assert parse_case("cases/x.yaml", MINIMAL).steps[0].read_rate is None
+    for bad in ({"pgmi": ["serve"], "read_rate": 0, "expect": {"exit": 0}},
+                {"pgmi": ["serve"], "read_rate": 8000, "tty": True, "expect": {"exit": 0}},
+                {"sql": "SELECT 1", "read_rate": 8000}):
+        with pytest.raises(CaseError, match="read_rate"):
+            parse_case("cases/x.yaml", {**MINIMAL, "steps": [bad]})
+
+
 def test_stdin_text_and_hex_repeat_without_newline():
     stdin = [{"text": "ab", "times": 2}, {"hex": "ff00"}, {"hex": "61", "times": 3}]
     doc = {**MINIMAL, "steps": [{"pgmi": ["serve"], "stdin": stdin, "expect": {"exit": 0}}]}

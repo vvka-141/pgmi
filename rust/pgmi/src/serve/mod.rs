@@ -5,7 +5,7 @@ pub mod wire;
 mod transport_tests;
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use serde_json::value::RawValue;
@@ -14,6 +14,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::runtime::Runtime;
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
+use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
@@ -30,6 +31,7 @@ const META_SERVER: &str = "io.modelcontextprotocol/serverInfo";
 const UNSUPPORTED_VERSION: i64 = -32022;
 const ECHOED: [&str; 3] = ["2025-11-25", "2025-06-18", "2024-11-05"];
 const DRAIN: Duration = Duration::from_secs(2);
+const SLICE: usize = 4 * 1024;
 const MAX_CALLS: usize = 32;
 const QUEUED_ANSWERS: usize = 1024;
 const BUSY: i64 = -32000;
@@ -38,13 +40,7 @@ pub(crate) fn run(runtime: Runtime, verbose: bool, env: Env) -> Result<(), Error
     crate::conn::tls::install();
     let stop = CancellationToken::new();
     let ended = runtime.block_on(async {
-        let signals = tokio::spawn({
-            let stop = stop.clone();
-            async move {
-                stop_signal().await;
-                stop.cancel();
-            }
-        });
+        let signals = tokio::spawn(on_signals(stop.clone()));
         let ended = serve(
             tokio::io::stdin(),
             tokio::io::stdout(),
@@ -66,7 +62,7 @@ pub(crate) enum Ended {
     EndOfInput,
     /// `stop` was cancelled (a signal, in `run`).
     Stopped,
-    /// Answers waited `DRAIN` for a client that did not read them.
+    /// The client took no answer for `DRAIN` while answers waited.
     SlowReader,
     ReadFailed(std::io::Error),
     WriteFailed(std::io::Error),
@@ -88,7 +84,23 @@ enum ReadEnd {
     Eof,
     Failed(std::io::Error),
     Cancelled,
-    Overflow,
+}
+
+/// Why an answer was not queued.
+enum Unqueued {
+    /// The session ended first.
+    Ended,
+    /// The client took nothing for `DRAIN`; the session is being ended.
+    SlowReader,
+}
+
+/// What a request gets.
+enum Reply {
+    Now(String),
+    /// A tool call: its task answers.
+    Later,
+    /// A notification or a skipped line.
+    Never,
 }
 
 enum Delivery {
@@ -99,15 +111,17 @@ enum Delivery {
 
 struct Server<T> {
     out: Sender<String>,
+    taken: watch::Receiver<u64>,
     calls: Mutex<HashMap<CallId, CancellationToken>>,
     slots: Arc<Semaphore>,
     root: CancellationToken,
+    dropped: CancellationToken,
     tools: Arc<T>,
 }
 
 /// The end of the client's input, as the writer sees it: until then it
-/// waits on the client as long as the client takes; after it, every write
-/// must make progress within `DRAIN`.
+/// waits on the client as long as the client takes; after it, the client
+/// must take every slice within `DRAIN`.
 #[derive(Clone, Default)]
 struct InputEnd(CancellationToken);
 
@@ -116,8 +130,8 @@ impl InputEnd {
         self.0.cancel();
     }
 
-    /// Runs one write step; `None` once input has ended and the step made
-    /// no progress for `DRAIN`.
+    /// Runs one write step; `None` once input has ended and the step did not
+    /// finish within `DRAIN`.
     async fn progress<F: Future>(&self, step: F) -> Option<F::Output> {
         tokio::pin!(step);
         tokio::select! {
@@ -131,11 +145,14 @@ impl InputEnd {
 
 /// Serves MCP over newline-delimited JSON-RPC until `input` ends, `stop` is
 /// cancelled or writing to `output` fails. Ending cancels every tool call in
-/// flight; a cancelled call is never answered. While 1024 answers wait, the
-/// reader waits for the client to take one, for at most `DRAIN`. Once input
-/// has ended, the session ends when a write makes no progress for `DRAIN`.
-/// Returns once every call has ended and the answers are written, with the
-/// reason the session ended.
+/// flight; a cancelled call is never answered. Answers are written in
+/// flushed slices of `SLICE` bytes, so each slice the client takes is
+/// progress. An answer that finds `QUEUED_ANSWERS` waiting waits for room
+/// while the client takes slices; a client that takes none for `DRAIN`
+/// then, or at any slice once input has ended, is dropped. A tool call
+/// keeps its place among `MAX_CALLS` until its answer is queued. Returns
+/// once every call has ended and the answers are written, with the reason
+/// the session ended.
 pub(crate) async fn serve<T: Toolbox>(
     input: impl AsyncRead + Unpin,
     output: impl AsyncWrite + Unpin,
@@ -143,21 +160,28 @@ pub(crate) async fn serve<T: Toolbox>(
     stop: CancellationToken,
 ) -> Ended {
     let session = stop.child_token();
+    let dropped = CancellationToken::new();
     let input_end = InputEnd::default();
     let (tx, rx) = channel::<String>(QUEUED_ANSWERS);
+    let (took, taken) = watch::channel(0);
     let reader = Reader {
         server: Arc::new(Server {
             out: tx,
+            taken,
             calls: Mutex::new(HashMap::new()),
             slots: Arc::new(Semaphore::new(MAX_CALLS)),
             root: session.clone(),
+            dropped: dropped.clone(),
             tools,
         }),
         tasks: JoinSet::new(),
         lines: wire::Lines::default(),
     };
     let write = async {
-        let delivery = writer(rx, output, &input_end).await;
+        let delivery = tokio::select! {
+            delivery = writer(rx, output, &input_end, &took) => delivery,
+            () = dropped.cancelled() => Delivery::TimedOut,
+        };
         if !matches!(delivery, Delivery::Delivered) {
             session.cancel();
         }
@@ -165,7 +189,8 @@ pub(crate) async fn serve<T: Toolbox>(
     };
     match tokio::join!(reader.run(input, &input_end), write) {
         (_, Delivery::Failed(e)) => Ended::WriteFailed(e),
-        (ReadEnd::Overflow, _) | (_, Delivery::TimedOut) => Ended::SlowReader,
+        (_, Delivery::TimedOut) => Ended::SlowReader,
+        _ if dropped.is_cancelled() => Ended::SlowReader,
         (ReadEnd::Failed(e), _) => Ended::ReadFailed(e),
         (ReadEnd::Cancelled, _) => Ended::Stopped,
         (ReadEnd::Eof, Delivery::Delivered) => Ended::EndOfInput,
@@ -189,9 +214,6 @@ impl<T: Toolbox> Reader<T> {
             Err(end) => end,
         };
         input_end.reached();
-        if matches!(end, ReadEnd::Overflow) {
-            self.server.root.cancel();
-        }
         while self.tasks.join_next().await.is_some() {}
         end
     }
@@ -221,7 +243,7 @@ impl<T: Toolbox> Reader<T> {
                         wire::MAX_LINE >> 20
                     ),
                 );
-                self.server.deliver(Some(refusal)).await?;
+                self.server.deliver(refusal).await?;
             }
             for line in read {
                 self.answer(&line).await?;
@@ -230,40 +252,43 @@ impl<T: Toolbox> Reader<T> {
     }
 
     async fn answer(&mut self, line: &[u8]) -> Result<(), ReadEnd> {
-        let answer = self.server.handle(line, &mut self.tasks);
-        self.server.deliver(answer).await
+        match self.server.handle(line, &mut self.tasks) {
+            Reply::Now(answer) => self.server.deliver(answer).await,
+            Reply::Later | Reply::Never => Ok(()),
+        }
     }
 }
 
-/// Writes each answer as one flushed line until the queue closes. Fails
-/// with the write error, or times out once input has ended and a write
-/// made no progress for `DRAIN`.
+/// Writes each answer as one line, in flushed slices of `SLICE` bytes,
+/// until the queue closes, counting each slice the client took in `took`.
+/// Fails with the write error, or times out once input has ended and a
+/// slice waited `DRAIN`.
 async fn writer(
     mut answers: Receiver<String>,
     mut output: impl AsyncWrite + Unpin,
     input_end: &InputEnd,
+    took: &watch::Sender<u64>,
 ) -> Delivery {
     while let Some(mut line) = answers.recv().await {
         line.push('\n');
-        let mut rest = line.as_bytes();
-        while !rest.is_empty() {
-            match input_end.progress(output.write(rest)).await {
+        for slice in line.as_bytes().chunks(SLICE) {
+            let step = async {
+                output.write_all(slice).await?;
+                output.flush().await
+            };
+            match input_end.progress(step).await {
                 None => return Delivery::TimedOut,
-                Some(Ok(0)) => return Delivery::Failed(std::io::ErrorKind::WriteZero.into()),
-                Some(Ok(n)) => rest = rest.get(n..).unwrap_or_default(),
                 Some(Err(e)) => return Delivery::Failed(e),
+                Some(Ok(())) => took.send_modify(|n| *n += 1),
             }
-        }
-        match input_end.progress(output.flush()).await {
-            None => return Delivery::TimedOut,
-            Some(Err(e)) => return Delivery::Failed(e),
-            Some(Ok(())) => {}
         }
     }
     Delivery::Delivered
 }
 
-async fn stop_signal() {
+/// Cancels `stop` at the first SIGINT or SIGTERM, so serve drains its
+/// answers, and exits 130 at the second, as `deploy` does.
+async fn on_signals(stop: CancellationToken) {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
@@ -271,8 +296,13 @@ async fn stop_signal() {
             signal(SignalKind::interrupt()),
             signal(SignalKind::terminate()),
         ) else {
-            return std::future::pending().await;
+            return;
         };
+        tokio::select! {
+            _ = int.recv() => {}
+            _ = term.recv() => {}
+        }
+        stop.cancel();
         tokio::select! {
             _ = int.recv() => {}
             _ = term.recv() => {}
@@ -281,9 +311,14 @@ async fn stop_signal() {
     #[cfg(not(unix))]
     {
         if tokio::signal::ctrl_c().await.is_err() {
-            std::future::pending::<()>().await;
+            return;
+        }
+        stop.cancel();
+        if tokio::signal::ctrl_c().await.is_err() {
+            return;
         }
     }
+    std::process::exit(i32::from(crate::error::Kind::Interrupted.exit_code()));
 }
 
 /// The protocol generation a request speaks: the session-based one
@@ -315,47 +350,66 @@ impl CallId {
 }
 
 impl<T: Toolbox> Server<T> {
-    /// Queues the reader's answer, waiting up to `DRAIN` for room while the
-    /// client takes earlier answers.
-    async fn deliver(&self, answer: Option<String>) -> Result<(), ReadEnd> {
-        let Some(answer) = answer else {
-            return Ok(());
-        };
-        let room = tokio::select! {
-            biased;
-            () = self.root.cancelled() => return Err(ReadEnd::Cancelled),
-            room = tokio::time::timeout(DRAIN, self.out.reserve()) => room,
-        };
-        match room {
-            Ok(Ok(permit)) => {
-                permit.send(answer);
-                Ok(())
+    /// Queues `answer`, waiting for room as long as the client keeps taking
+    /// slices. A client that takes none for `DRAIN` is dropped: the session
+    /// ends as `SlowReader`.
+    async fn queue(&self, answer: String) -> Result<(), Unqueued> {
+        let mut taken = self.taken.clone();
+        taken.borrow_and_update();
+        let room = self.out.reserve();
+        tokio::pin!(room);
+        loop {
+            tokio::select! {
+                biased;
+                () = self.root.cancelled() => return Err(Unqueued::Ended),
+                room = &mut room => {
+                    let Ok(permit) = room else {
+                        return Err(Unqueued::Ended);
+                    };
+                    permit.send(answer);
+                    return Ok(());
+                }
+                took = taken.changed() => {
+                    if took.is_err() {
+                        return Err(Unqueued::Ended);
+                    }
+                }
+                () = tokio::time::sleep(DRAIN) => {
+                    self.dropped.cancel();
+                    self.root.cancel();
+                    return Err(Unqueued::SlowReader);
+                }
             }
-            Ok(Err(_)) => Err(ReadEnd::Cancelled),
-            Err(_) => Err(ReadEnd::Overflow),
         }
     }
 
-    /// Handles one line and returns its immediate answer, if any; a tool
-    /// call is answered later by its own task.
-    fn handle(self: &Arc<Self>, line: &[u8], tasks: &mut JoinSet<()>) -> Option<String> {
+    /// Queues the reader's answer; the reader stops once the session ends.
+    async fn deliver(&self, answer: String) -> Result<(), ReadEnd> {
+        self.queue(answer).await.map_err(|_| ReadEnd::Cancelled)
+    }
+
+    fn handle(self: &Arc<Self>, line: &[u8], tasks: &mut JoinSet<()>) -> Reply {
         match wire::decode(line) {
-            Decoded::Skip => None,
-            Decoded::Reply(r) => Some(r),
+            Decoded::Skip => Reply::Never,
+            Decoded::Reply(r) => Reply::Now(r),
             Decoded::Notification(n) => {
                 if n.method == "notifications/cancelled" {
                     self.cancel(n.params.as_deref());
                 }
-                None
+                Reply::Never
             }
             Decoded::Request(r) if r.method.starts_with("notifications/") => {
                 if r.method == "notifications/cancelled" {
                     self.cancel(r.params.as_deref());
                 }
-                None
+                Reply::Never
             }
             Decoded::Request(r) => self.request(&r, tasks),
         }
+    }
+
+    fn calls(&self) -> MutexGuard<'_, HashMap<CallId, CancellationToken>> {
+        self.calls.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn cancel(&self, params: Option<&RawValue>) {
@@ -370,15 +424,15 @@ impl<T: Toolbox> Server<T> {
         else {
             return;
         };
-        if let Ok(calls) = self.calls.lock()
-            && let Some(token) = calls.get(&id)
-        {
+        if let Some(token) = self.calls().get(&id) {
             token.cancel();
         }
     }
 
-    fn request(self: &Arc<Self>, r: &Request, tasks: &mut JoinSet<()>) -> Option<String> {
-        let id = r.id.clone()?;
+    fn request(self: &Arc<Self>, r: &Request, tasks: &mut JoinSet<()>) -> Reply {
+        let Some(id) = r.id.clone() else {
+            return Reply::Never;
+        };
         let params: Option<Value> = r
             .params
             .as_ref()
@@ -393,7 +447,7 @@ impl<T: Toolbox> Server<T> {
         if let Some(v) = version {
             let requested = v.as_str().unwrap_or_default();
             if requested != STATELESS {
-                return Some(wire::error_with(
+                return Reply::Now(wire::error_with(
                     Some(&id),
                     UNSUPPORTED_VERSION,
                     "Unsupported protocol version",
@@ -403,7 +457,7 @@ impl<T: Toolbox> Server<T> {
             if r.method != "server/discover"
                 && meta.and_then(|m| m.get(META_CAPABILITIES)).is_none()
             {
-                return Some(wire::error(
+                return Reply::Now(wire::error(
                     Some(&id),
                     INVALID_PARAMS,
                     &format!("missing required _meta field: {META_CAPABILITIES}"),
@@ -418,10 +472,10 @@ impl<T: Toolbox> Server<T> {
             )
         };
         match (r.method.as_str(), era) {
-            ("initialize", Era::Session) => Some(initialize(&id, r.params.as_deref())),
-            ("ping", Era::Session) => Some(wire::result(&id, "{}")),
-            ("tools/list", _) => Some(tools_list(&id, self.tools.list(), era)),
-            ("server/discover", _) => Some(wire::result(
+            ("initialize", Era::Session) => Reply::Now(initialize(&id, r.params.as_deref())),
+            ("ping", Era::Session) => Reply::Now(wire::result(&id, "{}")),
+            ("tools/list", _) => Reply::Now(tools_list(&id, self.tools.list(), era)),
+            ("server/discover", _) => Reply::Now(wire::result(
                 &id,
                 &stateless(json!({
                     "cacheScope": "public",
@@ -431,7 +485,7 @@ impl<T: Toolbox> Server<T> {
                 })),
             )),
             ("tools/call", _) => self.call(id, r.params.as_deref(), era, tasks),
-            _ => Some(not_found()),
+            _ => Reply::Now(not_found()),
         }
     }
 
@@ -441,7 +495,7 @@ impl<T: Toolbox> Server<T> {
         params: Option<&RawValue>,
         era: Era,
         tasks: &mut JoinSet<()>,
-    ) -> Option<String> {
+    ) -> Reply {
         let invalid = |m: &str| {
             wire::error(
                 Some(&id),
@@ -450,7 +504,7 @@ impl<T: Toolbox> Server<T> {
             )
         };
         let Some(params) = params else {
-            return Some(invalid("unexpected end of JSON input"));
+            return Reply::Now(invalid("unexpected end of JSON input"));
         };
         let fields = match wire::go_struct(
             params,
@@ -459,29 +513,31 @@ impl<T: Toolbox> Server<T> {
             &[("name", Field::String), ("arguments", Field::Raw)],
         ) {
             Ok(f) => f,
-            Err(e) => return Some(invalid(&e.to_string())),
+            Err(e) => return Reply::Now(invalid(&e.to_string())),
         };
         let name = fields.string("name").unwrap_or_default();
         let Some(tool) = self.tools.tool(&name) else {
-            return Some(wire::error(
+            return Reply::Now(wire::error(
                 Some(&id),
                 INVALID_PARAMS,
                 &format!("unknown tool: {name}"),
             ));
         };
         let arguments = fields.raw("arguments").map(RawValue::to_owned);
-        let key = CallId::of(&id)?;
+        let Some(key) = CallId::of(&id) else {
+            return Reply::Never;
+        };
         let token = self.root.child_token();
-        let mut calls = self.calls.lock().ok()?;
+        let mut calls = self.calls();
         if calls.contains_key(&key) {
-            return Some(wire::error(
+            return Reply::Now(wire::error(
                 Some(&id),
                 INVALID_REQUEST,
                 &format!("request id {id} is already in flight"),
             ));
         }
-        let Ok(slot) = self.slots.clone().try_acquire_owned() else {
-            return Some(wire::error(
+        let Ok(permit) = self.slots.clone().try_acquire_owned() else {
+            return Reply::Now(wire::error(
                 Some(&id),
                 BUSY,
                 &format!("{MAX_CALLS} tool calls are already running; wait for one to finish"),
@@ -490,27 +546,22 @@ impl<T: Toolbox> Server<T> {
         calls.insert(key.clone(), token.clone());
         drop(calls);
         let server = self.clone();
+        let slot = Slot::from(permit);
         tasks.spawn(async move {
             let tools = server.tools.clone();
-            let task_token = token.clone();
-            let work = tools.call(tool, arguments, task_token, Slot { _held: slot });
+            let work = tools.call(tool, arguments, token.clone(), slot.clone());
             let outcome = match crate::error::catching_async(work).await {
                 Ok(o) => o,
                 Err(p) => Outcome::panicked(&p),
             };
-            if let Ok(mut calls) = server.calls.lock() {
-                calls.remove(&key);
-            }
+            server.calls().remove(&key);
             if token.is_cancelled() {
                 return;
             }
-            let answer = wire::result(&id, &outcome.render(era));
-            tokio::select! {
-                _ = server.out.send(answer) => {}
-                () = server.root.cancelled() => {}
-            }
+            let _ = server.queue(wire::result(&id, &outcome.render(era))).await;
+            drop(slot);
         });
-        None
+        Reply::Later
     }
 }
 
@@ -603,19 +654,26 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn a_request_id_already_in_flight_is_refused() {
-        let (tx, _rx) = channel::<String>(1);
+    fn server() -> (Arc<Server<tools::Tools>>, Receiver<String>) {
+        let (tx, rx) = channel::<String>(1);
         let server = Arc::new(Server {
             out: tx,
+            taken: watch::channel(0).1,
             calls: Mutex::new(HashMap::new()),
             slots: Arc::new(Semaphore::new(MAX_CALLS)),
             root: CancellationToken::new(),
+            dropped: CancellationToken::new(),
             tools: Arc::new(tools::Tools {
                 env: Env::default(),
                 verbose: false,
             }),
         });
+        (server, rx)
+    }
+
+    #[tokio::test]
+    async fn a_request_id_already_in_flight_is_refused() {
+        let (server, _rx) = server();
         let busy = CancellationToken::new();
         server
             .calls
@@ -623,12 +681,12 @@ mod tests {
             .unwrap()
             .insert(CallId::Number("7".into()), busy.clone());
         let mut tasks = JoinSet::new();
-        let answer = server
-            .handle(
-                br#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"templates_list","arguments":{}}}"#,
-                &mut tasks,
-            )
-            .unwrap();
+        let Reply::Now(answer) = server.handle(
+            br#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"templates_list","arguments":{}}}"#,
+            &mut tasks,
+        ) else {
+            panic!("the call was not answered at once");
+        };
         assert!(answer.contains("-32600"), "{answer}");
         assert!(answer.contains("already in flight"), "{answer}");
         assert!(tasks.is_empty());
@@ -644,23 +702,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_call_whose_id_holds_a_lone_surrogate_still_runs() {
-        let (tx, _rx) = channel::<String>(1);
-        let server = Arc::new(Server {
-            out: tx,
-            calls: Mutex::new(HashMap::new()),
-            slots: Arc::new(Semaphore::new(MAX_CALLS)),
-            root: CancellationToken::new(),
-            tools: Arc::new(tools::Tools {
-                env: Env::default(),
-                verbose: false,
-            }),
-        });
+        let (server, _rx) = server();
         let mut tasks = JoinSet::new();
         let answer = server.handle(
             br#"{"jsonrpc":"2.0","id":"\ud800","method":"tools/call","params":{"name":"templates_list","arguments":{}}}"#,
             &mut tasks,
         );
-        assert_eq!(answer, None);
+        assert!(matches!(answer, Reply::Later));
         assert_eq!(tasks.len(), 1);
     }
 

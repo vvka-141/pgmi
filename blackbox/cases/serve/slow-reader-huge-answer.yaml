@@ -1,0 +1,15 @@
+description: a 3.5 MB metadata_plan answer reaches a client that reads 800 KB a second after closing its input whole, as one complete line, and serve exits 0
+project:
+  generate: {count: 6000, path: "migrations/m_{i}_some_longer_descriptive_name.sql", content: "SELECT 1;\n"}
+  files:
+    deploy.sql: "SELECT 1;\n"
+steps:
+  - pgmi: [serve]
+    stdin:
+      - "{\"jsonrpc\":\"2.0\",\"id\":0,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}"
+      - "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"metadata_plan\",\"arguments\":{\"path\":\"{project}\"}}}"
+    read_rate: 800000
+    expect:
+      exit: 0
+      stdout:
+        - '\A\{"jsonrpc":"2\.0","id":0,"result":\{[^\n]*\}\n\{"jsonrpc":"2\.0","id":1,"result":\{"content":[^\n]*"structuredContent":\{"totalFiles":6000,"plan":\[[^\n]*"path":"\./migrations/m_06000_some_longer_descriptive_name\.sql"[^\n]*\}\]\}\}\}\n\Z'

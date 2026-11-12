@@ -1,4 +1,5 @@
 import atexit
+import codecs
 import fcntl
 import json
 import os
@@ -269,7 +270,11 @@ def _start(ws: Workspace, step: Step) -> Running:
         errors="replace",
     )
     run = Running(proc, argv, [], [], [], time.monotonic())
-    run.threads.append(threading.Thread(target=lambda: run.stdout.extend(iter(proc.stdout.readline, "")), daemon=True))
+    if step.read_rate:
+        reader = threading.Thread(target=_read_paced, args=(proc.stdout, run.stdout, step.read_rate), daemon=True)
+    else:
+        reader = threading.Thread(target=lambda: run.stdout.extend(iter(proc.stdout.readline, "")), daemon=True)
+    run.threads.append(reader)
     run.threads.append(threading.Thread(target=_lines, args=(proc.stderr, run.stderr, run.started), daemon=True))
     if step.stdin is not None:
         chunks = [ws.chunk(c) for c in step.stdin]
@@ -284,6 +289,14 @@ def _signal(step: Step, run: Running) -> Running:
         time.sleep(max(0.0, run.started + sig.after - time.monotonic()))
         run.proc.send_signal(getattr(signal, sig.name))
     return run
+
+
+def _read_paced(stream, sink: list[str], rate: float) -> None:
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    while chunk := os.read(stream.fileno(), 4096):
+        sink.append(decoder.decode(chunk))
+        time.sleep(len(chunk) / rate)
+    sink.append(decoder.decode(b"", final=True))
 
 
 def _lines(stream, sink: list[tuple[float, str]], started: float) -> None:

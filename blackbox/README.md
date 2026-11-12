@@ -52,6 +52,7 @@ steps:
     signal: {name: SIGINT, after: 3}  # optional, tty too; or a list, each `after` counted from the start
     timeout: 120                   # optional: seconds before the step fails
     tty: true                      # optional: run in a 120x40 pseudo-terminal; stdin is typed as keys
+    read_rate: 8000                # optional: read stdout at this many bytes a second (not with tty)
     binary: reference              # optional: run PGMI_REFERENCE_BIN instead of PGMI_BIN
     expect:
       exit: 13                     # required for a pgmi step
