@@ -26,32 +26,15 @@ pub(crate) trait Toolbox: Send + Sync + 'static {
 
     fn tool(&self, name: &str) -> Option<Self::Tool>;
 
-    /// Runs one call on its own task; a panic becomes the call's answer.
-    /// `slot` must be held until the call's work has ended, also when the
-    /// call stops waiting for it.
+    /// Runs one call on its own task, inside [`crate::blocking::Slot::hold`];
+    /// a panic becomes the call's answer. Blocking work starts through
+    /// [`crate::blocking::spawn`], so it keeps the call's place until it ends.
     fn call(
         &self,
         tool: Self::Tool,
         arguments: Option<Box<RawValue>>,
         token: CancellationToken,
-        slot: Slot,
     ) -> impl std::future::Future<Output = Outcome> + Send;
-}
-
-/// One of the server's `MAX_CALLS` places for a call; the place is freed
-/// when the last clone is dropped. The server keeps one until the call's
-/// answer is queued, the call's work one until that work ends.
-#[derive(Clone)]
-pub(crate) struct Slot {
-    _permit: std::sync::Arc<tokio::sync::OwnedSemaphorePermit>,
-}
-
-impl From<tokio::sync::OwnedSemaphorePermit> for Slot {
-    fn from(permit: tokio::sync::OwnedSemaphorePermit) -> Self {
-        Slot {
-            _permit: std::sync::Arc::new(permit),
-        }
-    }
 }
 
 /// pgmi's own tools.
@@ -76,9 +59,8 @@ impl Toolbox for Tools {
         tool: Tool,
         arguments: Option<Box<RawValue>>,
         token: CancellationToken,
-        slot: Slot,
     ) -> impl std::future::Future<Output = Outcome> + Send {
-        tool.call(arguments, self.env.clone(), self.verbose, token, slot)
+        tool.call(arguments, self.env.clone(), self.verbose, token)
     }
 }
 
@@ -134,11 +116,9 @@ impl Tool {
         env: Env,
         verbose: bool,
         token: CancellationToken,
-        slot: Slot,
     ) -> Outcome {
         let blocking = match self {
             Tool::Deploy => {
-                let _slot = slot;
                 return match deploy_context(arguments.as_deref(), &env, verbose) {
                     Ok(ctx) => run_deploy(ctx, token).await,
                     Err(e) => Outcome::failed(&e),
@@ -146,7 +126,7 @@ impl Tool {
             }
             Tool::Blocking(b) => b,
         };
-        let work = on_blocking_thread(slot, move || blocking.answer(arguments.as_deref(), &env));
+        let work = on_blocking_thread(move || blocking.answer(arguments.as_deref(), &env));
         if blocking.writes() {
             return work.await;
         }
@@ -166,17 +146,8 @@ async fn until_cancelled(
     }
 }
 
-/// Runs `work` on the blocking pool, holding `slot` until it returns, also
-/// when the caller stops waiting for it.
-async fn on_blocking_thread(
-    slot: Slot,
-    work: impl FnOnce() -> Outcome + Send + 'static,
-) -> Outcome {
-    let work = tokio::task::spawn_blocking(move || {
-        let _slot = slot;
-        crate::error::catching(work)
-    });
-    match work.await {
+async fn on_blocking_thread(work: impl FnOnce() -> Outcome + Send + 'static) -> Outcome {
+    match crate::blocking::spawn(move || crate::error::catching(work)).await {
         Ok(Ok(o)) => o,
         Ok(Err(p)) => Outcome::panicked(&p),
         Err(_) => Outcome::failed(&Error::internal("the tool call was aborted")),
@@ -582,9 +553,14 @@ async fn run_deploy(ctx: Context, token: CancellationToken) -> Outcome {
 mod tests {
     use super::*;
 
-    fn slots(n: usize) -> (std::sync::Arc<tokio::sync::Semaphore>, Slot) {
+    fn slots(
+        n: usize,
+    ) -> (
+        std::sync::Arc<tokio::sync::Semaphore>,
+        crate::blocking::Slot,
+    ) {
         let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(n));
-        let slot = Slot::from(slots.clone().try_acquire_owned().unwrap());
+        let slot = crate::blocking::Slot::from(slots.clone().try_acquire_owned().unwrap());
         (slots, slot)
     }
 
@@ -595,13 +571,13 @@ mod tests {
         let (release, stalled) = std::sync::mpsc::channel::<()>();
         let call = tokio::spawn({
             let token = token.clone();
-            async move {
-                let work = on_blocking_thread(slot, move || {
+            slot.hold(async move {
+                let work = on_blocking_thread(move || {
                     let _ = stalled.recv_timeout(std::time::Duration::from_secs(30));
                     Outcome::json(&json!("finished"))
                 });
                 until_cancelled(&token, work).await
-            }
+            })
         });
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         token.cancel();
@@ -631,8 +607,13 @@ mod tests {
         token.cancel();
         let (slots, slot) = slots(1);
         let arguments = raw(&json!({"path": target, "template": "basic"}).to_string());
-        let outcome = Tool::Blocking(Blocking::Init)
-            .call(Some(arguments), Env::default(), false, token, slot)
+        let outcome = slot
+            .hold(Tool::Blocking(Blocking::Init).call(
+                Some(arguments),
+                Env::default(),
+                false,
+                token,
+            ))
             .await;
         assert!(!outcome.is_error, "{}", outcome.text);
         assert!(target.join("deploy.sql").is_file());
@@ -829,7 +810,6 @@ mod tests {
                 Env::default(),
                 false,
                 CancellationToken::new(),
-                slots(1).1,
             )
             .await;
         let structured = o.structured.unwrap_or_else(|| {

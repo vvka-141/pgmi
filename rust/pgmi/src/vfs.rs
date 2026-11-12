@@ -7,6 +7,8 @@
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
+use tokio_util::sync::CancellationToken;
+
 use crate::error::{Error, Result};
 
 /// Why a named pipe, socket or device in a project is never read.
@@ -62,6 +64,13 @@ pub(crate) trait Vfs {
         Ok(bytes)
     }
 
+    /// Reads a file the user named, which may be a pipe or a device, as
+    /// `read_bounded` does; a wait for input ends with `Interrupted` once
+    /// `stop` is cancelled.
+    fn read_named(&self, rel: &str, limit: u64, _stop: &CancellationToken) -> io::Result<Vec<u8>> {
+        self.read_bounded(rel, limit)
+    }
+
     /// Reads a file as UTF-8 text, failing as `std::fs::read_to_string` does.
     fn read_to_string(&self, rel: &str) -> io::Result<String> {
         String::from_utf8(self.read(rel)?).map_err(|_| {
@@ -89,6 +98,11 @@ pub(crate) struct OsFs {
 impl OsFs {
     pub(crate) fn new(root: impl Into<PathBuf>) -> Self {
         OsFs { root: root.into() }
+    }
+
+    /// Paths as given: absolute, or relative to the working directory.
+    pub(crate) fn cwd() -> Self {
+        Self::new(PathBuf::new())
     }
 
     pub(crate) fn project(root: &Path) -> Result<Self> {
@@ -172,6 +186,17 @@ impl Vfs for OsFs {
         Ok(out)
     }
 
+    fn read_named(&self, rel: &str, limit: u64, stop: &CancellationToken) -> io::Result<Vec<u8>> {
+        let file = std::fs::File::open(self.path(rel))?;
+        let meta = file.metadata()?;
+        if meta.is_file() || meta.is_dir() {
+            let mut out = Vec::new();
+            file.take(limit.saturating_add(1)).read_to_end(&mut out)?;
+            return Ok(out);
+        }
+        read_stream(file, limit, stop)
+    }
+
     fn read_dir(&self, rel: &str) -> io::Result<Vec<Entry>> {
         let mut out = Vec::new();
         for entry in std::fs::read_dir(self.path(rel))? {
@@ -186,6 +211,55 @@ impl Vfs for OsFs {
         out.sort_by(|a, b| a.name.as_str().cmp(b.name.as_str()));
         Ok(out)
     }
+}
+
+/// Reads a pipe or a device up to `limit` + 1 bytes, looking every 100 ms
+/// whether `stop` was cancelled while no input is ready.
+#[cfg(unix)]
+fn read_stream(
+    mut file: std::fs::File,
+    limit: u64,
+    stop: &CancellationToken,
+) -> io::Result<Vec<u8>> {
+    use rustix::event::{PollFd, PollFlags, Timespec, poll};
+    let look = Timespec {
+        tv_sec: 0,
+        tv_nsec: 100_000_000,
+    };
+    let cap = usize::try_from(limit.saturating_add(1)).unwrap_or(usize::MAX);
+    let mut out = Vec::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    while out.len() < cap {
+        if stop.is_cancelled() {
+            return Err(io::ErrorKind::Interrupted.into());
+        }
+        match poll(&mut [PollFd::new(&file, PollFlags::IN)], Some(&look)) {
+            Ok(0) | Err(rustix::io::Errno::INTR) => continue,
+            Ok(_) => {}
+            Err(e) => return Err(e.into()),
+        }
+        let want = buf.len().min(cap - out.len());
+        let chunk = buf.get_mut(..want).unwrap_or_default();
+        let n = match file.read(chunk) {
+            Ok(n) => n,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        if n == 0 {
+            break;
+        }
+        out.extend_from_slice(chunk.get(..n).unwrap_or_default());
+    }
+    Ok(out)
+}
+
+/// Reads a pipe or a device up to `limit` + 1 bytes; the read itself cannot
+/// be cancelled here.
+#[cfg(not(unix))]
+fn read_stream(file: std::fs::File, limit: u64, _: &CancellationToken) -> io::Result<Vec<u8>> {
+    let mut out = Vec::new();
+    file.take(limit.saturating_add(1)).read_to_end(&mut out)?;
+    Ok(out)
 }
 
 pub(crate) fn files(fs: &impl Vfs) -> io::Result<Vec<(String, Vec<u8>)>> {
@@ -483,6 +557,61 @@ impl Vfs for EmbeddedFs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn fifo(dir: &crate::testdir::TempDir) -> PathBuf {
+        let path = dir.join("pipe");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_named_pipe_is_read_to_its_end_and_bounded() {
+        let dir = crate::testdir::TempDir::new("vfs-pipe");
+        let path = fifo(&dir);
+        let writer = std::thread::spawn({
+            let path = path.clone();
+            move || std::fs::write(path, "a=1\nb=2\n").unwrap()
+        });
+        let fs = OsFs::cwd();
+        let read = fs.read_named(path.to_str().unwrap(), 5, &CancellationToken::new());
+        writer.join().unwrap();
+        assert_eq!(read.unwrap(), b"a=1\nb=");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_wait_on_a_named_pipe_ends_when_it_is_cancelled() {
+        let dir = crate::testdir::TempDir::new("vfs-stalled");
+        let path = fifo(&dir);
+        let _writer = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        let stop = CancellationToken::new();
+        let reading = std::thread::spawn({
+            let stop = stop.clone();
+            move || OsFs::cwd().read_named(path.to_str().unwrap(), 1024, &stop)
+        });
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        stop.cancel();
+        let started = std::time::Instant::now();
+        while !reading.is_finished() {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(2),
+                "the read did not see the cancel"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let e = reading.join().unwrap().unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::Interrupted);
+    }
 
     #[test]
     fn a_bounded_read_stops_one_byte_past_the_limit() {

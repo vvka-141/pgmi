@@ -301,7 +301,7 @@ impl Signin {
             .find(|a| a.kind == "PRIMARY")
             .map(|a| a.ip_address.clone())
             .ok_or_else(|| DialerError::NoPublicIp(self.instance.clone()))?;
-        let key = tokio::task::spawn_blocking(|| PrivateKey::new(&mut rand::rng(), 2048))
+        let key = crate::blocking::spawn(|| PrivateKey::new(&mut rand::rng(), 2048))
             .await
             .map_err(DialerError::KeyTask)?
             .map_err(failed(Step::RsaKey))?;

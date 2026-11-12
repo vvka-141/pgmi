@@ -117,7 +117,7 @@ impl Approver for Terminal {
             "WARNING: about to DROP and RECREATE database \"{db}\". This deletes all data.\nType the database name to confirm:"
         ));
         let answer = self.answer.clone();
-        let read = tokio::task::spawn_blocking(move || answer());
+        let read = crate::blocking::spawn(move || answer());
         let line = tokio::select! {
             r = read => r
                 .map_err(|e| Error::internal(format!("prompt: {e}")))?

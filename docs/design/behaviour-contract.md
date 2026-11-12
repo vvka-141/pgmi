@@ -170,7 +170,11 @@ long as the client takes them; a client that takes nothing for 2 s ends
 the session, running calls are cancelled and serve exits 0. A client that
 reads slowly but steadily gets every answer, each a complete line, however
 long that takes: 8 KB a second through eight 16 KB answers, 800 KB a second
-through one 3.5 MB answer. In the Rust binary a second SIGINT or SIGTERM ends
+through one 3.5 MB answer. In the Rust binary on Linux, where stdout is a
+pipe, any byte taken within each 2 s counts, so 1 KB and 256 bytes a second
+through a one-page pipe get every answer too; on a socket, macOS or Windows
+a client must take a 512-byte write within each 2 s once its buffer is
+full (see "serve bounds what a client can make it hold"). In the Rust binary a second SIGINT or SIGTERM ends
 serve at once (see "serve quits at a second signal"). A failed write to stdout ends the session: running calls are
 cancelled and nothing more is read (Go stops reading only when an answer
 written by the reader fails, and then waits for the running calls). A failed
@@ -312,7 +316,8 @@ stdin, at most once), `PGMI_PARAM_*` variables (the project `.env` is loaded
 first and never overrides a variable already set), `pgmi.yaml` `params`. Keys
 are lower-cased. Each reaches `deploy.sql` as `current_setting('pgmi.<key>')`
 and in `pgmi_parameter_view`. Refused with exit 10: an empty `PGMI_PARAM_*`, a
-`--param` without `=`, a missing params file, two keys differing only in case
+`--param` without `=`, a missing params file, a params file (or `-`) over
+`PGMI_MAX_FILE_SIZE` (Rust only), two keys differing only in case
 within one source (one file, the `--param` flags, the `PGMI_PARAM_*`
 variables, `pgmi.yaml` `params`; across sources they are one parameter and the
 higher source wins), a `PGMI_PARAM_` with nothing after the prefix, a
@@ -832,9 +837,14 @@ of memory. The Rust binary bounds all three:
   `-32000` (`32 tool calls are already running; wait for one to finish`).
   A call keeps its place until its answer is queued, so finished calls
   whose answers wait count too. `ping`, `tools/list` and
-  `notifications/cancelled` are still served. A cancelled call that reads
-  files keeps its place until its thread really ends; `init`, which writes,
-  finishes even when cancelled.
+  `notifications/cancelled` are still served. A cancelled call keeps its
+  place until every blocking piece of it really ends: a tool that reads
+  files, and a `deploy`'s reads of `pgmi.yaml`, params files, the project
+  and `.pgpass`. So cancelling calls never piles up more than 32 of them.
+  A `deploy` reading a `paramsFile` that is a pipe stops waiting within
+  0.1 s of its cancel (Unix); one opening a named pipe that no writer has
+  opened keeps its place until a writer comes, as the open blocks. `init`,
+  which writes, finishes even when cancelled.
 - When 1024 answers are waiting, serve reads no further request, and a
   finished call does not queue its answer, until the client takes one; a
   client that takes nothing for 2 s ends the session: running calls are
@@ -842,7 +852,11 @@ of memory. The Rust binary bounds all three:
   sending tool calls and never reads is therefore dropped about 2 s after
   its answers fill the queue, holding at most 1024 answers and 32 calls. A
   client that reads is never dropped, however many requests it pipelines
-  and however long one answer takes to read.
+  and however long one answer takes to read. "Takes" is measured in
+  bytes on Linux when stdout is a pipe (`FIONREAD` changes); elsewhere no
+  call reports what a reader took, and progress is a 512-byte write
+  completing, so there a client reading less than 256 bytes a second can be
+  dropped once its output buffer is full.
 
 Cases: none for the limits (Go accepts all three); `serve/burst` pins that a
 reading client is served in full. Rust unit tests
@@ -857,7 +871,15 @@ reading client is served in full. Rust unit tests
 `a_line_over_the_limit_is_dropped_and_counted_once`; Rust integration tests
 `a_client_that_keeps_calling_and_never_reads_is_dropped_with_bounded_memory`
 (RSS stays under 150 MB; it peaked near 32 MB in a release build),
-`a_reader_taking_800_kb_a_second_is_kept_while_a_huge_answer_holds_up_a_full_queue`.
+`a_reader_taking_800_kb_a_second_is_kept_while_a_huge_answer_holds_up_a_full_queue`,
+`a_reader_taking_1_kb_a_second_through_a_one_page_pipe_gets_every_answer_whole`,
+`a_reader_taking_256_bytes_a_second_through_a_one_page_pipe_gets_every_answer`,
+`cancelled_deploys_reading_a_pipe_that_never_ends_give_their_threads_back`,
+`deploys_cancelled_while_a_pipe_has_no_writer_keep_their_places_until_it_opens`
+(`rust/pgmi/tests/serve_pipes.rs`), and unit tests
+`a_reader_slower_than_a_line_per_drain_keeps_its_session_while_the_backlog_moves`,
+`blocking_work_keeps_the_slot_after_its_caller_stops_waiting`,
+`a_wait_on_a_named_pipe_ends_when_it_is_cancelled`.
 
 ### serve quits at a second signal
 
@@ -1162,6 +1184,7 @@ release notes take their "Behaviour changes" section from this table.
 | `min_protocol_version=3.2` or `latest` | protocol 3.2 | newly refused before connecting, exit 10 (known gap, PGMI-865) | owner 2026-11-11 |
 | Two `<pgmi-meta>` elements in one comment | the first used, the rest ignored | newly refused, exit 10 | owner 2026-11-11 |
 | `serve`: a line over 16 MiB | read | newly refused with `-32600`, session goes on | owner 2026-11-11 |
+| A `--params-file` (or `paramsFile`, or `-`) over `PGMI_MAX_FILE_SIZE` (10 MiB) | read whole | newly refused, exit 10 (`exceeds N-byte limit`) | intended |
 | `serve`: a `tools/call` while 32 calls run | runs | newly refused with `-32000` | owner 2026-11-11 |
 | `serve`: 1024 answers the client has not read | queued | the session ends | owner 2026-11-11 |
 | `serve`: a second SIGINT or SIGTERM while answers are written | ignored, answers drained, exit 0 | ends at once, exit 130 | owner 2026-11-12 |

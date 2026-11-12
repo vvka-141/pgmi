@@ -4,6 +4,7 @@
 
 #![forbid(unsafe_code)]
 
+mod blocking;
 mod cli;
 mod commands;
 mod config;

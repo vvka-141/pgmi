@@ -19,9 +19,10 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::VERSION;
+use crate::blocking::Slot;
 use crate::env::Env;
 use crate::error::Error;
-pub(crate) use tools::{Outcome, Slot, Toolbox};
+pub(crate) use tools::{Outcome, Toolbox};
 use wire::{Decoded, Field, INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, Request};
 
 const STATELESS: &str = "2026-07-28";
@@ -31,7 +32,8 @@ const META_SERVER: &str = "io.modelcontextprotocol/serverInfo";
 const UNSUPPORTED_VERSION: i64 = -32022;
 const ECHOED: [&str; 3] = ["2025-11-25", "2025-06-18", "2024-11-05"];
 const DRAIN: Duration = Duration::from_secs(2);
-const SLICE: usize = 4 * 1024;
+const SLICE: usize = 512;
+const LOOK: Duration = Duration::from_millis(100);
 const MAX_CALLS: usize = 32;
 const QUEUED_ANSWERS: usize = 1024;
 const BUSY: i64 = -32000;
@@ -44,6 +46,7 @@ pub(crate) fn run(runtime: Runtime, verbose: bool, env: Env) -> Result<(), Error
         let ended = serve(
             tokio::io::stdin(),
             tokio::io::stdout(),
+            stdout_backlog(),
             Arc::new(tools::Tools { env, verbose }),
             stop,
         )
@@ -53,6 +56,56 @@ pub(crate) fn run(runtime: Runtime, verbose: bool, env: Env) -> Result<(), Error
     });
     runtime.shutdown_timeout(Duration::from_millis(100));
     ended.into_result()
+}
+
+/// How many bytes written to the client it has not read yet, where the
+/// output can tell. Any change while a write waits is the client's progress.
+pub(crate) trait Backlog: Send + Sync {
+    fn unread(&self) -> Option<u64>;
+}
+
+impl<B: Backlog> Backlog for Option<B> {
+    fn unread(&self) -> Option<u64> {
+        self.as_ref().and_then(Backlog::unread)
+    }
+}
+
+/// An output that cannot tell what its reader took.
+#[cfg(any(test, not(target_os = "linux")))]
+pub(crate) struct Untold;
+
+#[cfg(any(test, not(target_os = "linux")))]
+impl Backlog for Untold {
+    fn unread(&self) -> Option<u64> {
+        None
+    }
+}
+
+/// A pipe's unread bytes, as `FIONREAD` on its write end reports them.
+#[cfg(target_os = "linux")]
+struct Pipe(std::os::fd::OwnedFd);
+
+#[cfg(target_os = "linux")]
+impl Backlog for Pipe {
+    fn unread(&self) -> Option<u64> {
+        rustix::io::ioctl_fionread(&self.0).ok()
+    }
+}
+
+/// Stdout's backlog when it is a pipe on Linux. Elsewhere (a socket, a
+/// file, Windows) progress is a written slice.
+#[cfg(target_os = "linux")]
+fn stdout_backlog() -> Option<Pipe> {
+    use std::os::fd::AsFd;
+    use std::os::unix::fs::FileTypeExt;
+    let file = std::fs::File::from(std::io::stdout().as_fd().try_clone_to_owned().ok()?);
+    let fifo = file.metadata().ok()?.file_type().is_fifo();
+    fifo.then(|| Pipe(file.into()))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn stdout_backlog() -> Untold {
+    Untold
 }
 
 /// Why a session ended.
@@ -130,32 +183,52 @@ impl InputEnd {
         self.0.cancel();
     }
 
-    /// Runs one write step; `None` once input has ended and the step did not
-    /// finish within `DRAIN`.
-    async fn progress<F: Future>(&self, step: F) -> Option<F::Output> {
+    /// Runs one write step, counting in `took` every change of `backlog`
+    /// while it waits. `None` once input has ended and the client took
+    /// nothing for `DRAIN`.
+    async fn progress<F: Future>(
+        &self,
+        step: F,
+        backlog: &impl Backlog,
+        took: &watch::Sender<u64>,
+    ) -> Option<F::Output> {
         tokio::pin!(step);
-        tokio::select! {
-            biased;
-            done = &mut step => return Some(done),
-            () = self.0.cancelled() => {}
+        let mut seen = backlog.unread();
+        let mut quiet = tokio::time::Instant::now();
+        loop {
+            tokio::select! {
+                biased;
+                done = &mut step => return Some(done),
+                () = tokio::time::sleep(LOOK) => {}
+            }
+            let unread = backlog.unread();
+            if unread != seen {
+                seen = unread;
+                took.send_modify(|n| *n += 1);
+                quiet = tokio::time::Instant::now();
+            } else if !self.0.is_cancelled() {
+                quiet = tokio::time::Instant::now();
+            } else if quiet.elapsed() >= DRAIN {
+                return None;
+            }
         }
-        tokio::time::timeout(DRAIN, step).await.ok()
     }
 }
 
 /// Serves MCP over newline-delimited JSON-RPC until `input` ends, `stop` is
 /// cancelled or writing to `output` fails. Ending cancels every tool call in
 /// flight; a cancelled call is never answered. Answers are written in
-/// flushed slices of `SLICE` bytes, so each slice the client takes is
-/// progress. An answer that finds `QUEUED_ANSWERS` waiting waits for room
-/// while the client takes slices; a client that takes none for `DRAIN`
-/// then, or at any slice once input has ended, is dropped. A tool call
-/// keeps its place among `MAX_CALLS` until its answer is queued. Returns
-/// once every call has ended and the answers are written, with the reason
-/// the session ended.
+/// flushed slices of `SLICE` bytes; the client's progress is each slice
+/// written and, while one waits, each change of `backlog`. An answer that
+/// finds `QUEUED_ANSWERS` waiting waits for room while the client makes
+/// progress; a client that makes none for `DRAIN` then, or at any point
+/// once input has ended, is dropped. A tool call keeps its place among
+/// `MAX_CALLS` until its answer is queued. Returns once every call has
+/// ended and the answers are written, with the reason the session ended.
 pub(crate) async fn serve<T: Toolbox>(
     input: impl AsyncRead + Unpin,
     output: impl AsyncWrite + Unpin,
+    backlog: impl Backlog,
     tools: Arc<T>,
     stop: CancellationToken,
 ) -> Ended {
@@ -179,7 +252,7 @@ pub(crate) async fn serve<T: Toolbox>(
     };
     let write = async {
         let delivery = tokio::select! {
-            delivery = writer(rx, output, &input_end, &took) => delivery,
+            delivery = writer(rx, output, &backlog, &input_end, &took) => delivery,
             () = dropped.cancelled() => Delivery::TimedOut,
         };
         if !matches!(delivery, Delivery::Delivered) {
@@ -260,12 +333,13 @@ impl<T: Toolbox> Reader<T> {
 }
 
 /// Writes each answer as one line, in flushed slices of `SLICE` bytes,
-/// until the queue closes, counting each slice the client took in `took`.
-/// Fails with the write error, or times out once input has ended and a
-/// slice waited `DRAIN`.
+/// until the queue closes, counting the client's progress in `took`. Fails
+/// with the write error, or times out once input has ended and the client
+/// took nothing for `DRAIN`.
 async fn writer(
     mut answers: Receiver<String>,
     mut output: impl AsyncWrite + Unpin,
+    backlog: &impl Backlog,
     input_end: &InputEnd,
     took: &watch::Sender<u64>,
 ) -> Delivery {
@@ -276,7 +350,7 @@ async fn writer(
                 output.write_all(slice).await?;
                 output.flush().await
             };
-            match input_end.progress(step).await {
+            match input_end.progress(step, backlog, took).await {
                 None => return Delivery::TimedOut,
                 Some(Err(e)) => return Delivery::Failed(e),
                 Some(Ok(())) => took.send_modify(|n| *n += 1),
@@ -549,7 +623,9 @@ impl<T: Toolbox> Server<T> {
         let slot = Slot::from(permit);
         tasks.spawn(async move {
             let tools = server.tools.clone();
-            let work = tools.call(tool, arguments, token.clone(), slot.clone());
+            let work = slot
+                .clone()
+                .hold(tools.call(tool, arguments, token.clone()));
             let outcome = match crate::error::catching_async(work).await {
                 Ok(o) => o,
                 Err(p) => Outcome::panicked(&p),

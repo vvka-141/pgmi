@@ -2432,6 +2432,7 @@ dependencies = [
  "reqwest",
  "roxmltree",
  "rsa",
+ "rustix",
  "rustls",
  "rustls-graviola",
  "rustls-native-certs",

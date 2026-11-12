@@ -230,7 +230,7 @@ impl Signin {
             .get_or_try_init(|| {
                 let (ids, env) = (ids.clone(), self.env.clone());
                 async move {
-                    tokio::task::spawn_blocking(move || certificate::Assertion::load(&ids, &env))
+                    crate::blocking::spawn(move || certificate::Assertion::load(&ids, &env))
                         .await
                         .map_err(certificate::CertificateError::Task)?
                 }

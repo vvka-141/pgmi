@@ -14,7 +14,17 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-use super::{Ended, Outcome, Slot, Toolbox, serve};
+use super::{Backlog, Ended, Outcome, Toolbox};
+
+/// Serves on an output that cannot tell what its reader took.
+async fn serve<T: Toolbox>(
+    input: impl tokio::io::AsyncRead + Unpin,
+    output: impl AsyncWrite + Unpin,
+    tools: Arc<T>,
+    stop: CancellationToken,
+) -> Ended {
+    super::serve(input, output, super::Untold, tools, stop).await
+}
 
 const MODERN_META: &str = r#""_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}"#;
 
@@ -77,7 +87,6 @@ impl Toolbox for Fakes {
         tool: Fake,
         arguments: Option<Box<RawValue>>,
         token: CancellationToken,
-        _slot: Slot,
     ) -> Outcome {
         self.calls.fetch_add(1, Ordering::SeqCst);
         match tool {
@@ -941,4 +950,55 @@ async fn a_client_that_keeps_calling_and_never_reads_is_dropped_with_its_calls_b
     let ran = tools.calls.load(Ordering::SeqCst);
     assert!(ran < 3000, "{ran} calls ran for a client that never reads");
     drop(sender);
+}
+
+struct Taken(Arc<AtomicUsize>);
+
+impl Backlog for Taken {
+    fn unread(&self) -> Option<u64> {
+        Some(u64::try_from(self.0.load(Ordering::SeqCst)).unwrap())
+    }
+}
+
+/// Three pings read at 10 bytes a second through a 16-byte pipe: each line
+/// waits longer than `DRAIN` for room.
+async fn crawl(backlog: impl Backlog + 'static, taken: Arc<AtomicUsize>) -> (Vec<u8>, Ended) {
+    let (mut input, server_in) = tokio::io::duplex(1024);
+    let (server_out, mut output) = tokio::io::duplex(16);
+    let server = tokio::spawn(super::serve(
+        server_in,
+        server_out,
+        backlog,
+        fakes().0,
+        CancellationToken::new(),
+    ));
+    input.write_all(pings(0..3).as_bytes()).await.unwrap();
+    input.shutdown().await.unwrap();
+    let mut data = Vec::new();
+    let mut buf = [0u8; 16];
+    loop {
+        let n = output.read(&mut buf).await.unwrap();
+        if n == 0 {
+            break;
+        }
+        data.extend_from_slice(&buf[..n]);
+        taken.store(data.len(), Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(100 * u64::try_from(n).unwrap())).await;
+    }
+    (data, server.await.unwrap())
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_reader_slower_than_a_line_per_drain_keeps_its_session_while_the_backlog_moves() {
+    let taken = Arc::new(AtomicUsize::new(0));
+    let (data, ended) = crawl(Taken(taken.clone()), taken).await;
+    assert_eq!(whole_lines(&data).len(), 3);
+    assert!(matches!(ended, Ended::EndOfInput), "{ended:?}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_same_reader_is_dropped_where_the_output_cannot_tell_what_it_took() {
+    let (data, ended) = crawl(super::Untold, Arc::default()).await;
+    assert!(data.len() < 3 * 36, "{} bytes", data.len());
+    assert!(matches!(ended, Ended::SlowReader), "{ended:?}");
 }

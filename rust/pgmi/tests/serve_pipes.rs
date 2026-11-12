@@ -21,6 +21,12 @@ fn ping(id: usize) -> String {
     format!(r#"{{"jsonrpc":"2.0","id":{id},"method":"ping"}}"#)
 }
 
+fn cancel(id: usize) -> String {
+    format!(
+        r#"{{"jsonrpc":"2.0","method":"notifications/cancelled","params":{{"requestId":{id}}}}}"#
+    )
+}
+
 struct Scratch(PathBuf);
 
 impl Scratch {
@@ -29,6 +35,13 @@ impl Scratch {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         Scratch(dir)
+    }
+
+    fn fifo(&self, name: &str) -> PathBuf {
+        let path = self.0.join(name);
+        let made = Command::new("mkfifo").arg(&path).status().unwrap();
+        assert!(made.success());
+        path
     }
 
     fn big_project(name: &str, files: usize) -> Self {
@@ -73,6 +86,7 @@ impl Serve {
             .unwrap();
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
+        rustix::pipe::fcntl_setpipe_size(&stdout, 4096).unwrap();
         (Serve { child, home }, stdin, stdout)
     }
 
@@ -87,6 +101,15 @@ impl Serve {
             .find_map(|l| l.strip_prefix("VmRSS:"))
             .and_then(|v| v.split_whitespace().next())
             .and_then(|v| v.parse().ok())
+    }
+
+    fn threads(&self) -> usize {
+        let status = std::fs::read_to_string(format!("/proc/{}/status", self.pid())).unwrap();
+        status
+            .lines()
+            .find_map(|l| l.strip_prefix("Threads:"))
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap()
     }
 
     fn interrupt(&self) {
@@ -174,6 +197,19 @@ fn send(stdin: &mut ChildStdin, lines: &[String]) {
         let _ = writeln!(text, "{line}");
     }
     stdin.write_all(text.as_bytes()).unwrap();
+}
+
+fn read_lines(out: ChildStdout) -> std::sync::mpsc::Receiver<serde_json::Value> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufRead::lines(std::io::BufReader::new(out)) {
+            let Ok(line) = line else { return };
+            if tx.send(serde_json::from_str(&line).unwrap()).is_err() {
+                return;
+            }
+        }
+    });
+    rx
 }
 
 fn ids(answers: &[serde_json::Value]) -> Vec<u64> {
@@ -348,4 +384,144 @@ fn a_second_signal_ends_serve_at_once_while_it_drains_to_a_slow_reader() {
     assert_eq!(status.code(), Some(130));
     drop(stdin);
     drop(reader);
+}
+
+#[test]
+fn a_reader_taking_1_kb_a_second_through_a_one_page_pipe_gets_every_answer_whole() {
+    let (mut serve, mut stdin, stdout) = Serve::start("kilobyte");
+    let mut lines = vec![
+        INITIALIZE.to_string(),
+        call(1, "ai_overview", &serde_json::json!({})),
+    ];
+    lines.extend((2..40).map(ping));
+    send(&mut stdin, &lines);
+    drop(stdin);
+    let answers = Reader::paced(stdout, 1024, 256).answers();
+    assert_eq!(ids(&answers), (0..40).collect::<Vec<u64>>());
+    let status = serve.exited_within(Duration::from_secs(5)).unwrap();
+    assert_eq!(status.code(), Some(0));
+}
+
+#[test]
+fn a_reader_taking_256_bytes_a_second_through_a_one_page_pipe_gets_every_answer() {
+    let (mut serve, mut stdin, stdout) = Serve::start("crawl");
+    let mut lines = vec![INITIALIZE.to_string()];
+    lines.extend((1..120).map(ping));
+    send(&mut stdin, &lines);
+    drop(stdin);
+    let answers = Reader::paced(stdout, 256, 256).answers();
+    assert_eq!(ids(&answers), (0..120).collect::<Vec<u64>>());
+    let status = serve.exited_within(Duration::from_secs(5)).unwrap();
+    assert_eq!(status.code(), Some(0));
+}
+
+fn deploy_reading(id: usize, project: &Scratch, params: &std::path::Path) -> String {
+    call(
+        id,
+        "deploy",
+        &serde_json::json!({
+            "path": project.0,
+            "connection": "host=127.0.0.1 dbname=review",
+            "paramsFile": params,
+        }),
+    )
+}
+
+fn busy(answers: &std::sync::mpsc::Receiver<serde_json::Value>, wait: Duration) -> Vec<u64> {
+    let mut ids = Vec::new();
+    while let Ok(a) = answers.recv_timeout(wait) {
+        if a["error"]["code"] == -32000 {
+            ids.push(a["id"].as_u64().unwrap());
+        }
+    }
+    ids.sort_unstable();
+    ids
+}
+
+#[test]
+fn cancelled_deploys_reading_a_pipe_that_never_ends_give_their_threads_back() {
+    let project = Scratch::new("stalled-params");
+    std::fs::write(project.0.join("deploy.sql"), "SELECT 1;\n").unwrap();
+    let fifo = project.fifo("params");
+    let _writer = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&fifo)
+        .unwrap();
+    let (serve, mut stdin, stdout) = Serve::start("stalled-params");
+    let answers = read_lines(stdout);
+    send(&mut stdin, &[INITIALIZE.to_string()]);
+    answers.recv_timeout(Duration::from_secs(5)).unwrap();
+    let before = serve.threads();
+    for round in 0..3 {
+        let calls: Vec<usize> = (1..=32).map(|i| round * 100 + i).collect();
+        send(
+            &mut stdin,
+            &calls
+                .iter()
+                .map(|id| deploy_reading(*id, &project, &fifo))
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(
+            busy(&answers, Duration::from_millis(500)),
+            Vec::<u64>::new()
+        );
+        send(
+            &mut stdin,
+            &calls.iter().map(|id| cancel(*id)).collect::<Vec<_>>(),
+        );
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    let grown = serve.threads().saturating_sub(before);
+    assert!(grown <= 48, "serve grew by {grown} threads");
+    send(&mut stdin, &[ping(1000)]);
+    let pong = answers.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(pong["id"], 1000);
+}
+
+#[test]
+fn deploys_cancelled_while_a_pipe_has_no_writer_keep_their_places_until_it_opens() {
+    let project = Scratch::new("unopened-params");
+    std::fs::write(project.0.join("deploy.sql"), "SELECT 1;\n").unwrap();
+    let fifo = project.fifo("params");
+    let (serve, mut stdin, stdout) = Serve::start("unopened-params");
+    let answers = read_lines(stdout);
+    send(&mut stdin, &[INITIALIZE.to_string()]);
+    answers.recv_timeout(Duration::from_secs(5)).unwrap();
+    let before = serve.threads();
+    send(
+        &mut stdin,
+        &(1..=40)
+            .map(|id| deploy_reading(id, &project, &fifo))
+            .collect::<Vec<_>>(),
+    );
+    assert_eq!(
+        busy(&answers, Duration::from_millis(500)),
+        (33..=40).collect::<Vec<u64>>()
+    );
+    send(&mut stdin, &(1..=32).map(cancel).collect::<Vec<_>>());
+    std::thread::sleep(Duration::from_millis(300));
+    send(
+        &mut stdin,
+        &(41..=80)
+            .map(|id| deploy_reading(id, &project, &fifo))
+            .collect::<Vec<_>>(),
+    );
+    assert_eq!(
+        busy(&answers, Duration::from_millis(500)),
+        (41..=80).collect::<Vec<u64>>()
+    );
+    let grown = serve.threads().saturating_sub(before);
+    assert!(grown <= 48, "serve grew by {grown} threads");
+    drop(std::fs::OpenOptions::new().write(true).open(&fifo).unwrap());
+    std::thread::sleep(Duration::from_millis(500));
+    send(&mut stdin, &[ping(1000)]);
+    let pong = answers.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(pong["id"], 1000);
+    send(&mut stdin, &[deploy_reading(1001, &project, &fifo)]);
+    send(&mut stdin, &[cancel(1001)]);
+    assert_eq!(
+        busy(&answers, Duration::from_millis(500)),
+        Vec::<u64>::new()
+    );
 }

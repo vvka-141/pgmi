@@ -515,6 +515,12 @@ impl Steps<'_> {
             self.ctx.stdin,
         );
         let (notes, verbose) = (self.reporter.clone(), self.ctx.verbose);
+        let limit = if files.is_empty() {
+            u64::MAX
+        } else {
+            walk::max_size(&self.ctx.env)?
+        };
+        let stop = self.guard.stop.token().clone();
         self.guard
             .interruptible(move || {
                 let note = |n: String| {
@@ -529,10 +535,17 @@ impl Steps<'_> {
                     flags: &flags,
                     note: &note,
                 };
-                match stdin {
-                    Stdin::Process => params::collect(sources, Some(&mut std::io::stdin())),
-                    Stdin::Unavailable => params::collect(sources, None),
-                }
+                let mut process = std::io::stdin();
+                let inputs = params::Inputs {
+                    files: &OsFs::cwd(),
+                    stdin: match stdin {
+                        Stdin::Process => Some(&mut process),
+                        Stdin::Unavailable => None,
+                    },
+                    limit,
+                    stop: &stop,
+                };
+                params::collect(sources, inputs)
             })
             .await
     }

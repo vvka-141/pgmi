@@ -106,9 +106,10 @@ overridden. Used only if the hand-written server proves unworkable.
   unset, the first type error is reported). It depends on std and serde_json
   only; the cargo-fuzz target `mcp_decoder` links it as `pgmi::serve::wire`
   (record 0022), and a proptest in `cargo test` checks the same properties.
-- The server is `serve::serve(input, output, toolbox, stop)` over any
-  `AsyncRead`/`AsyncWrite` (record 0022 step 7); `pgmi serve` passes
-  stdin, stdout, pgmi's `Tools` and a token its signal task cancels. The
+- The server is `serve::serve(input, output, backlog, toolbox, stop)` over
+  any `AsyncRead`/`AsyncWrite` (record 0022 step 7); `pgmi serve` passes
+  stdin, stdout, stdout's `Backlog`, pgmi's `Tools` and a token its signal
+  task cancels. The
   protocol behaviour is unit-tested in-process over `tokio::io::duplex`
   with a fake toolbox, as Go's `Serve(ctx, in, out)` tests are.
 - Ids are echoed as written (`1e2`, `-0`), through serde_json's `raw_value`.
@@ -139,21 +140,37 @@ overridden. Used only if the hand-written server proves unworkable.
 - `serve()` joins two named halves (fix round 4): `Reader` (reads lines,
   answers what needs no tool, starts a task per call, then waits for every
   call) and `writer`. The writer writes each answer as one line in flushed
-  slices of 4 KiB (fix round 5) and counts every slice in a `watch`
-  channel: that count is the client's progress. tokio's `Stdout` copies up
-  to 2 MiB into its own buffer per write, so a `write` returning is no
-  evidence the client read anything; a flushed 4 KiB slice is. `InputEnd`,
+  slices of 512 bytes and counts the client's progress in a `watch`
+  channel. tokio's `Stdout` copies up to 2 MiB into its own buffer per
+  write, so a `write` returning is no evidence the client read anything; a
+  flushed slice is. A slice is not enough on its own (fix round 6): a
+  Linux pipe frees room a whole page at a time, so a write waits until the
+  reader has taken a full page, and a reader taking 1 KB/s through a
+  one-page pipe made no visible progress for 4 s. While a slice waits, the
+  writer therefore looks every 100 ms at the output's `Backlog`, the bytes
+  written that the client has not read yet, and counts any change as
+  progress. On Linux stdout's backlog, when stdout is a pipe, is
+  `FIONREAD` on a duplicate of its descriptor (`rustix`, pure Rust): any
+  byte the client takes changes it. Elsewhere (a socket, which is what a
+  Node client's stdio is, a file, macOS, Windows) no call reports a
+  writer's unread bytes, so progress is a written slice: a client reading
+  less than `SLICE` per `DRAIN` (256 bytes a second) there can be dropped
+  once its output buffer is full. A Unix socket frees a write's room only
+  when the reader has taken all of it, so the small slice also keeps that
+  granularity at 512 bytes. `InputEnd`,
   marked by the reader when it stops reading for any reason, is the one
   end-of-session state between the halves. Until then the writer waits on
-  the client as long as the client takes; after it, every slice must be
-  taken within `DRAIN` (2 s). A failed write cancels the session token,
+  the client as long as the client takes; after it, the client must make
+  progress within every `DRAIN` (2 s). A failed write cancels the session token,
   which stops the reader and every call. So a batch client that reads
   slowly but steadily after closing its input gets every answer, each a
   complete line, and a client that never reads ends 2 s after its input.
-  The tests that pin this run the real binary over OS pipes
-  (`tests/serve_pipes.rs`) and, in-process, a `StdoutLike` transport that
-  buffers as tokio's `Stdout` does; the duplex tests with tiny lines missed
-  it three times.
+  The tests that pin this run the real binary over OS pipes shrunk to one
+  page (`tests/serve_pipes.rs`: readers at 256 B/s, 1 KB/s, 8 KB/s and
+  800 KB/s) and, in-process, a `StdoutLike` transport that buffers as
+  tokio's `Stdout` does and a reader slower than a line per `DRAIN` with
+  and without a backlog; the duplex tests with tiny lines missed it three
+  times.
 - Bounds (PGMI-868, decided changes in the behaviour contract): a line of
   at most `wire::MAX_LINE` (16 MiB; `Lines` drops a longer one without
   buffering it and counts it, the reader answers -32600), `MAX_CALLS` (32)
@@ -164,7 +181,7 @@ overridden. Used only if the hand-written server proves unworkable.
   reader answers a whole 64 KiB chunk at once, so a reading client that
   pipelines a burst fills it before the writer runs. Every answer, the
   reader's and a call's, enters through `Server::queue`, which waits for
-  room as long as the writer keeps taking slices and ends the session
+  room as long as the client makes progress and ends the session
   (`SlowReader`, exit 0) after `DRAIN` without one. A slow reader behind a
   3.5 MB answer therefore keeps its session, and a client that keeps
   sending calls and never reads is dropped: at most 1024 answers and 32
@@ -175,14 +192,28 @@ overridden. Used only if the hand-written server proves unworkable.
 - Signals: the first SIGINT or SIGTERM cancels the session (answers already
   made are still written while the client takes them); the second exits
   130 at once, as `deploy` does (fix round 5, owner decision; Go ignores it).
-- The blocking tools (`init`, `metadata_plan`, `metadata_validate` and the
-  rest that answer from files) run on the blocking pool, and a clone of the
-  call's `Slot` moves into the blocking closure. A cancelled read-only call stops
-  waiting for its thread at once, so a stalled filesystem cannot hold up the
-  end of a session, but its slot stays taken until the thread ends, so
-  cancelling cannot pile work beyond 32 calls. `init`, which writes, is
-  never abandoned: a cancelled `init` call still waits for its thread, so
-  the runtime's 100 ms shutdown never cuts a project half-written.
+- Blocking work keeps its call's place until it ends (fix round 6). The
+  server runs each call inside `blocking::Slot::hold`, a task-local, and
+  every blocking piece of pgmi starts through `blocking::spawn` (clippy's
+  `disallowed-methods` refuses a bare `spawn_blocking`), which moves a
+  clone of the running call's `Slot` into its closure. That covers the
+  blocking tools (`init`, `metadata_plan` and the rest that answer from
+  files) and every blocking step of a `deploy`: reading `pgmi.yaml`, the
+  params files, the project, `.pgpass`, the TLS files and the cloud keys.
+  A cancelled call stops waiting for its thread at once, so a stalled
+  filesystem cannot hold up the end of a session, but its slot stays
+  taken until the thread ends, so cancelling cannot pile up threads beyond
+  32 calls; before, a cancelled `deploy` freed its slot while its
+  `paramsFile` read went on, and 40 cancels left 40 threads. A params file
+  is read through the `Vfs` seam (`read_named`) up to
+  `PGMI_MAX_FILE_SIZE`; a named pipe or a device is read by polling every
+  100 ms, so a cancel ends the wait (Unix). Opening a named pipe that no
+  writer has opened blocks, as Go's `os.ReadFile` does, and keeps the
+  call's slot until a writer comes. `init`, which writes, is never
+  abandoned short of a second signal: a cancelled `init` call still waits
+  for its thread, so the runtime's 100 ms shutdown never cuts a project
+  half-written; a second SIGINT or SIGTERM exits 130 at once, whatever is
+  running.
 - On Unix a client that closes stdout kills serve with SIGPIPE, as it does
   Go's: `main` keeps the signal's default action (record 0002), so a closed
   pipe never reaches `Ended::WriteFailed`; other write errors exit 1.

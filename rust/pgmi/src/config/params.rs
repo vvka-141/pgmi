@@ -1,9 +1,12 @@
 use std::collections::BTreeMap;
 use std::io::Read;
 
+use tokio_util::sync::CancellationToken;
+
 use super::dotenv::{self, Mode};
 use crate::env::Env;
 use crate::error::{Error, Result};
+use crate::vfs::Vfs;
 
 pub(crate) const ENV_PREFIX: &str = "PGMI_PARAM_";
 
@@ -24,6 +27,55 @@ pub(crate) struct Sources<'a> {
     pub(crate) flags: &'a [Param],
     /// Receives the `--verbose` lines: counts only, never keys or values.
     pub(crate) note: &'a dyn Fn(String),
+}
+
+/// Where `--params-file` reads: a named file through `files`, `-` from
+/// `stdin`, each at most `limit` bytes. A wait for a pipe ends once `stop`
+/// is cancelled.
+pub(crate) struct Inputs<'a> {
+    pub(crate) files: &'a dyn Vfs,
+    pub(crate) stdin: Option<&'a mut dyn Read>,
+    pub(crate) limit: u64,
+    pub(crate) stop: &'a CancellationToken,
+}
+
+impl Inputs<'_> {
+    /// A params file's display name and text.
+    fn read(&mut self, file: &str) -> Result<(String, String)> {
+        let limit = self.limit;
+        let (name, bytes) = if file == "-" {
+            let input = self.stdin.as_mut().ok_or_else(|| {
+                Error::config("failed to read params file - (stdin): stdin is not available here")
+            })?;
+            let mut bytes = Vec::new();
+            input
+                .take(limit.saturating_add(1))
+                .read_to_end(&mut bytes)
+                .map_err(|e| {
+                    Error::config("failed to read params file - (stdin)").with_source(e)
+                })?;
+            ("- (stdin)".to_string(), bytes)
+        } else {
+            let bytes = self.files.read_named(file, limit, self.stop).map_err(|e| {
+                Error::config(format!("failed to read params file {file}")).with_source(e)
+            })?;
+            (file.to_string(), bytes)
+        };
+        if bytes.len() as u64 > limit {
+            return Err(Error::config(format!(
+                "failed to read params file {name}: exceeds {limit}-byte limit (override via PGMI_MAX_FILE_SIZE)"
+            )));
+        }
+        let text = String::from_utf8(bytes).map_err(|_| {
+            Error::config(format!("failed to read params file {name}")).with_source(
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "stream did not contain valid UTF-8",
+                ),
+            )
+        })?;
+        Ok((name, text))
+    }
 }
 
 fn valid_key(key: &str) -> bool {
@@ -74,7 +126,7 @@ fn no_case_twins<'a>(source: &str, keys: impl IntoIterator<Item = &'a str>) -> R
 )]
 pub(crate) fn collect(
     src: Sources<'_>,
-    mut stdin: Option<&mut dyn Read>,
+    mut inputs: Inputs<'_>,
 ) -> Result<BTreeMap<String, String>> {
     let mut out = BTreeMap::new();
     let mut keys: Vec<String> = Vec::new();
@@ -123,21 +175,7 @@ pub(crate) fn collect(
     let mut from_files = std::collections::BTreeSet::new();
     for file in src.files {
         (src.note)(format!("Loading parameters from file: {file}"));
-        let (name, text) = if file == "-" {
-            let mut s = String::new();
-            let input = stdin.as_mut().ok_or_else(|| {
-                Error::config("failed to read params file - (stdin): stdin is not available here")
-            })?;
-            input.read_to_string(&mut s).map_err(|e| {
-                Error::config("failed to read params file - (stdin)").with_source(e)
-            })?;
-            ("- (stdin)".to_string(), s)
-        } else {
-            let t = std::fs::read_to_string(file).map_err(|e| {
-                Error::config(format!("failed to read params file {file}")).with_source(e)
-            })?;
-            (file.clone(), t)
-        };
+        let (name, text) = inputs.read(file)?;
         let pairs = dotenv::parse(&text, Mode::Strict).map_err(|e| {
             Error::config(format!("failed to parse params file {name}")).with_source(e)
         })?;
@@ -201,6 +239,49 @@ pub(crate) fn collect(
 mod tests {
     use super::*;
     use crate::error::Kind;
+    use crate::vfs::MemFs;
+
+    fn inputs(stdin: Option<&mut dyn Read>) -> Inputs<'_> {
+        Inputs {
+            files: Box::leak(Box::new(MemFs::default().file("p.env", "a=file\n"))),
+            stdin,
+            limit: 64,
+            stop: Box::leak(Box::new(CancellationToken::new())),
+        }
+    }
+
+    fn sources<'a>(env: &'a Env, files: &'a [String]) -> Sources<'a> {
+        Sources {
+            yaml: vec![],
+            env,
+            files,
+            flags: &[],
+            note: &|_| {},
+        }
+    }
+
+    #[test]
+    fn a_params_file_is_read_through_the_filesystem_and_refused_over_the_limit() {
+        let env = Env::default();
+        let files = ["p.env".to_string()];
+        let out = collect(sources(&env, &files), inputs(None)).unwrap();
+        assert_eq!(out["a"], "file");
+        let big = format!("a={}\n", "x".repeat(64));
+        let mut over = inputs(None);
+        over.files = Box::leak(Box::new(MemFs::default().file("p.env", &big)));
+        let e = collect(sources(&env, &files), over).unwrap_err();
+        assert_eq!(e.exit_code(), 10);
+        assert_eq!(
+            e.text(),
+            "failed to read params file p.env: exceeds 64-byte limit (override via PGMI_MAX_FILE_SIZE)"
+        );
+        let stdin = ["-".to_string()];
+        let e = collect(sources(&env, &stdin), inputs(Some(&mut big.as_bytes()))).unwrap_err();
+        assert_eq!(
+            e.text(),
+            "failed to read params file - (stdin): exceeds 64-byte limit (override via PGMI_MAX_FILE_SIZE)"
+        );
+    }
 
     #[test]
     fn precedence() {
@@ -219,7 +300,7 @@ mod tests {
                 flags: &flags,
                 note: &|_| {},
             },
-            Some(&mut "a=file\nb=file\n".as_bytes()),
+            inputs(Some(&mut "a=file\nb=file\n".as_bytes())),
         )
         .unwrap();
         assert_eq!(out["a"], "flag");
@@ -242,7 +323,7 @@ mod tests {
                 flags: &flags,
                 note: &|n| notes.borrow_mut().push(n),
             },
-            Some(&mut "a=secret-file\nc=1\nC2=2\n".as_bytes()),
+            inputs(Some(&mut "a=secret-file\nc=1\nC2=2\n".as_bytes())),
         )
         .unwrap();
         assert_eq!(
@@ -270,7 +351,7 @@ mod tests {
                 flags: &flags,
                 note: &|_| {},
             },
-            None,
+            inputs(None),
         )
         .unwrap();
         assert_eq!(out["a"], "x=y");
@@ -284,7 +365,7 @@ mod tests {
                 flags: &flags,
                 note: &|_| {},
             },
-            None,
+            inputs(None),
         )
         .unwrap_err();
         assert!(
@@ -307,7 +388,7 @@ mod tests {
                     flags: &flags,
                     note: &|_| {},
                 },
-                Some(&mut input.as_bytes()),
+                inputs(Some(&mut input.as_bytes())),
             )
         };
         let e = run(&env, &[], &[], "").unwrap_err();
@@ -366,7 +447,7 @@ mod tests {
                 flags: &flags,
                 note: &|_| {},
             },
-            Some(&mut &stdin[..]),
+            inputs(Some(&mut &stdin[..])),
         )
     }
 
@@ -500,22 +581,24 @@ mod tests {
 
     #[test]
     fn case_twins_across_params_files_the_later_file_wins() {
-        let dir = crate::testdir::TempDir::new("params");
-        for (name, text) in [("a.env", "Env=a"), ("b.env", "env=b"), ("c.env", "ENV=c")] {
-            std::fs::write(dir.join(name), text).unwrap();
-        }
-        let path = |n: &str| dir.join(n).display().to_string();
-        let out = run(
-            &[],
-            &Env::default(),
-            &[path("a.env"), path("b.env")],
-            &[],
-            b"",
-        )
-        .unwrap();
-        assert_eq!(out, BTreeMap::from([("env".into(), "b".into())]));
-        let files = [path("b.env"), path("a.env"), path("c.env")];
-        let out = run(&[], &Env::default(), &files, &[], b"").unwrap();
-        assert_eq!(out, BTreeMap::from([("env".into(), "c".into())]));
+        let fs = MemFs::default()
+            .file("a.env", "Env=a")
+            .file("b.env", "env=b")
+            .file("c.env", "ENV=c");
+        let env = Env::default();
+        let read = |names: &[&str]| {
+            let files: Vec<String> = names.iter().map(|n| (*n).to_string()).collect();
+            let mut over = inputs(None);
+            over.files = &fs;
+            collect(sources(&env, &files), over).unwrap()
+        };
+        assert_eq!(
+            read(&["a.env", "b.env"]),
+            BTreeMap::from([("env".into(), "b".into())])
+        );
+        assert_eq!(
+            read(&["b.env", "a.env", "c.env"]),
+            BTreeMap::from([("env".into(), "c".into())])
+        );
     }
 }

@@ -533,18 +533,17 @@ impl Attempt<'_> {
                     spec.user.clone(),
                 );
                 let port = self.port;
-                let found = tokio::task::spawn_blocking(move || {
-                    pgpass::lookup(&path, &host, port, &db, &user)
-                })
-                .await
-                .map_err(|e| {
-                    let e = std::io::Error::other(e);
-                    DialFailure::Broken {
-                        text: e.to_string(),
-                        class: Class::Fatal,
-                        origin: Origin::Io(e),
-                    }
-                })?;
+                let found =
+                    crate::blocking::spawn(move || pgpass::lookup(&path, &host, port, &db, &user))
+                        .await
+                        .map_err(|e| {
+                            let e = std::io::Error::other(e);
+                            DialFailure::Broken {
+                                text: e.to_string(),
+                                class: Class::Fatal,
+                                origin: Origin::Io(e),
+                            }
+                        })?;
                 if let Some(w) = found.warning() {
                     (self.log)(w);
                 }
@@ -789,7 +788,7 @@ impl Dialer {
         }
         let tls = if needs_tls(spec) {
             let owned = spec.clone();
-            let built = tokio::task::spawn_blocking(move || tls::config(&owned))
+            let built = crate::blocking::spawn(move || tls::config(&owned))
                 .await
                 .map_err(|e| Error::internal("building the TLS configuration").with_source(e))??;
             Some(built)

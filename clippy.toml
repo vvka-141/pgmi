@@ -8,4 +8,5 @@ disallowed-methods = [
     { path = "std::env::var", reason = "read the Env snapshot (record 0016)" },
     { path = "std::env::var_os", reason = "read the Env snapshot (record 0016)" },
     { path = "std::env::vars", reason = "read the Env snapshot (record 0016)" },
+    { path = "tokio::task::spawn_blocking", reason = "use crate::blocking::spawn, which keeps a serve call's slot until the work ends" },
 ]

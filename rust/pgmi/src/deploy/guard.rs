@@ -35,7 +35,7 @@ pub(super) async fn before_guard<T: Send + 'static>(
     tokio::select! {
         biased;
         () = stop.cancelled() => Err(stopped(stop)),
-        r = tokio::task::spawn_blocking(work) => {
+        r = crate::blocking::spawn(work) => {
             r.map_err(|e| Error::internal("blocking task").with_source(e))?
         }
     }
@@ -69,7 +69,7 @@ impl Guard {
         work: impl FnOnce() -> Result<T> + Send + 'static,
     ) -> Result<T> {
         self.waiting(async {
-            tokio::task::spawn_blocking(work)
+            crate::blocking::spawn(work)
                 .await
                 .map_err(|e| Error::internal("blocking task").with_source(e))?
         })
@@ -83,7 +83,7 @@ impl Guard {
         work: impl FnOnce() -> Result<T> + Send + 'static,
     ) -> Result<T> {
         tokio::select! {
-            r = tokio::task::spawn_blocking(work) => {
+            r = crate::blocking::spawn(work) => {
                 r.map_err(|e| Error::internal("blocking task").with_source(e))?
             }
             () = self.stop.cancelled() => Err(self.stop_error()),
