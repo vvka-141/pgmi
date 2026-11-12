@@ -1,0 +1,15 @@
+description: a root deploy file in another letter case (Deploy.sql) is never a project file, so it is neither loaded into the session nor executed; the same name deeper in the tree is an ordinary file
+project:
+  files:
+    deploy.sql: CREATE TABLE seen AS SELECT path FROM pg_temp.pgmi_source_view ORDER BY path;
+    Deploy.sql: CREATE TABLE must_not_run (n int);
+    lib/Deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT path FROM seen
+          rows: [[./lib/Deploy.sql]]
+        - query: SELECT to_regclass('must_not_run') IS NULL
+          rows: [[true]]

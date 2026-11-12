@@ -123,7 +123,7 @@ impl DeployRecord {
             created: loaded
                 .map(|_| p.provision == Provision::Created)
                 .or(p.reached(Phase::Deploying).then_some(false)),
-            database: p.database().map(str::to_string),
+            database: loaded.and(p.database()).map(str::to_string),
             detail: None,
             dotenv_keys: facts.dotenv_keys.to_vec(),
             duration_ms: p

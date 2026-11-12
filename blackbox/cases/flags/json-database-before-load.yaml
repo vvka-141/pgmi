@@ -1,0 +1,9 @@
+description: a deploy refused before the project loads (a --param without =) reports "database" null in --json, as docs/CLI.md says, while target still names the database
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --json, --connection, "{conn}", -d, "{db}", --param, novalue]
+    expect:
+      exit: 10
+      json: {database: null, status: failed}

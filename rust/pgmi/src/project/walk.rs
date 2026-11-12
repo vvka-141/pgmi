@@ -201,7 +201,7 @@ fn walk(
         } else {
             format!("./{child}")
         };
-        if rel.is_empty() && name == "deploy.sql" && !is_dir {
+        if rel.is_empty() && name.eq_ignore_ascii_case("deploy.sql") && !is_dir {
             continue;
         }
         if name.starts_with('.') || (is_dir && (name == "node_modules" || name == "__pycache__")) {
@@ -427,6 +427,15 @@ mod tests {
     fn a_project_with_only_deploy_sql_has_no_sources() {
         let p = load(&project(), MAX).unwrap();
         assert!(p.sources.is_empty() && p.tests.is_empty() && p.ignored.is_empty());
+    }
+
+    #[test]
+    fn the_root_deploy_file_is_never_a_source_whatever_its_case() {
+        let fs = project()
+            .file("Deploy.sql", "SELECT 2;")
+            .file("lib/Deploy.sql", "SELECT 3;");
+        let p = load(&fs, MAX).unwrap();
+        assert_eq!(paths(&p.sources), ["./lib/Deploy.sql"]);
     }
 
     #[test]

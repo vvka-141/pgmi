@@ -242,3 +242,5 @@ config/yaml-documents
 serve/deploy-timeout-zero
 connection/keyword-uppercase-no-echo
 connection/uri-scheme-case
+dialect/root-deploy-file-any-case
+flags/json-database-before-load
