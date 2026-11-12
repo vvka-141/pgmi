@@ -234,3 +234,9 @@ flags/params-file-pipe
 flags/overwrite-connection-limit
 serve/deploy-verbose
 cloud/google-arguments
+config/yaml-empty
+config/yaml-duplicate-keys
+config/yaml-timeout
+config/yaml-port
+config/yaml-documents
+serve/deploy-timeout-zero

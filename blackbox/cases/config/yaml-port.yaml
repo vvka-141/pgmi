@@ -21,7 +21,7 @@ steps:
     expect:
       exit: 10
       stderr: ["line 3", "{port}"]
-      rust: {exit: 0, stderr: ['^connection: from pgmi\\.yaml \\({host}:{port}/{db}\\)$']}
+      rust: {exit: 0, stderr: ['^connection: from pgmi\.yaml \({host}:{port}/{db}\)$']}
   - pgmi: [deploy, "{project}/float"]
     env: {PGPASSWORD: "{password}"}
     expect:
