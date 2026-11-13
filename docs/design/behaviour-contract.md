@@ -434,7 +434,8 @@ minimum above 3.0, see "A minimum protocol above 3.0 is refused for now");
 `client_encoding` are accepted. `connect_timeout` (and `PGCONNECT_TIMEOUT`) is
 whole seconds; in the Rust binary it bounds each attempt from
 before the host lookup and the sign-in token, so a stalled host is given up
-and the next one tried, and a value above 9223372036 (the longest Go
+and the next one tried; a round whose hosts all ran out of it is not
+retried, as in Go (PGMI-933, which reverses PGMI-907), and a value above 9223372036 (the longest Go
 duration, which Go wraps around) is refused before connecting, exit 10.
 A refusal ends with its next step: a missing maintenance database says what
 it is and to name an existing one (the connection string's database or
@@ -1389,7 +1390,6 @@ release notes take their "Behaviour changes" section from this table.
 | Session-preparation failure | `session preparation failed: execution failed: failed to create internal tables: failed to create pgmi schema: ...; pgmi's session tables need the TEMPORARY privilege: GRANT ...` | `session preparation failed: create the session tables: ...`, the `GRANT` on its own line | agent 2026-11-12 (PGMI-907), owner may revisit |
 | Input refused before connecting | `FAILED <db>: failed after ...`, then the error (an invalid parameter key, a connection option value, a client certificate without its key, AWS sign-in without a region) | the error alone; exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
 | `pgmi.yaml` that is not valid YAML or has an unknown key | yaml.v3's text (`yaml: unmarshal errors: line 2: field x not found in type config.ProjectConfig`) | the line, column and parser text, naming the keys expected (`line 2 column 3: unknown field ...`); exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
-| A connection attempt that runs out of `connect_timeout` | not retried | retried like every transient failure; exit 11 both | agent 2026-11-12 (PGMI-907), owner may revisit |
 | A project path that does not exist | `failed to scan directory: failed to open directory: failed to access path: stat <path>: no such file or directory` | `project path "<path>" does not exist`; exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
 | `PGMI_MAX_FILE_SIZE` that is not a positive whole number | reported inside the first file read (`failed to read ./x.sql: PGMI_MAX_FILE_SIZE=...`) | reported alone; exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
 | A `.pgmiignore` pattern that cannot be read | Go regexp's reason (`error parsing regexp: ...`, `empty character class`) | `invalid pattern "<p>"`; exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |

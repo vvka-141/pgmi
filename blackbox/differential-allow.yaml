@@ -189,11 +189,6 @@ accept:
     case: cases/tls/(system-roots|verify-without-root)\.yaml
     field: stderr
     rust: 'refused to localhost:\d+; localhost \(127\.0\.0\.1\):\d+: error performing TLS handshake: x509: certificate signed by unknown authority'
-  - row: A connection attempt that runs out of `connect_timeout`
-    case: cases/env/pgconnect-timeout\.yaml
-    step: steps[0]
-    field: stderr
-    rust: '\A(Connection attempt \d failed: <driver text>\ncheck network reachability and server load; raise --timeout if needed; retrying in <duration>\n){3}FAILED'
   - row: Session-preparation failure
     case: cases/(bad-weather|connection|errors)/.*\.yaml
     field: stderr

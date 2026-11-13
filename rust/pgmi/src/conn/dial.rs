@@ -244,8 +244,8 @@ impl DialFailure {
             DialFailure::Server(answer) if retry::transient(Cause::Sqlstate(&answer.code)) => {
                 Class::Transient
             }
-            DialFailure::Timeout => Class::Transient,
             DialFailure::Server(_)
+            | DialFailure::Timeout
             | DialFailure::TokenRefused { .. }
             | DialFailure::ProbeTimeout
             | DialFailure::NotTarget(_) => Class::Fatal,
@@ -1574,7 +1574,7 @@ mod tests {
         assert!(lookup(true).transient());
         assert!(!lookup(false).transient());
         assert!(at("h", 1, refused()).transient());
-        assert!(at("h", 1, DialFailure::Timeout).transient());
+        assert!(!at("h", 1, DialFailure::Timeout).transient());
         assert!(server("57P03").transient());
         assert!(server("53300").transient());
         assert!(!server("3D000").transient());
