@@ -28,7 +28,7 @@ func TestAdvancedTemplate_RefusesServerBelowPostgres18(t *testing.T) {
 	if err == nil {
 		t.Fatal("deploy on PostgreSQL 17 succeeded; the advanced template must refuse it")
 	}
-	if !strings.Contains(err.Error(), "requires PostgreSQL 18 or newer") || !strings.Contains(err.Error(), "17.") {
+	if !strings.Contains(err.Error(), "written for PostgreSQL 18") || !strings.Contains(err.Error(), "17.") {
 		t.Fatalf("want a refusal naming the found version and the 18 requirement, got: %v", err)
 	}
 

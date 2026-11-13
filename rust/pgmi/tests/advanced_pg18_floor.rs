@@ -73,7 +73,7 @@ fn refuses_server_below_postgres_18() {
         "deploy on PostgreSQL 17 succeeded; the advanced template must refuse it"
     );
     assert!(
-        stderr.contains("requires PostgreSQL 18 or newer") && stderr.contains("17."),
+        stderr.contains("written for PostgreSQL 18") && stderr.contains("17."),
         "want a refusal naming the found version and the 18 requirement, got:\n{stderr}"
     );
     let leaked = on(

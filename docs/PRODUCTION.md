@@ -39,7 +39,7 @@ The minimum PostgreSQL version depends on which layer you use:
 | advanced template | 18+ | `deploy.sql` refuses an older server before any schema work. The template relies on PostgreSQL 18 features: `uuidv7()`, temporal keys (`WITHOUT OVERLAPS`, `PERIOD` foreign keys), virtual generated columns and `RETURNING OLD`. Also needs the `uuid-ossp` / `pgcrypto` / `pg_trgm` / `hstore` / `btree_gist` extensions, and a role with `CREATEROLE` + `CREATEDB`; `deploy.sql` grants itself the roles it creates. **No superuser required** (tested in CI). |
 | API / MCP features | 18+ | Ship inside the advanced template, so they share its floor. |
 
-The 15+ figure applies to the CLI and the basic scaffold (set in the Go core — see the [core minimum](#connection-requirements)). The advanced template raises the floor to **18+**, and its `deploy.sql` checks it first: on an older server it fails with `The advanced template requires PostgreSQL 18 or newer; this server is PostgreSQL <version>.` and exit code 13, before it creates anything.
+The 15+ figure applies to the CLI and the basic scaffold (set in the Go core — see the [core minimum](#connection-requirements)). The advanced template raises the floor to **18+**, and its `deploy.sql` checks it first: on an older server it fails with `This project's code was written for PostgreSQL 18; this server runs <version>. pgmi itself works on PostgreSQL 15 and newer: adapt the code to your version, then deploy again.` and exit code 13, before it creates anything.
 
 Both floors are tested, not asserted. CI runs the core suite and the basic
 template against PostgreSQL 15, and everything against 18, so a construct that

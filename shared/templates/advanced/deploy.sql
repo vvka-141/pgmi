@@ -26,10 +26,9 @@ SET LOCAL lock_timeout = '5s';
 DO $$
 BEGIN
     IF current_setting('server_version_num')::int < 180000 THEN
-        RAISE EXCEPTION 'The advanced template requires PostgreSQL 18 or newer; this server is PostgreSQL %.',
-            current_setting('server_version')
-            USING ERRCODE = 'feature_not_supported',
-                  HINT = 'Deploy to a PostgreSQL 18+ server. pgmi itself and the basic template run on older versions.';
+        RAISE EXCEPTION 'This project''s code was written for PostgreSQL 18; this server runs %. pgmi itself works on PostgreSQL 15 and newer: adapt the code to your version, then deploy again.',
+            split_part(current_setting('server_version'), ' ', 1)
+            USING ERRCODE = 'feature_not_supported';
     END IF;
 END $$;
 
