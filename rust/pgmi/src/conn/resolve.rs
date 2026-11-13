@@ -21,6 +21,7 @@ pub(crate) struct Flags {
     pub(crate) username: Option<String>,
     pub(crate) database: Option<String>,
     pub(crate) sslmode: Option<SslMode>,
+    pub(crate) invalid_sslmode: Option<String>,
     pub(crate) sslcert: Option<String>,
     pub(crate) sslkey: Option<String>,
     pub(crate) sslrootcert: Option<String>,
@@ -271,6 +272,7 @@ impl serde::Serialize for SslMode {
 pub(crate) enum ResolveError {
     Env(Error),
     ServiceEnv,
+    InvalidSslmodeFlag(String),
     ConnectionWith(Vec<&'static str>, Option<SslMode>),
     FlagWithEnvString { flag: &'static str, source: Source },
     Parse { source: Source, error: ParseError },
@@ -362,6 +364,10 @@ impl fmt::Display for ResolveError {
             ResolveError::HostaddrCount { addrs, hosts } => {
                 write!(f, "could not match {hosts} host names to {addrs} hostaddr values")
             }
+            ResolveError::InvalidSslmodeFlag(v) => write!(
+                f,
+                "invalid --sslmode {v:?} (valid: disable, allow, prefer, require, verify-ca, verify-full)"
+            ),
             ResolveError::NotSupported { setting, why } => {
                 write!(f, "{setting} is not supported: {why}")
             }
@@ -537,6 +543,9 @@ const UNSUPPORTED_ENV: [(&str, &str); 4] = [
 ];
 
 pub(crate) fn resolve(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) -> Result<Spec> {
+    if let Some(v) = &flags.invalid_sslmode {
+        return Err(ResolveError::InvalidSslmodeFlag(v.clone()));
+    }
     if env.non_empty("PGSERVICE")?.is_some() {
         return Err(ResolveError::ServiceEnv);
     }

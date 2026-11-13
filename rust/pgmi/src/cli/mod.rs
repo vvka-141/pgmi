@@ -201,11 +201,9 @@ pub(crate) struct DeployArgs {
     pub(crate) database: Option<String>,
     #[arg(
         long,
-        value_enum,
-        hide_possible_values = true,
         help = "SSL mode: disable|allow|prefer|require|verify-ca|verify-full\n(default: prefer, or $PGSSLMODE)"
     )]
-    pub(crate) sslmode: Option<SslMode>,
+    pub(crate) sslmode: Option<String>,
     #[arg(
         long,
         help = "Path to client SSL certificate file\nPrecedence: --sslcert > $PGSSLCERT > pgmi.yaml"
@@ -297,7 +295,8 @@ impl From<DeployArgs> for crate::deploy::Request {
                 port: a.port.filter(|p| *p != 0),
                 username: a.username,
                 database: a.database,
-                sslmode: a.sslmode,
+                sslmode: a.sslmode.as_deref().and_then(|m| m.parse().ok()),
+                invalid_sslmode: a.sslmode.filter(|m| m.parse::<SslMode>().is_err()),
                 sslcert: a.sslcert,
                 sslkey: a.sslkey,
                 sslrootcert: a.sslrootcert,
@@ -319,16 +318,6 @@ impl From<DeployArgs> for crate::deploy::Request {
             compat: a.compat,
             json: a.json,
         }
-    }
-}
-
-impl clap::ValueEnum for SslMode {
-    fn value_variants<'a>() -> &'a [Self] {
-        SslMode::ALL
-    }
-
-    fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
-        Some(clap::builder::PossibleValue::new(self.as_str()))
     }
 }
 

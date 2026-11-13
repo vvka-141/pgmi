@@ -351,6 +351,12 @@ fn possible_values(arg: &Arg) -> Vec<String> {
     if arg.get_id() == "template" {
         return template_names();
     }
+    if arg.get_id() == "sslmode" {
+        return crate::conn::resolve::SslMode::ALL
+            .iter()
+            .map(|m| m.as_str().to_string())
+            .collect();
+    }
     arg.get_possible_values()
         .iter()
         .filter(|v| !v.is_hide_set())
