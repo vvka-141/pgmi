@@ -13,6 +13,12 @@ def server():
 
 
 @pytest.fixture(scope="session")
+def server_version_num(server):
+    with server.connect() as conn:
+        return int(conn.execute("SHOW server_version_num").fetchone()[0])
+
+
+@pytest.fixture(scope="session")
 def binary(tmp_path_factory):
     return pgmi_binary(tmp_path_factory.mktemp("bin"))
 

@@ -138,12 +138,18 @@ jobs:
 
   # The Rust binary against the cases it passes so far (rust/blackbox-passing.txt),
   # with the Go binary as the reference for the cross-binary checksum cases.
+  # 15 is the floor the binary enforces; the advanced-template cases skip
+  # below 18, that template's own floor.
   blackbox-rust:
-    name: Black-box suite (Rust)
+    name: Black-box suite (Rust, PostgreSQL ${{ matrix.pg }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: ['18', '15']
     services:
       postgres:
-        image: postgres:18
+        image: postgres:${{ matrix.pg }}
         env:
           POSTGRES_PASSWORD: postgres
         ports:

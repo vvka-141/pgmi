@@ -18,6 +18,10 @@ Each case gets its own database and an empty `HOME`, and runs with only
 `~/.pgpass` from your shell reaches the binary. The database and any role whose
 name starts with it are dropped afterwards.
 
+A case with `init: advanced` is skipped, with the reason, on a server older
+than PostgreSQL 18, the advanced template's floor; CI runs the Rust passing
+list on postgres:15 too, pgmi's own floor.
+
 ## A case
 
 One YAML file under `cases/<area>/`. The file name is the test name.
