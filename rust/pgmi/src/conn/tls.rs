@@ -439,9 +439,16 @@ where
                 Err(_) => ServerName::try_from(self.host.clone())
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?,
             };
+            let direct = !self.config.alpn_protocols.is_empty();
             let tls = tokio_rustls::TlsConnector::from(self.config)
                 .connect(name, stream)
                 .await?;
+            if direct && tls.get_ref().1.alpn_protocol() != Some(b"postgresql") {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "direct TLS (sslnegotiation=direct): the server did not select the ALPN protocol \"postgresql\"",
+                ));
+            }
             let version = tls.get_ref().1.protocol_version().map(TlsVersion);
             if let Ok(mut slot) = self.version.lock() {
                 *slot = version;
@@ -632,6 +639,45 @@ mod tests {
         ))
         .unwrap();
         assert!(!t.enable_sni);
+    }
+
+    async fn direct_tls_against(server_alpn: Vec<Vec<u8>>) -> io::Result<()> {
+        install();
+        let certs = a_root();
+        let key = rustls_pki_types::PrivateKeyDer::from_pem_slice(include_bytes!(
+            "cloud/testdata/sp.pem"
+        ))
+        .unwrap();
+        let mut server = rustls::ServerConfig::builder_with_provider(provider())
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .unwrap();
+        server.alpn_protocols = server_alpn;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server));
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let _ = acceptor.accept(tcp).await;
+        });
+        let stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let connect = Connect {
+            config: config(&spec("sslmode=require sslnegotiation=direct", None)).unwrap(),
+            host: "localhost".into(),
+            version: Arc::default(),
+        };
+        TlsConnect::connect(connect, stream).await.map(drop)
+    }
+
+    #[tokio::test]
+    async fn direct_tls_needs_the_server_to_select_postgresql() {
+        let e = direct_tls_against(vec![]).await.unwrap_err();
+        assert!(e.to_string().contains("ALPN"), "{e}");
+        direct_tls_against(vec![b"postgresql".to_vec()])
+            .await
+            .unwrap();
     }
 
     fn a_root() -> Vec<CertificateDer<'static>> {
