@@ -260,7 +260,12 @@ fn draw(fs: &impl Vfs, rel: &str, indent: &str, out: &mut String) {
 /// dangling link is written through, creating its target, as Go does.
 fn write(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o755);
+        builder
+            .create(dir)
             .map_err(|e| Error::general(format!("create {}", dir.display())).with_source(e))?;
     }
     let target = match std::fs::read_link(path) {
@@ -269,9 +274,11 @@ fn write(path: &Path, bytes: &[u8]) -> Result<()> {
             .map_or_else(|| link.clone(), |dir| dir.join(&link)),
         Err(_) => path.to_path_buf(),
     };
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o644);
+    options
         .open(&target)
         .and_then(|mut f| f.write_all(bytes))
         .map_err(|e| Error::general(format!("write {}", path.display())).with_source(e))
