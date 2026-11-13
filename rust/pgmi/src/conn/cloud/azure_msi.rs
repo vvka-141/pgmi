@@ -8,7 +8,7 @@ use rustls::{DigitallySignedStruct, SignatureScheme};
 use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
 use sha1::Digest;
 
-use super::http::{Retry, client, encode};
+use super::http::{ReadError, Retry, client, encode, read_text};
 use super::renew::Fetched;
 use crate::env::Env;
 use crate::error::{Error, Secret};
@@ -20,6 +20,7 @@ pub(crate) enum MsiError {
     Client(Error),
     Tls(rustls::Error),
     Http(reqwest::Error),
+    Oversized(Source),
     ArcChallenge(reqwest::StatusCode),
     ArcKey(ArcKeyError),
     Status(Source, reqwest::StatusCode),
@@ -38,6 +39,11 @@ impl std::fmt::Display for MsiError {
             MsiError::Client(e) => e.fmt(f),
             MsiError::Tls(e) => e.fmt(f),
             MsiError::Http(e) => e.fmt(f),
+            MsiError::Oversized(s) => write!(
+                f,
+                "{} managed identity endpoint answered with more than 1 MiB",
+                s.name()
+            ),
             MsiError::ArcChallenge(status) => write!(
                 f,
                 "expected a 401 response from the Azure Arc endpoint, got {status}"
@@ -303,7 +309,10 @@ async fn once(
     };
     let answer = request.send().await.map_err(MsiError::Http)?;
     let status = answer.status();
-    let text = answer.text().await.map_err(MsiError::Http)?;
+    let text = read_text(answer).await.map_err(|e| match e {
+        ReadError::Http(e) => MsiError::Http(e),
+        ReadError::Oversized => MsiError::Oversized(source),
+    })?;
     if !status.is_success() {
         return Err(MsiError::Status(source, status));
     }
@@ -377,6 +386,7 @@ fn pinned(thumbprint: &str) -> std::result::Result<reqwest::Client, MsiError> {
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(60))
+        .redirect(reqwest::redirect::Policy::none())
         .tls_backend_preconfigured(config)
         .build()
         .map_err(MsiError::Http)

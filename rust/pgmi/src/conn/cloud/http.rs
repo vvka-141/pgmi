@@ -12,6 +12,7 @@ pub(crate) fn client() -> Result<reqwest::Client> {
     let built = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(60))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| Error::connection("build the HTTPS client").with_source(e))?;
     Ok(CLIENT.get_or_init(|| built).clone())
@@ -25,10 +26,56 @@ pub(crate) struct Retry {
     pub(crate) wait: fn(u32) -> Duration,
 }
 
+/// The most a sign-in answer may hold.
+pub(crate) const ANSWER_MAX: usize = 1 << 20;
+
+/// Why an answer could not be read.
+#[derive(Debug)]
+pub(crate) enum ReadError {
+    Http(reqwest::Error),
+    Oversized,
+}
+
+impl std::fmt::Display for ReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReadError::Http(e) => f.write_str(&crate::error::chain(e)),
+            ReadError::Oversized => f.write_str("the answer is larger than 1 MiB"),
+        }
+    }
+}
+
+impl std::error::Error for ReadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ReadError::Http(e) => e.source(),
+            ReadError::Oversized => None,
+        }
+    }
+}
+
+/// The body of `r`, refused past [`ANSWER_MAX`] without reading the rest.
+pub(crate) async fn read(mut r: reqwest::Response) -> std::result::Result<Vec<u8>, ReadError> {
+    let mut out = Vec::new();
+    while let Some(chunk) = r.chunk().await.map_err(ReadError::Http)? {
+        if out.len() + chunk.len() > ANSWER_MAX {
+            return Err(ReadError::Oversized);
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out)
+}
+
+pub(crate) async fn read_text(r: reqwest::Response) -> std::result::Result<String, ReadError> {
+    read(r)
+        .await
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+}
+
 /// A request that got no answer, after `attempts` tries.
 #[derive(Debug)]
 pub(crate) struct Unanswered {
-    pub(crate) error: reqwest::Error,
+    pub(crate) error: ReadError,
     pub(crate) attempts: u32,
 }
 
@@ -87,13 +134,14 @@ pub(crate) async fn send(
         let outcome = match build(http).send().await {
             Ok(r) => {
                 let status = r.status();
-                r.text().await.map(|t| (status, t))
+                read_text(r).await.map(|t| (status, t))
             }
-            Err(e) => Err(e),
+            Err(e) => Err(ReadError::Http(e)),
         };
         let again = match &outcome {
             Ok((status, _)) => (retry.status)(*status),
-            Err(_) => true,
+            Err(ReadError::Http(_)) => true,
+            Err(ReadError::Oversized) => false,
         };
         if !again || attempt >= retry.attempts {
             return outcome.map_err(|error| Unanswered {
@@ -173,6 +221,7 @@ pub(crate) mod tests {
     };
 
     async fn get(url: &str) -> std::result::Result<(StatusCode, String), Unanswered> {
+        crate::conn::tls::install();
         send(&reqwest::Client::new(), &SERVER_ERRORS, |h| h.get(url)).await
     }
 
@@ -198,6 +247,59 @@ pub(crate) mod tests {
         let (status, body) = get(&url).await.unwrap();
         assert_eq!((status.as_u16(), body.as_str()), (504, "late"));
         assert_eq!(served.load(Ordering::SeqCst), 3);
+    }
+
+    /// Answers every connection with `reply` and counts the requests.
+    async fn answering(reply: String) -> (String, Arc<AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let served = Arc::new(AtomicUsize::new(0));
+        let count = served.clone();
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = listener.accept().await {
+                let mut buf = [0u8; 8192];
+                let _ = s.read(&mut buf).await;
+                count.fetch_add(1, Ordering::SeqCst);
+                let _ = s.write_all(reply.as_bytes()).await;
+            }
+        });
+        (url, served)
+    }
+
+    #[tokio::test]
+    async fn a_redirect_is_an_answer_not_followed() {
+        let (target, reached) = scripted(vec![(200, r#"{"access_token":"stolen"}"#)]).await;
+        let reply = format!(
+            "HTTP/1.1 307 X\r\nLocation: {target}/token\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        let (redirecting, _) = answering(reply).await;
+        crate::conn::tls::install();
+        let http = client().unwrap();
+        let (status, _) = send(&http, &SERVER_ERRORS, |h| h.get(&redirecting))
+            .await
+            .unwrap();
+        assert_eq!(status.as_u16(), 307);
+        assert_eq!(reached.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn an_answer_over_the_cap_is_refused_and_not_retried() {
+        let body = "x".repeat(ANSWER_MAX + 1);
+        let reply = format!(
+            "HTTP/1.1 200 X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let (url, served) = answering(reply).await;
+        let e = get(&url).await.unwrap_err();
+        assert!(e.to_string().contains("larger than 1 MiB"), "{e}");
+        assert_eq!(served.load(Ordering::SeqCst), 1);
+        let small = "y".repeat(ANSWER_MAX);
+        let reply = format!(
+            "HTTP/1.1 200 X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{small}",
+            small.len()
+        );
+        let (url, _) = answering(reply).await;
+        assert_eq!(get(&url).await.unwrap().1.len(), ANSWER_MAX);
     }
 
     #[tokio::test]

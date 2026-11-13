@@ -202,10 +202,10 @@ impl HttpConnector for Connector {
                 })?;
             let status = resp.status();
             let headers = resp.headers().clone();
-            let body = resp
-                .bytes()
-                .await
-                .map_err(|e| ConnectorError::io(e.into()))?;
+            let body = super::http::read(resp).await.map_err(|e| match e {
+                super::http::ReadError::Http(e) => ConnectorError::io(e.into()),
+                oversized @ super::http::ReadError::Oversized => other(oversized.into()),
+            })?;
             let mut out = http::Response::builder()
                 .status(status)
                 .body(SdkBody::from(body))
