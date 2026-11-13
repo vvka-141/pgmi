@@ -1,4 +1,4 @@
-description: a connection reset while the session tables are created, after the deploy lock was taken, fails the deploy before deploy.sql runs (Go exits 1); the lock goes with the session, so the next deploy runs (Rust runs the deploy again (contract "Whole-deployment retry") and succeeds; with retry off it is exit 11, contract "Behaviour changes in 0.20")
+description: a connection reset while the session tables are created, after the deploy lock was taken, fails the deploy before deploy.sql runs (Go exits 1); the lock goes with the session, so the next deploy runs (Rust runs the deploy again (contract "Whole-deployment retry") and succeeds; with retry off it is exit 13, contract "Behaviour changes in 0.20")
 proxy:
   - {query: "PGMI Session Schema", do: reset, times: 1, step: 1}
 project:

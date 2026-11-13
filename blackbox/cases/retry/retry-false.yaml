@@ -1,4 +1,4 @@
-description: Rust only (contract "Whole-deployment retry"). retry false in pgmi.yaml turns whole-deployment retry off; a connection reset mid-run then ends the deploy with exit 11 after one attempt, nothing committed
+description: Rust only (contract "Whole-deployment retry"). retry false in pgmi.yaml turns whole-deployment retry off; a connection reset mid-run then ends the deploy with exit 13 after one attempt, nothing committed
 impl: rust
 proxy:
   - {query: head_sleep, do: reset, after: 0.5, times: 1}
@@ -17,7 +17,7 @@ steps:
   - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}", --json]
     timeout: 30
     expect:
-      exit: 11
+      exit: 13
       stderr_not: ["attempt 1 failed"]
       stdout: ['"attempts": \[\s*\{[^}]*\}\s*\]']
       sql:

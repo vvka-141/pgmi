@@ -1354,7 +1354,7 @@ release notes take their "Behaviour changes" section from this table.
 | Azure tenant id outside letters, digits, `.` and `-` | refused at sign-in, exit 11 | refused before connecting, exit 10 | agent 2026-11-12 (PGMI-910) |
 | Google sign-in without Application Default Credentials | exit 1 | exit 11 | intended |
 | `deploy` on a terminal with no connection from flags, environment or `pgmi.yaml` | opens the connection wizard | never interactive: exit 10, listing the ways to set a connection; `pgmi init` and `pgmi config` keep their wizards | owner 2026-11-12 (PGMI-901) |
-| Connection reset with no error from the server, mid-deploy | exit 13 while deploy.sql runs, exit 1 during session setup | exit 11 (connection failed); `--json` still shows what committed | agent 2026-11-12 (PGMI-885), owner may revisit |
+| Connection reset with no error from the server, mid-deploy | exit 13 while deploy.sql runs, exit 1 during session setup | exit 13 once the session is open, session setup included; exit 11 only when no session opened; `--json` still shows what committed | PGMI-928 (was exit 11, PGMI-885) |
 | `.env` value ending in `\"` or `\\` before the closing quote (`"x\""`) | `x\`, or reads on into later lines | `x"`, `x\` | agent 2026-11-12 (PGMI-900), owner may revisit |
 | `.env` line with no key (`=x`, or a last line without `=`) | the rest applied, an empty name set | file refused, exit 10 | agent 2026-11-12 (PGMI-900), owner may revisit |
 | `pgmi help <unknown topic>` | "Unknown help topic", exit 0 | exit 2 | agent 2026-11-12 (PGMI-906), owner may revisit |

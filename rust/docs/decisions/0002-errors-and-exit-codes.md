@@ -88,3 +88,11 @@ pub struct Error {
 
 Exit code table; serve; Error attribution; Timeout, cancellation,
 interruption; Google sign-in failure is exit 11.
+
+## Changed by PGMI-928
+
+A client-side error on a session that is already open (a connection
+closed, reset or broken, a malformed answer) is exit 13, not 11: the deploy
+had connected, and exit 11 reads as "nothing happened". Exit 11 stays for a
+deploy that never opened a session. Retry classification reads the typed
+cause and is unchanged.

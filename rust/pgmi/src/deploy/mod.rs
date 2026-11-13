@@ -111,7 +111,7 @@ pub(crate) fn sql_error_needing(
                 internal_position,
             })
         }
-        None => Error::connection(context).with_source(e),
+        None => Error::sql(context).with_source(e),
     }
 }
 
@@ -1491,7 +1491,7 @@ mod tests {
         ));
         let session = fake::quiet().connect(&spec, "d").await.unwrap();
         let e = check_server(&session).await.unwrap_err();
-        assert_eq!(e.exit_code(), 11, "{}", e.text());
+        assert_eq!(e.exit_code(), 13, "{}", e.text());
         assert!(
             e.text().starts_with("read the server version: "),
             "{}",
