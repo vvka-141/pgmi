@@ -342,14 +342,137 @@ BEGIN
     END IF;
 END $$;
 
+-- The SQL a deploy runs when it executes a file: comments become a space,
+-- string literals '', and the body of a CREATE FUNCTION or PROCEDURE is
+-- dropped, because its DDL runs only when the routine is called. Other
+-- dollar-quoted text (a DO block, SQL passed to EXECUTE) is read like the file.
+-- It walks the text in chunks that each start at - / * ' " $ or ;.
+CREATE FUNCTION pg_temp.deploy_time_sql(p_sql text)
+RETURNS text LANGUAGE plpgsql IMMUTABLE STRICT AS $fn$
+DECLARE
+    r record;
+    v_out text[] := '{}';
+    v_head text := '';
+    v_emit text;
+    v_state text := 'code';
+    v_skip bool := false;
+    v_depth int;
+    v_escapes bool;
+    v_tag text;
+    v_drop bool;
+    v_body text[];
+BEGIN
+    FOR r IN
+        SELECT t, lead(t) OVER w AS nxt, lag(t) OVER w AS prv
+        FROM regexp_split_to_table(p_sql, '(?=[-/*''"$;])') WITH ORDINALITY AS x(t, o)
+        WINDOW w AS (ORDER BY o)
+    LOOP
+        v_emit := NULL;
+        IF v_state = 'code' THEN
+            IF v_skip THEN
+                v_emit := substr(r.t, 2);
+            ELSIF r.t = '-' AND left(r.nxt, 1) = '-' THEN
+                v_state := 'line';
+            ELSIF r.t = '/' AND left(r.nxt, 1) = '*' THEN
+                v_state := 'block';
+                v_depth := 1;
+            ELSIF left(r.t, 1) = '''' THEN
+                v_state := 'string';
+                v_escapes := right(r.prv, 1) IN ('E', 'e') AND coalesce(substr(r.prv, length(r.prv) - 1, 1), '') !~ '[[:alnum:]_$]';
+                v_emit := '''''';
+            ELSIF left(r.t, 1) = '"' THEN
+                v_state := 'ident';
+                v_emit := r.t;
+            ELSIF r.t ~ '^\$([[:alpha:]_][[:alnum:]_]*)?$' AND left(r.nxt, 1) = '$'
+                  AND coalesce(right(r.prv, 1), '') !~ '[[:alnum:]_$]' THEN
+                v_state := 'dollar';
+                v_tag := r.t;
+                v_drop := v_head ~* '^\s*CREATE\s+(OR\s+REPLACE\s+)?(FUNCTION|PROCEDURE)\M';
+                v_body := '{}';
+                v_emit := r.t || '$';
+            ELSIF left(r.t, 1) = ';' THEN
+                v_out := v_out || ';'::text;
+                v_head := '';
+                v_emit := substr(r.t, 2);
+            ELSE
+                v_emit := r.t;
+            END IF;
+            v_skip := v_state IN ('line', 'block', 'dollar');
+        ELSIF v_state = 'line' THEN
+            IF strpos(r.t, E'\n') > 0 THEN
+                v_state := 'code';
+                v_emit := substr(r.t, strpos(r.t, E'\n'));
+            END IF;
+            v_skip := false;
+        ELSIF v_state = 'block' THEN
+            IF v_skip THEN
+                v_skip := false;
+            ELSIF r.t = '/' AND left(r.nxt, 1) = '*' THEN
+                v_depth := v_depth + 1;
+                v_skip := true;
+            ELSIF r.t = '*' AND left(r.nxt, 1) = '/' THEN
+                v_depth := v_depth - 1;
+                v_skip := true;
+                IF v_depth = 0 THEN
+                    v_state := 'code';
+                    v_emit := ' ';
+                END IF;
+            END IF;
+        ELSIF v_state = 'string' THEN
+            IF left(r.t, 1) = '''' AND NOT (v_escapes AND length(substring(r.prv FROM '\\*$')) % 2 = 1) THEN
+                IF r.t = '''' AND left(r.nxt, 1) = '''' AND NOT v_skip THEN
+                    v_skip := true;
+                    CONTINUE;
+                END IF;
+                IF NOT v_skip THEN
+                    v_state := 'code';
+                    v_emit := substr(r.t, 2);
+                END IF;
+            END IF;
+            v_skip := false;
+        ELSIF v_state = 'ident' THEN
+            v_emit := r.t;
+            IF left(r.t, 1) = '"' THEN
+                IF r.t = '"' AND left(r.nxt, 1) = '"' AND NOT v_skip THEN
+                    v_skip := true;
+                ELSIF NOT v_skip THEN
+                    v_state := 'code';
+                ELSE
+                    v_skip := false;
+                END IF;
+            END IF;
+        ELSE
+            IF NOT v_skip AND r.t = v_tag AND left(r.nxt, 1) = '$' THEN
+                v_state := 'code';
+                v_emit := CASE WHEN v_drop THEN '' ELSE pg_temp.deploy_time_sql(array_to_string(v_body, '')) END || v_tag;
+            ELSIF NOT v_drop THEN
+                v_body := v_body || CASE WHEN v_skip THEN substr(r.t, 2) ELSE r.t END;
+                v_skip := false;
+            ELSE
+                v_skip := false;
+            END IF;
+        END IF;
+        IF v_emit <> '' THEN
+            v_out := v_out || v_emit;
+            IF length(v_head) < 200 THEN
+                v_head := v_head || v_emit;
+            END IF;
+        END IF;
+    END LOOP;
+    RETURN array_to_string(v_out, '');
+END
+$fn$;
+
 -- Structure lives in run-once files (idempotent="false"), code in re-run files
 -- (idempotent="true"). A table in a re-run file is silently skipped when its
 -- definition changes, and its index DDL locks writers on every deploy; a
 -- function in a run-once file can never be changed by a later deploy.
 -- Operators and constraint triggers count as structure: neither has an
 -- OR REPLACE form, so a re-run file fails on its second deploy.
--- The check reads statement heads at the start of a line after stripping
--- comments, so DDL built as a string for EXECUTE is not seen.
+-- The check reads statement heads at the start of a line in the SQL the
+-- deploy runs (pg_temp.deploy_time_sql), so it does not see DDL inside a
+-- function or procedure body, nor DDL built as a string for EXECUTE unless a
+-- line of that string starts with it.
 DO $$
 DECLARE
     v_structure text;
@@ -357,7 +480,7 @@ DECLARE
 BEGIN
     WITH f AS (
         SELECT DISTINCT p.path, p.idempotent,
-               regexp_replace(regexp_replace(s.content, '/\*.*?\*/', '', 'g'), '--[^\n]*', '', 'g') AS body
+               pg_temp.deploy_time_sql(s.content) AS body
         FROM pg_temp.pgmi_plan_view p
         JOIN pg_temp.pgmi_source_view s ON s.path = p.path
         WHERE s.is_sql_file AND pg_temp.deploys_file(p.path)

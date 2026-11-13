@@ -135,3 +135,77 @@ CREATE TABLE core.keys_probe (id int);
 		t.Fatalf("want the two-key run-once file refused by name, got: %v", err)
 	}
 }
+
+// The structure check reads only the SQL a deploy runs: DDL a function body
+// runs when called is code, while top-level DDL after a body full of quotes
+// and comment markers is still structure (PGMI-956).
+func TestAdvancedTemplate_StructureCheckReadsDeployTimeSQL(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+
+	tests := []struct {
+		name    string
+		body    string
+		wantMsg string
+	}{
+		{
+			name: "function body creating a table deploys",
+			body: "CREATE OR REPLACE FUNCTION core.kind_probe_fn() RETURNS void LANGUAGE plpgsql AS $fn$\nBEGIN\nCREATE TABLE IF NOT EXISTS core.kind_probe (id int);\nALTER TABLE core.kind_probe ADD COLUMN IF NOT EXISTS note text;\nEND\n$fn$;\n",
+		},
+		{
+			name:    "top-level table after a quoted body is refused",
+			body:    "CREATE OR REPLACE FUNCTION core.kind_probe_fn() RETURNS text LANGUAGE sql AS $fn$ SELECT '--' || $$ /* $$ $fn$;\n\nCREATE TABLE core.kind_probe (id int);\n",
+			wantMsg: "CREATE TABLE",
+		},
+		{
+			name:    "table between comment markers in strings is refused",
+			body:    "DO $$ BEGIN PERFORM '/*'; END $$;\nCREATE TABLE core.kind_probe (id int);\nSELECT '*/';\n",
+			wantMsg: "CREATE TABLE",
+		},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			projectPath := filepath.Join(t.TempDir(), "kind")
+			if err := scaffold.NewScaffolder(false).CreateProject("kind", "advanced", projectPath); err != nil {
+				t.Fatalf("scaffold the advanced template: %v", err)
+			}
+			if err := os.MkdirAll(filepath.Join(projectPath, "core"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			probe := fmt.Sprintf(`/*
+<pgmi-meta id="ffffffff-0956-4000-8000-00000000000%d" idempotent="true">
+  <sortKeys><key>900/000</key></sortKeys>
+</pgmi-meta>
+*/
+%s`, i, tt.body)
+			if err := os.WriteFile(filepath.Join(projectPath, "core", "kind_probe.sql"), []byte(probe), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			testDB := fmt.Sprintf("pgmi_advanced_body_%d", i)
+			defer testhelpers.CleanupTestDB(t, connString, testDB)
+
+			err := testhelpers.NewTestDeployer(t).Deploy(context.Background(), pgmi.DeploymentConfig{
+				ConnectionString:    connString,
+				MaintenanceDatabase: "postgres",
+				DatabaseName:        testDB,
+				SourcePath:          projectPath,
+				Overwrite:           true,
+				Force:               true,
+				Parameters:          map[string]string{"env": "dev"},
+			})
+			if tt.wantMsg == "" {
+				if err != nil {
+					t.Fatalf("deploy refused a re-run file whose DDL is inside a function body: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("deploy succeeded with top-level structure in a re-run file")
+			}
+			if !strings.Contains(err.Error(), "./core/kind_probe.sql") || !strings.Contains(err.Error(), tt.wantMsg) {
+				t.Fatalf("want an error naming ./core/kind_probe.sql and %s, got: %v", tt.wantMsg, err)
+			}
+		})
+	}
+}
