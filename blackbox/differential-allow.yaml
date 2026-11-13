@@ -416,3 +416,7 @@ accept:
     field: stdout
     rust: '; refused unless the operator set PGMI_SERVE_ALLOW_OVERWRITE=1 where pgmi serve runs'
     rust_as: ''
+  - row: '`PGSSLCRL`, `PGSSLCRLDIR`, `PGREQUIREPEER` or `PGHOSTADDR` set and non-empty'
+    case: cases/env/ignored-variables\.yaml
+    field: db
+    rust: '<no database>'

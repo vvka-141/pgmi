@@ -68,6 +68,12 @@ Line numbers are from main on 2026-11-11; re-check them on the day.
 - `.github/workflows/examples.yml` builds Go; point it at the Rust binary,
   so the six examples' "asserted in CI" covers what ships.
 
+## Environment variables pgmi refuses (PGMI-934)
+
+- CICD.md:237-238 and CLI.md:806 say `PGHOSTADDR`, `PGSSLCRL` and
+  `PGSSLCRLDIR` are ignored. The Rust binary refuses them, and
+  `PGREQUIREPEER`, with exit 10; move them next to `PGSERVICE`.
+
 ## Claims to re-date or re-test
 
 - CONNECTIONS.md:40-45: the real-Azure hand test. Rust was run on real Azure

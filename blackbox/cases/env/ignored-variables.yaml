@@ -1,4 +1,4 @@
-description: PGHOSTADDR and PGSSLCRL are ignored, as documented; pointing them somewhere useless changes nothing
+description: PGHOSTADDR and PGSSLCRL are ignored by Go, as its docs say; pointing them somewhere useless changes nothing. Rust refuses each before connecting, exit 10, since it does not honour them either (contract "Behaviour changes in 0.20", PGMI-934)
 project:
   files:
     deploy.sql: SELECT 1;
@@ -7,4 +7,8 @@ steps:
     env:
       PGHOSTADDR: 10.255.255.1
       PGSSLCRL: /no/such/file.crl
-    expect: {exit: 0}
+    expect:
+      exit: 0
+      rust:
+        exit: 10
+        stderr: ["PGSSLCRL is set, and pgmi does not support it|PGHOSTADDR is set, and pgmi does not support it"]

@@ -118,6 +118,27 @@ fn refusals() {
 }
 
 #[test]
+fn libpq_variables_pgmi_does_not_honour_are_refused_not_ignored() {
+    for (var, value) in [
+        ("PGSSLCRL", "/etc/crl.pem"),
+        ("PGSSLCRLDIR", "/etc/crl"),
+        ("PGREQUIREPEER", "postgres"),
+        ("PGHOSTADDR", "10.0.0.5"),
+    ] {
+        let env = Env::from_pairs(&[(var, value)]);
+        let e = refused(resolve(&flags(), &env, None));
+        assert!(e.to_string().starts_with(&format!("{var} is set")), "{e}");
+        assert_eq!(Error::from(e).exit_code(), 10, "{var}");
+        resolve(
+            &conn("host=h dbname=d"),
+            &Env::from_pairs(&[(var, "")]),
+            None,
+        )
+        .unwrap();
+    }
+}
+
+#[test]
 fn a_refusal_is_invalid_configuration_and_an_environment_error_keeps_its_kind() {
     let e = refused(resolve(&conn("host=h"), &Env::default(), None));
     assert!(matches!(e, ResolveError::NoDatabase), "{e}");

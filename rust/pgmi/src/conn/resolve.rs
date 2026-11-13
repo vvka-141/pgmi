@@ -289,6 +289,7 @@ pub(crate) enum ResolveError {
     ConnectTimeoutRange(String),
     HostaddrCount { addrs: usize, hosts: usize },
     NotSupported { setting: String, why: &'static str },
+    UnsupportedEnv(&'static str, &'static str),
     Unhandled(String),
 }
 
@@ -363,6 +364,9 @@ impl fmt::Display for ResolveError {
             }
             ResolveError::NotSupported { setting, why } => {
                 write!(f, "{setting} is not supported: {why}")
+            }
+            ResolveError::UnsupportedEnv(var, instead) => {
+                write!(f, "{var} is set, and pgmi does not support it: {instead}")
             }
             ResolveError::Unhandled(k) => write!(
                 f,
@@ -513,9 +517,33 @@ pub(super) const ENV_DEFAULTS: &[(&str, &str)] = &[
     ("PGCLIENTENCODING", "client_encoding"),
 ];
 
+const UNSUPPORTED_ENV: [(&str, &str); 4] = [
+    (
+        "PGSSLCRL",
+        "certificate revocation lists are not checked; unset it",
+    ),
+    (
+        "PGSSLCRLDIR",
+        "certificate revocation lists are not checked; unset it",
+    ),
+    (
+        "PGREQUIREPEER",
+        "the server's operating-system user is not checked; unset it",
+    ),
+    (
+        "PGHOSTADDR",
+        "give hostaddr in the connection string instead, and unset it",
+    ),
+];
+
 pub(crate) fn resolve(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) -> Result<Spec> {
     if env.non_empty("PGSERVICE")?.is_some() {
         return Err(ResolveError::ServiceEnv);
+    }
+    for (var, instead) in UNSUPPORTED_ENV {
+        if env.non_empty(var)?.is_some() {
+            return Err(ResolveError::UnsupportedEnv(var, instead));
+        }
     }
     let granular: Vec<&'static str> = [
         (flags.host.is_some(), "-h"),
