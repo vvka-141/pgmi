@@ -1,3 +1,7 @@
+-- Proves the task writers refuse what fn_task_problems and fn_task_problem
+-- name and then return a row of NULLs, that a done task frees its title, and
+-- that a project whose tasks are all done is finished.
+
 DO $$
 DECLARE
     v_project_id bigint;

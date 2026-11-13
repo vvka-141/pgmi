@@ -1,6 +1,6 @@
 /*
 <pgmi-meta id="7924a821-9d17-41b1-8be4-09c5834cae98" idempotent="false">
-  <description>Tasks of a project</description>
+  <description>The task table: the work of a project, open or done.</description>
 </pgmi-meta>
 */
 CREATE TABLE task (

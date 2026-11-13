@@ -1,3 +1,6 @@
+-- Proves fn_create_project refuses a blank or taken name and says why, and
+-- that project_view counts tasks and names the state (active, empty).
+
 DO $$
 DECLARE
     v_project project_view;

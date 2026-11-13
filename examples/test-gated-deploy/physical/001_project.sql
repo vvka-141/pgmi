@@ -1,6 +1,6 @@
 /*
 <pgmi-meta id="a7ba0c95-d9fc-44f9-8537-de2631a38a8a" idempotent="false">
-  <description>Projects</description>
+  <description>The project table: one row per body of work, its name unique ignoring case.</description>
 </pgmi-meta>
 */
 CREATE TABLE project (

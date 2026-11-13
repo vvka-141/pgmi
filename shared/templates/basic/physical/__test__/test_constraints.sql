@@ -1,3 +1,7 @@
+-- Proves the tables refuse bad rows on their own, each through the named
+-- constraint: a blank or case-duplicate project name, a second open task with
+-- the same title, a done task without done_at.
+
 DO $$
 DECLARE
     v_project_id bigint;

@@ -1,3 +1,6 @@
+-- Projects as callers see them: project_view to read, fn_create_project to
+-- write, and fn_project_problems, the one place that write's rules live.
+
 CREATE OR REPLACE VIEW project_view AS
 SELECT p.project_id, p.name, p.created_at,
        c.open_task_count, c.done_task_count,

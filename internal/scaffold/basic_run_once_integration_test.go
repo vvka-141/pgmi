@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/vvka-141/pgmi/internal/scaffold"
@@ -311,5 +312,47 @@ func TestBasicTemplate_RefusesSQLFileOutsideItsFolders(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Every deploy re-runs semantic/, and CREATE OR REPLACE VIEW takes ACCESS
+// EXCLUSIVE on the view. Behind a reader's open transaction that request
+// would wait without bound while every new reader queued behind it; the
+// template's lock_timeout fails the deploy with 55P03 instead.
+func TestBasicTemplate_LockWaitIsBounded(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+	projectPath := filepath.Join(t.TempDir(), "proj")
+	if err := scaffold.NewScaffolder(false).CreateProject("proj", "basic", projectPath); err != nil {
+		t.Fatal(err)
+	}
+
+	const db = "pgmi_basic_lock_wait"
+	defer testhelpers.CleanupTestDB(t, connString, db)
+	if err := deployBasic(t, connString, db, projectPath, true); err != nil {
+		t.Fatalf("first deploy: %v", err)
+	}
+
+	ctx := context.Background()
+	reader, err := testhelpers.GetTestPool(t, connString, db).Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reader.Rollback(ctx) }()
+	if _, err := reader.Exec(ctx, "SELECT FROM project_view"); err != nil {
+		t.Fatal(err)
+	}
+
+	bounded, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	err = testhelpers.NewTestDeployer(t).Deploy(bounded, pgmi.DeploymentConfig{
+		ConnectionString:    connString,
+		MaintenanceDatabase: "postgres",
+		DatabaseName:        db,
+		SourcePath:          projectPath,
+		Parameters:          map[string]string{"env": "dev"},
+	})
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "55P03" {
+		t.Fatalf("redeploy behind an open reader of project_view: want 55P03 from lock_timeout, got %v", err)
 	}
 }

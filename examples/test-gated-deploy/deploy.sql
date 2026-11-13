@@ -1,16 +1,23 @@
--- deploy.sql - the deployment of this project.
+-- deploy.sql - pgmi runs this file first. Nothing else runs unless this file
+-- runs it. Read it top to bottom: that is the order of the deployment.
 --
--- pgmi loads every project file into session views, then runs this script.
--- `pgmi ai contract` lists them. This script decides the rest:
+-- Before it starts, pgmi has taken the deploy lock (a second deploy exits 15)
+-- and loaded every project file and parameter into session views
+-- (`pgmi ai contract` lists them). This file runs two folders, in path order:
 --
 --   physical/   tables, keys, indexes: run once each (<pgmi-meta idempotent="false">)
 --   semantic/   views and functions: re-run on every deploy
---   __test__/   tests: CALL pgmi_test() runs them before the COMMIT
 --
--- Only those two folders run, in path order: physical/ before semantic/.
--- Any other SQL file is refused, so none is loaded and silently skipped.
+-- The tests in __test__/ folders run through CALL pgmi_test() before the
+-- COMMIT. Any other SQL file is refused, so none is loaded and silently skipped.
 
+-- Everything from here to COMMIT is one transaction: any error, a failing test
+-- included, rolls back all of it.
 BEGIN;
+-- Every deploy re-creates the views in semantic/, which locks each one. A lock
+-- the deploy cannot get within 5s fails it (55P03) instead of queueing every
+-- application query behind it for the rest of the deploy.
+SET LOCAL lock_timeout = '5s';
 
 -- env names the kind of database: dev seeds a demo project, test and prod do
 -- not. There is no default, so a CI deploy cannot fall back to dev.
@@ -34,9 +41,10 @@ END $$;
 -- everything this role creates from now on; grant each role what it needs.
 ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON ROUTINES FROM PUBLIC;
 
--- deployment.run_once is the ledger of run-once files. A run-once file is
--- skipped once it has run, so an edit would reach only fresh databases.
--- Refuse the deploy instead, before anything runs, and name the file.
+-- deployment.run_once is the ledger of run-once files; the first deploy
+-- creates it. A run-once file is skipped once it has run, so an edit would
+-- reach only fresh databases. Refuse the deploy instead, before anything
+-- runs, and name the file.
 -- pgmi_checksum ignores comments, keyword case and whitespace outside literals.
 DO $$
 DECLARE
@@ -115,6 +123,9 @@ BEGIN
     END IF;
 END $$;
 
+-- The deployment: every physical/ and semantic/ file in path order, minus the
+-- run-once files the ledger holds. A run-once file is recorded in the same
+-- transaction it ran in, so a failed deploy records none.
 DO $$
 DECLARE
     v_env    text := current_setting('pgmi.env');
@@ -163,6 +174,8 @@ ROLLBACK TO SAVEPOINT _tests;
 
 COMMIT;
 
+-- Each statement below commits on its own, as in psql. CREATE INDEX
+-- CONCURRENTLY belongs here: it cannot run in a transaction or a DO block.
 DO $$
 BEGIN
     RAISE NOTICE $ascii$

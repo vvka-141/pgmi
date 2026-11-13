@@ -1,3 +1,6 @@
+-- Proves no project function is executable by PUBLIC, including one created
+-- after this deploy's ALTER DEFAULT PRIVILEGES.
+
 DO $$
 DECLARE
     v_open text;

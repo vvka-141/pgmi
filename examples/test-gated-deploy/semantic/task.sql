@@ -1,3 +1,7 @@
+-- Tasks as callers see them: fn_add_task and fn_complete_task to write, and
+-- the problem functions, the one place their rules live. Tasks are read
+-- through project_view.
+
 CREATE OR REPLACE FUNCTION fn_task_problems(p_project_id bigint, p_title text)
 RETURNS TABLE (field text, reason text)
 LANGUAGE sql STABLE AS $$
