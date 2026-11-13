@@ -8,7 +8,7 @@ from typing import Any
 import yaml
 
 TEMPLATES = ("minimal", "basic", "advanced")
-SERVER_KINDS = ("tls", "tls_only", "replica", "socket", "fakes")
+SERVER_KINDS = ("tls", "tls_only", "tls_self_signed", "replica", "socket", "fakes")
 IMPLEMENTATIONS = ("go", "rust")
 FAULT_EVENTS = ("accept", "startup", "close")
 FAULT_ACTIONS = ("reset", "cut-client", "freeze")

@@ -102,18 +102,131 @@ pub(crate) enum Names {
 #[derive(Debug)]
 pub(crate) struct Verifier {
     chain: Option<Arc<WebPkiServerVerifier>>,
+    roots: Vec<CertificateDer<'static>>,
     names: Names,
     provider: Arc<CryptoProvider>,
 }
 
 impl Verifier {
-    pub(crate) fn new(chain: Option<Arc<WebPkiServerVerifier>>, names: Names) -> Arc<Self> {
+    pub(crate) fn new(
+        chain: Option<Arc<WebPkiServerVerifier>>,
+        roots: Vec<CertificateDer<'static>>,
+        names: Names,
+    ) -> Arc<Self> {
         Arc::new(Verifier {
             chain,
+            roots,
             names,
             provider: provider(),
         })
     }
+
+    /// Go's x509 lets a CA certificate be the server's own: trusted when it
+    /// is itself a root, or signed directly by one. webpki refuses both.
+    fn ca_leaf(
+        &self,
+        ee: &CertificateDer<'_>,
+        name: &ServerName<'_>,
+        now: UnixTime,
+    ) -> Option<std::result::Result<ServerCertVerified, rustls::Error>> {
+        use x509_cert::der::Decode;
+        use x509_cert::ext::pkix::{BasicConstraints, ExtendedKeyUsage};
+        let cert = x509_cert::Certificate::from_der(ee.as_ref()).ok()?;
+        let tbs = cert.tbs_certificate();
+        let (_, BasicConstraints { ca: true, .. }) = tbs.get_extension().ok()?? else {
+            return None;
+        };
+        let bad = |e: CertificateError| Some(Err(rustls::Error::InvalidCertificate(e)));
+        if !(self.roots.iter().any(|r| r.as_ref() == ee.as_ref()) || self.signed_by_root(&cert, ee))
+        {
+            return bad(CertificateError::UnknownIssuer);
+        }
+        let validity = tbs.validity();
+        let at = now.as_secs();
+        if at < validity.not_before.to_unix_duration().as_secs()
+            || at > validity.not_after.to_unix_duration().as_secs()
+        {
+            return bad(CertificateError::Expired);
+        }
+        const SERVER_AUTH: &str = "1.3.6.1.5.5.7.3.1";
+        const ANY: &str = "2.5.29.37.0";
+        if let Ok(Some((_, ExtendedKeyUsage(usages)))) = tbs.get_extension::<ExtendedKeyUsage>()
+            && !usages
+                .iter()
+                .any(|u| matches!(u.to_string().as_str(), SERVER_AUTH | ANY))
+        {
+            return bad(CertificateError::InvalidPurpose);
+        }
+        let named = || {
+            let parsed = rustls::server::ParsedCertificate::try_from(ee)?;
+            rustls::client::verify_server_name(&parsed, name)
+        };
+        Some(match &self.names {
+            Names::Ignore => Ok(ServerCertVerified::assertion()),
+            Names::Check => named().map(|()| ServerCertVerified::assertion()),
+            Names::CommonName(want) => {
+                if named().is_ok() || common_name(ee.as_ref()).as_deref() == Some(want.as_str()) {
+                    Ok(ServerCertVerified::assertion())
+                } else {
+                    Err(rustls::Error::InvalidCertificate(
+                        CertificateError::NotValidForName,
+                    ))
+                }
+            }
+        })
+    }
+
+    fn signed_by_root(&self, cert: &x509_cert::Certificate, ee: &CertificateDer<'_>) -> bool {
+        use x509_cert::der::{Decode, Encode};
+        let Some((tbs, sig_alg, signature)) = signed_parts(ee.as_ref()) else {
+            return false;
+        };
+        let Ok(issuer) = cert.tbs_certificate().issuer().to_der() else {
+            return false;
+        };
+        self.roots.iter().any(|r| {
+            let Ok(root) = x509_cert::Certificate::from_der(r.as_ref()) else {
+                return false;
+            };
+            let rt = root.tbs_certificate();
+            if rt.subject().to_der().ok().as_deref() != Some(issuer.as_slice()) {
+                return false;
+            }
+            let spki = rt.subject_public_key_info();
+            let Some(key_alg) = spki
+                .algorithm
+                .to_der()
+                .ok()
+                .and_then(|d| der_item(&d).map(|(_, body, _)| body.to_vec()))
+            else {
+                return false;
+            };
+            let key = spki.subject_public_key.raw_bytes();
+            self.provider
+                .signature_verification_algorithms
+                .all
+                .iter()
+                .any(|alg| {
+                    alg.public_key_alg_id().as_ref() == key_alg.as_slice()
+                        && alg.signature_alg_id().as_ref() == sig_alg
+                        && alg.verify_signature(key, tbs, signature).is_ok()
+                })
+        })
+    }
+}
+
+/// The signed bytes (the whole tbsCertificate), the signature algorithm's
+/// contents and the signature of a DER certificate.
+fn signed_parts(der: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
+    let (_, cert, _) = der_item(der)?;
+    let (_, _, after_tbs) = der_item(cert)?;
+    let tbs = cert.get(..cert.len() - after_tbs.len())?;
+    let (_, alg, after_alg) = der_item(after_tbs)?;
+    let (tag, bits, _) = der_item(after_alg)?;
+    let (0x03, [0, signature @ ..]) = (tag, bits) else {
+        return None;
+    };
+    Some((tbs, alg, signature))
 }
 
 fn common_name(der: &[u8]) -> Option<String> {
@@ -140,6 +253,11 @@ impl ServerCertVerifier for Verifier {
             return Ok(ServerCertVerified::assertion());
         };
         let result = chain.verify_server_cert(ee, im, name, ocsp, now);
+        if result.is_err()
+            && let Some(verdict) = self.ca_leaf(ee, name, now)
+        {
+            return verdict;
+        }
         let wrong_name = matches!(
             result,
             Err(rustls::Error::InvalidCertificate(
@@ -346,11 +464,13 @@ fn config_with(
     let mode = effective_mode(spec);
     let verify = matches!(mode, SslMode::VerifyCa | SslMode::VerifyFull);
     let system_store = verify && root_path(spec).is_none();
+    let mut trusted = Vec::new();
     let chain = if verify {
         let mut roots = RootCertStore::empty();
         match root_path(spec).as_deref() {
             Some(path) if path != "system" => {
-                roots.add_parsable_certificates(read_certs(Path::new(path))?);
+                trusted = read_certs(Path::new(path))?;
+                roots.add_parsable_certificates(trusted.iter().cloned());
             }
             named => {
                 let found = system_roots();
@@ -364,7 +484,8 @@ fn config_with(
                         )
                     }));
                 }
-                roots.add_parsable_certificates(found);
+                roots.add_parsable_certificates(found.iter().cloned());
+                trusted = found;
             }
         }
         Some(
@@ -375,7 +496,7 @@ fn config_with(
     } else {
         None
     };
-    let verifier = Verifier::new(chain, names_for(mode, system_store));
+    let verifier = Verifier::new(chain, trusted, names_for(mode, system_store));
     let builder = ClientConfig::builder_with_provider(provider)
         .with_protocol_versions(&spec.tls_versions)
         .map_err(|e| Error::config(format!("TLS setup: {e}")))?
@@ -572,9 +693,38 @@ pub(crate) fn describe_failure(e: &(dyn std::error::Error + 'static), host: &str
             &wrong_name,
             1,
         ),
-        _ => return text,
+        CertificateError::Expired
+        | CertificateError::ExpiredContext { .. }
+        | CertificateError::NotValidYet
+        | CertificateError::NotValidYetContext { .. } => {
+            "x509: certificate has expired or is not yet valid".into()
+        }
+        CertificateError::InvalidPurpose | CertificateError::InvalidPurposeContext { .. } => {
+            "x509: certificate specifies an incompatible key usage".into()
+        }
+        CertificateError::Revoked => "x509: certificate has been revoked".into(),
+        CertificateError::BadSignature => "x509: certificate signature is invalid".into(),
+        CertificateError::Other(other) => {
+            format!("x509: certificate rejected: {}", words(&other.to_string()))
+        }
+        other => format!(
+            "x509: certificate rejected: {}",
+            words(&format!("{other:?}"))
+        ),
     };
     text.replace(&shown, &worded)
+}
+
+fn words(name: &str) -> String {
+    let name = name.split(['(', ' ', '{']).next().unwrap_or(name);
+    let mut out = String::new();
+    for c in name.chars() {
+        if c.is_ascii_uppercase() && !out.is_empty() {
+            out.push(' ');
+        }
+        out.push(c.to_ascii_lowercase());
+    }
+    out
 }
 
 /// The rustls error in `e`'s chain, also inside an `io::Error`, which does
@@ -690,7 +840,76 @@ mod tests {
         let chain = WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider())
             .build()
             .unwrap();
-        Verifier::new(Some(chain), names)
+        Verifier::new(Some(chain), vec![cert(root)], names)
+    }
+
+    fn verdict_on(
+        v: &Verifier,
+        leaf: &[u8],
+        host: &str,
+        hours: u64,
+    ) -> std::result::Result<(), rustls::Error> {
+        v.verify_server_cert(
+            &cert(leaf),
+            &[],
+            &ServerName::try_from(host.to_string()).unwrap(),
+            &[],
+            UnixTime::since_unix_epoch(std::time::Duration::from_hours(hours)),
+        )
+        .map(drop)
+    }
+
+    const IN_2030: u64 = 525_960;
+
+    #[test]
+    fn a_self_signed_ca_certificate_is_its_own_root_as_go_trusts_it() {
+        let ss = include_bytes!("testdata/self-signed-ca.crt");
+        for names in [Names::Check, Names::Ignore] {
+            verdict_on(&verifying(ss, names), ss, "db.example", IN_2030).unwrap();
+        }
+        assert_eq!(
+            verdict_on(&verifying(ss, Names::Check), ss, "other.example", IN_2030),
+            Err(rustls::Error::InvalidCertificate(
+                CertificateError::NotValidForNameContext {
+                    expected: ServerName::try_from("other.example").unwrap(),
+                    presented: vec!["DnsName(\"db.example\")".into()],
+                }
+            ))
+        );
+        verdict_on(&verifying(ss, Names::Ignore), ss, "other.example", IN_2030).unwrap();
+        assert_eq!(
+            verdict_on(&verifying(ss, Names::Ignore), ss, "db.example", 2_000_000),
+            Err(rustls::Error::InvalidCertificate(CertificateError::Expired))
+        );
+        assert_eq!(
+            verdict_on(
+                &verifying(include_bytes!("testdata/root.crt"), Names::Ignore),
+                ss,
+                "db.example",
+                IN_2030
+            ),
+            Err(rustls::Error::InvalidCertificate(
+                CertificateError::UnknownIssuer
+            ))
+        );
+    }
+
+    #[test]
+    fn a_ca_certificate_signed_by_a_root_is_trusted_as_go_trusts_it() {
+        let root = include_bytes!("testdata/ca-leaf-root.crt");
+        let leaf = include_bytes!("testdata/ca-leaf.crt");
+        verdict_on(&verifying(root, Names::Check), leaf, "db.example", IN_2030).unwrap();
+        assert_eq!(
+            verdict_on(
+                &verifying(include_bytes!("testdata/other-root.crt"), Names::Check),
+                leaf,
+                "db.example",
+                IN_2030
+            ),
+            Err(rustls::Error::InvalidCertificate(
+                CertificateError::UnknownIssuer
+            ))
+        );
     }
 
     fn verdict(v: &Verifier, host: &str) -> std::result::Result<(), rustls::Error> {
@@ -801,8 +1020,28 @@ mod tests {
             describe_failure(&wrap(CertificateError::NotValidForName), "h"),
             "x509: certificate is not valid for h"
         );
-        let other = wrap(CertificateError::Expired);
-        assert_eq!(describe_failure(&other, "h"), other.to_string());
+        assert_eq!(
+            describe_failure(&wrap(CertificateError::Expired), "h"),
+            "x509: certificate has expired or is not yet valid"
+        );
+        assert_eq!(
+            describe_failure(&wrap(CertificateError::InvalidPurpose), "h"),
+            "x509: certificate specifies an incompatible key usage"
+        );
+        let webpki =
+            rustls::server::ParsedCertificate::try_from(&CertificateDer::from(b"junk".to_vec()))
+                .err()
+                .unwrap();
+        let rustls::Error::InvalidCertificate(bad) = webpki else {
+            panic!("{webpki:?}")
+        };
+        let text = describe_failure(&wrap(bad), "h");
+        assert!(text.starts_with("x509: certificate rejected: "), "{text}");
+        assert_eq!(words("CaUsedAsEndEntity"), "ca used as end entity");
+        assert!(
+            !text.contains("Other(") && !text.contains("invalid peer certificate"),
+            "{text}"
+        );
         let plain = std::io::Error::other("invalid peer certificate: UnknownIssuer");
         assert_eq!(
             describe_failure(&plain, "h"),

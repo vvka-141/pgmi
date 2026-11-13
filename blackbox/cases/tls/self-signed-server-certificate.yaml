@@ -1,0 +1,20 @@
+description: a server certificate made as the PostgreSQL docs show (openssl req -new -x509, which marks it CA:TRUE) is its own root - given as sslrootcert it verifies in verify-ca and verify-full; another root, or another host name under verify-full, is refused in x509 words, exit 11
+servers: [tls_self_signed]
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_self_signed_port}/postgres?sslmode=verify-ca&sslrootcert={self_signed}", -d, "{db}", --json]
+    expect: {exit: 0, json: {tls: {enabled: true, sslmode: verify-ca}}}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@localhost:{tls_self_signed_port}/postgres?sslmode=verify-full&sslrootcert={self_signed}", -d, "{db}", --json]
+    expect: {exit: 0, json: {tls: {enabled: true, sslmode: verify-full}}}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_self_signed_port}/postgres?sslmode=verify-ca&sslrootcert={ca}", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ["x509: certificate signed by unknown authority"]
+      stderr_not: ["invalid peer certificate", "Other\\("]
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_self_signed_port}/postgres?sslmode=verify-full&sslrootcert={self_signed}", -d, "{db}"]
+    expect:
+      exit: 11
+      stderr: ["x509: (certificate is not valid for|cannot validate certificate for) 127.0.0.1"]
+      stderr_not: ["invalid peer certificate", "Other\\("]

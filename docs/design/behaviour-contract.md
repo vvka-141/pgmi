@@ -458,7 +458,11 @@ Cases: `errors/connection-failures`, `errors/connect-refusal-detail`, `connectio
 sslmode `disable`, `allow` (plaintext), `prefer` (TLS when the server offers
 it), `require` (no verification, unless a root certificate is given, which makes
 it `verify-ca`), `verify-ca` (chain only), `verify-full` (chain and host name;
-an IP address needs an IP SAN). The root certificate is `sslrootcert`, else
+an IP address needs an IP SAN). A server certificate marked `CA:TRUE`, as
+`openssl req -new -x509` makes it, verifies when it is itself in the root
+file or a root signed it directly. A refused certificate is exit 11 and worded
+as Go's x509 words it (`x509: certificate signed by unknown authority`, `...
+has expired or is not yet valid`, ...). The root certificate is `sslrootcert`, else
 `~/.postgresql/root.crt`, else the platform trust store (as pgx does; libpq
 would refuse); `sslrootcert=system` names the platform trust store
 explicitly. `SSL_CERT_FILE` replaces the platform store. The client certificate is `sslcert`/`sslkey`, else

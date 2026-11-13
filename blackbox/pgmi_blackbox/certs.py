@@ -105,7 +105,13 @@ def make_certs(d: Path) -> dict[str, str]:
     )
     for key in d.glob("*.key"):
         key.chmod(0o600)
+    openssl(
+        "req", "-new", "-x509", "-days", "2", "-nodes", "-text", "-subj", "/CN=localhost",
+        "-addext", "subjectAltName=DNS:localhost", "-out", "self_signed.crt", "-keyout", "self_signed.key",
+        cwd=d,
+    )
     return {
+        "{self_signed}": str(d / "self_signed.crt"),
         "{ca}": str(d / "ca.crt"),
         "{wrong_ca}": str(d / "wrong_ca.crt"),
         "{client_cert}": str(d / "client.crt"),

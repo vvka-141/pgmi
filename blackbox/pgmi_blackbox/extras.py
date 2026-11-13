@@ -8,7 +8,7 @@ from pgmi_blackbox.certs import AZURE_USER, CERT_USER, LAKEBASE_USER, MD5_USER, 
 from pgmi_blackbox.fakes import AZURE_TOKEN, LAKEBASE_TOKEN, start_fakes
 from pgmi_blackbox.server import IMAGE, Server, wait_ready
 
-KINDS = ("tls", "tls_only", "replica", "socket", "fakes")
+KINDS = ("tls", "tls_only", "tls_self_signed", "replica", "socket", "fakes")
 
 _HBA = {
     "tls": (
@@ -19,14 +19,17 @@ _HBA = {
         "host all all all scram-sha-256\n"
     ),
     "tls_only": "local all all trust\nhostssl all all all scram-sha-256\nhostnossl all all all reject\n",
+    "tls_self_signed": "local all all trust\nhostssl all all all scram-sha-256\nhostnossl all all all reject\n",
 }
 
 
 def start(kind: str, certs: Path, stack: ExitStack) -> tuple[Server, dict[str, str]]:
     (certs / f"{kind}.hba").write_text(_HBA[kind])
     name = f"pgmi-blackbox-{kind}-{uuid.uuid4().hex[:8]}"
+    pair = "self_signed" if kind == "tls_self_signed" else "server"
     script = (
-        "mkdir -p /tls && cp /certs/server.crt /certs/server.key /certs/ca.crt /tls/ "
+        f"mkdir -p /tls && cp /certs/{pair}.crt /tls/server.crt && cp /certs/{pair}.key /tls/server.key "
+        "&& cp /certs/ca.crt /tls/ "
         f"&& cp /certs/{kind}.hba /tls/pg_hba.conf && chown -R postgres /tls && chmod 600 /tls/server.key "
         "&& exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/tls/server.crt "
         "-c ssl_key_file=/tls/server.key -c ssl_ca_file=/tls/ca.crt -c hba_file=/tls/pg_hba.conf"
