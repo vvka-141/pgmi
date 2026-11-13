@@ -106,9 +106,9 @@ fn millis(d: Duration) -> u64 {
 
 #[derive(Debug, Serialize)]
 struct Target {
-    database: String,
     host: String,
     port: u16,
+    database: String,
 }
 
 /// What the deploy session saw of TLS.
@@ -168,7 +168,10 @@ impl DeployRecord {
             created: loaded
                 .map(|_| p.provision == Provision::Created)
                 .or(p.reached(Phase::Deploying).then_some(false)),
-            database: loaded.and(p.database()).map(str::to_string),
+            database: p
+                .database()
+                .filter(|_| p.reached(Phase::Deploying))
+                .map(str::to_string),
             detail: None,
             dotenv_keys: facts.dotenv_keys.to_vec(),
             duration_ms: p.reached(Phase::Deploying).then(|| millis(facts.elapsed)),
@@ -208,14 +211,18 @@ impl DeployRecord {
             sqlstate: None,
             started_at: timestamp(facts.started),
             status: if exit_code == 0 { "success" } else { "failed" },
-            target: p.spec.as_ref().map(|s| {
-                let first = s.first();
-                Target {
-                    database: s.target_db.clone(),
-                    host: first.name.clone(),
-                    port: first.port,
-                }
-            }),
+            target: p
+                .spec
+                .as_ref()
+                .filter(|_| p.reached(Phase::Deploying))
+                .map(|s| {
+                    let first = s.first();
+                    Target {
+                        database: s.target_db.clone(),
+                        host: first.name.clone(),
+                        port: first.port,
+                    }
+                }),
             test_macros: execution
                 .map(|x| x.test_macros)
                 .or((loaded.is_some() || p.reached(Phase::Deploying)).then_some(0)),

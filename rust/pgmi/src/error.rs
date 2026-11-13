@@ -44,6 +44,11 @@ pub(crate) struct SqlDiagnostics {
     pub(crate) internal_position: Option<usize>,
 }
 
+/// A field of a server message, absent when the server sent it empty.
+pub(crate) fn field(text: Option<&str>) -> Option<String> {
+    text.filter(|t| !t.is_empty()).map(str::to_string)
+}
+
 pub(crate) struct Error {
     kind: Kind,
     message: String,
@@ -393,6 +398,13 @@ mod tests {
         assert_eq!(redact("x abc y abc", &s(&["abc"])), "x *** y ***");
         assert_eq!(redact("é-secret-é", &s(&["secret", "é-s"])), "***-é");
         assert_eq!(redact("none here", &s(&["abc"])), "none here");
+    }
+
+    #[test]
+    fn an_empty_server_field_is_absent() {
+        assert_eq!(field(Some("")), None);
+        assert_eq!(field(None), None);
+        assert_eq!(field(Some("x")).as_deref(), Some("x"));
     }
 
     #[test]

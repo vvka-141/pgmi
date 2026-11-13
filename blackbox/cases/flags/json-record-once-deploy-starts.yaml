@@ -1,0 +1,37 @@
+description: once the deploy has started (a parameter key or value refused, deploy.sql missing) the --json record names the database and fills the counts with zero and created/recreated with false, never half of them; empty DETAIL and HINT fields of a server message are left out; metadata validate --json lists errors only for blocks reported together
+project:
+  files:
+    p/deploy.sql: SELECT 1;
+    nodeploy/a.sql: SELECT 1;
+    empty/deploy.sql: |
+      DO $$ BEGIN
+        RAISE NOTICE 'note' USING DETAIL = '', HINT = '';
+        RAISE EXCEPTION 'boom' USING DETAIL = '', HINT = '';
+      END $$;
+    meta/deploy.sql: SELECT 1;
+    meta/a.sql: |
+      /*
+      <pgmi-meta id="7f0c6a2e-8d4b-4a8e-9a8c-1f2e3d4c5b6a"><sortKeys><key>a</key></sortKeys></pgmi-meta>
+      */
+      SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}/p", --json, --connection, "{conn}", -d, "{db}", --param, "1k=v"]
+    expect:
+      exit: 10
+      stderr: ["^FAILED {db}: ", "invalid parameter key '1k'"]
+      json: {database: "{db}", created: false, recreated: false, filesLoaded: 0, pathsIgnored: 0, testMacros: 0, status: failed}
+  - pgmi: [deploy, "{project}/nodeploy", --json, --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 14
+      json: {database: "{db}", created: false, recreated: false, status: failed}
+  - pgmi: [deploy, "{project}/empty", --json, --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 13
+      stderr_not: ["^DETAIL:", "^HINT:"]
+      stdout_not: ['"detail":', '"hint":']
+      json: {sqlstate: P0001}
+  - pgmi: [metadata, validate, "{project}/meta", --json]
+    expect:
+      exit: 10
+      stdout: ["idempotent attribute is required"]
+      stdout_not: ['"errors":']

@@ -103,9 +103,9 @@ pub(crate) fn sql_error_needing(
             };
             Error::sql(message).with_sql(SqlDiagnostics {
                 sqlstate: Some(code),
-                detail: db.detail().map(str::to_string),
-                hint: db.hint().map(str::to_string),
-                where_: db.where_().map(str::to_string),
+                detail: crate::error::field(db.detail()),
+                hint: crate::error::field(db.hint()),
+                where_: crate::error::field(db.where_()),
                 internal_query,
                 position,
                 internal_position,
@@ -1896,6 +1896,18 @@ mod tests {
             assert_eq!(began[key], want, "{key}");
         }
         assert!(began["durationMs"].is_u64());
+        assert_eq!(began["database"], "app");
+        let text = serde_json::to_string(&run.record(&context(), &refused)).unwrap();
+        assert!(
+            text.contains(r#""target":{"host":"#) && text.contains(r#","database":"app"}"#),
+            "{text}"
+        );
+        run.st.phase = Phase::Configured;
+        let configured = serde_json::to_value(run.record(&context(), &refused)).unwrap();
+        assert_eq!(
+            (&configured["target"], &configured["database"]),
+            (&Value::Null, &Value::Null)
+        );
     }
 
     #[test]
@@ -1998,7 +2010,18 @@ mod tests {
         let record = run.record(&context(), result);
         let text = serde_json::to_string(&record).unwrap();
         let sorted = serde_json::to_value(&record).unwrap();
-        assert_eq!(text, sorted.to_string(), "keys must stay in byte order");
+        let mut expected = sorted.to_string();
+        if let Some(t) = sorted.get("target").filter(|t| t.is_object()) {
+            let go = format!(
+                r#"{{"host":{},"port":{},"database":{}}}"#,
+                t["host"], t["port"], t["database"]
+            );
+            expected = expected.replace(&t.to_string(), &go);
+        }
+        assert_eq!(
+            text, expected,
+            "keys must stay in byte order, target's in Go's order"
+        );
         sorted
     }
 

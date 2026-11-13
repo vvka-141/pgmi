@@ -226,6 +226,16 @@ fn validate(r: &MetadataReport, env: &Env) -> Result<()> {
     let mut v = match report {
         Validated::Report(v) => v,
         Validated::Unreadable(errors) => {
+            if let Some(invalid) = errors
+                .iter()
+                .find(|e| matches!(e, MetaError::Invalid { .. }))
+            {
+                return Err(failed(
+                    r.json,
+                    Error::config(format!("validation failed: {invalid}")),
+                    serde_json::json!({"validationPassed": false}),
+                ));
+            }
             let errors = unreadable(&errors);
             let e = Error::config(format!("validation failed: {}", errors.join("\n")));
             return Err(failed(

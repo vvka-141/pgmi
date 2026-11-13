@@ -128,8 +128,8 @@ pub(crate) fn notice_of(db: &DbError) -> Notice {
     Notice {
         severity,
         message: db.message().to_string(),
-        detail: db.detail().map(str::to_string),
-        hint: db.hint().map(str::to_string),
+        detail: crate::error::field(db.detail()),
+        hint: crate::error::field(db.hint()),
     }
 }
 
@@ -175,7 +175,7 @@ impl Answer {
         Answer {
             message: db.message().to_string(),
             code: db.code().code().to_string(),
-            detail: db.detail().map(str::to_string),
+            detail: crate::error::field(db.detail()),
         }
     }
 }
