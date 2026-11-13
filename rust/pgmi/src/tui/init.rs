@@ -4,7 +4,7 @@ use ratatui::widgets::Paragraph;
 use super::connection::{self, Effect, Settings, TestResult};
 use super::select::{Choice, Outcome, Select};
 use crate::env::Env;
-use crate::error::{Error, Kind, Result};
+use crate::error::Result;
 use crate::templates::Template;
 
 const TITLE: &str = "pgmi init - Project Setup";
@@ -104,7 +104,7 @@ impl Wizard {
                     self.setup = None;
                     None
                 }
-                Outcome::Cancel => Some(Effect::Done(Done::Cancelled)),
+                Outcome::Cancel => Some(Effect::Done(Done::Interrupted)),
             };
         }
         match self.template.update(key)? {
@@ -131,7 +131,8 @@ impl Wizard {
                 });
                 None
             }
-            Outcome::Back | Outcome::Cancel => Some(Effect::Done(Done::Cancelled)),
+            Outcome::Back => Some(Effect::Done(Done::Cancelled)),
+            Outcome::Cancel => Some(Effect::Done(Done::Interrupted)),
         }
     }
 }
@@ -179,10 +180,6 @@ impl super::Steps for Wizard {
 
 pub(crate) fn run(target: &str, env: &Env, runtime: &tokio::runtime::Handle) -> Result<Done> {
     super::drive(&mut Wizard::new(target), env, runtime)
-}
-
-pub(crate) fn cancelled() -> Error {
-    Error::new(Kind::Interrupted, "init cancelled")
 }
 
 #[cfg(test)]
@@ -294,11 +291,13 @@ mod tests {
     #[test]
     fn ctrl_c_stops_init_on_every_screen() {
         let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        assert_eq!(Wizard::new("/tmp/x").update(ctrl_c), done(Done::Cancelled));
+        assert_eq!(
+            Wizard::new("/tmp/x").update(ctrl_c),
+            done(Done::Interrupted)
+        );
         let mut w = Wizard::new("/tmp/x");
         w.update(key(KeyCode::Enter));
-        assert_eq!(w.update(ctrl_c), done(Done::Cancelled));
-        assert_eq!(cancelled().kind(), Kind::Interrupted);
+        assert_eq!(w.update(ctrl_c), done(Done::Interrupted));
         assert_eq!(
             into_connection_wizard().update(ctrl_c),
             done(Done::Interrupted)

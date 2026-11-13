@@ -1,0 +1,18 @@
+description: on a terminal, Esc leaves pgmi init with exit 12, "init cancelled" (Go first steps back from the template list to its path screen, so the case presses Esc twice; the Rust binary has no path screen and cancels on the first) and Ctrl-C with exit 130, "init interrupted" (PGMI-972); neither writes a file
+steps:
+  - pgmi: [init, "{workdir}/esc"]
+    tty: true
+    stdin: [{wait: 2}, {hex: "1b"}, {wait: 1.5}, {hex: "1b"}, {wait: 4}]
+    timeout: 20
+    expect:
+      exit: 12
+      stdout: ["init cancelled"]
+      stdout_not: ["Wrote "]
+  - pgmi: [init, "{workdir}/ctrlc"]
+    tty: true
+    stdin: [{wait: 2}, {hex: "03"}, {wait: 4}]
+    timeout: 20
+    expect:
+      exit: 130
+      stdout: ["init interrupted"]
+      stdout_not: ["Wrote "]

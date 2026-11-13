@@ -94,8 +94,11 @@ text files and JSON-escaped in `.json` files. Answering Yes to "Set up the
 connection now?" runs the `config` wizard and writes its settings into the
 scaffolded `pgmi.yaml`. The next step it prints names the path and database
 as POSIX shell words, single-quoted unless plain (`pgmi deploy 'a b' -d mydb`).
+Esc on the template screen is `init cancelled`, exit 12 (Go steps back to a
+path screen first; the Rust binary has none, so its first Esc cancels);
+Ctrl-C on any init screen is `init interrupted`, exit 130.
 
-Cases: `commands/init-next-step-quoted`, `commands/init`, `commands/init-unwritable`, `commands/init-unlistable`, `terminal/init-wizard`, `terminal/non-interactive`, `commands/init-project-name`, `terminal/init-wizard-connection`, `terminal/init-wizard-connection-esc`.
+Cases: `terminal/init-wizard-esc-and-ctrl-c`, `commands/init-next-step-quoted`, `commands/init`, `commands/init-unwritable`, `commands/init-unlistable`, `terminal/init-wizard`, `terminal/non-interactive`, `commands/init-project-name`, `terminal/init-wizard-connection`, `terminal/init-wizard-connection-esc`.
 
 ### Template deployments
 

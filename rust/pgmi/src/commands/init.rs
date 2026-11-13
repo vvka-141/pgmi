@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::cli::InitArgs;
-use crate::commands::config::interrupted;
+use crate::commands::config::{cancelled, interrupted};
 use crate::env::Env;
 use crate::error::{Error, Result};
 use crate::output::Reporter;
@@ -83,7 +83,7 @@ pub(crate) fn run(
                     connection = settings;
                     template
                 }
-                Done::Cancelled => return Err(tui::init::cancelled()),
+                Done::Cancelled => return Err(cancelled("init")),
                 Done::Interrupted => return Err(interrupted("init")),
             }
         }
