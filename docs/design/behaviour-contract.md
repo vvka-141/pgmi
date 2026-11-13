@@ -423,7 +423,7 @@ inside; a port in `Host=h:port` wins over `Port=` wherever it stands;
 `dbname` and any libpq keyword spelled exactly are taken as written). In a URI
 query only `%XX` is decoded (`+` stays a plus), keys are read in any case,
 `applicationname` and `connecttimeout` stand for `application_name` and
-`connect_timeout`, and a repeated key takes its first value. As in Go: an
+`connect_timeout`, and a repeated key takes its last value, as libpq (Go takes the first; row "Repeated URI query key"). As in Go: an
 empty connection flag (`-h ''`, `-U ''`, `-d ''`, `--sslcert ''`, `--sslkey ''`,
 `--sslrootcert ''`) is unset, so the next source applies and is announced; an
 empty `sslmode` in any form of string is unset; ADO.NET text after a closing
@@ -1438,7 +1438,7 @@ release notes take their "Behaviour changes" section from this table.
 | `deploy` on a terminal with no connection from flags, environment or `pgmi.yaml` | opens the connection wizard | never interactive: exit 10, listing the ways to set a connection; `pgmi init` and `pgmi config` keep their wizards | owner 2026-11-12 (PGMI-901) |
 | Connection reset with no error from the server, mid-deploy | exit 13 while deploy.sql runs, exit 1 during session setup | exit 13 once the session is open, session setup included; exit 11 only when no session opened; `--json` still shows what committed | PGMI-928 (was exit 11, PGMI-885) |
 | `.env` value ending in `\"` or `\\` before the closing quote (`"x\""`) | `x\`, or reads on into later lines | `x"`, `x\` | agent 2026-11-12 (PGMI-900), owner may revisit |
-| `.env` line with no key (`=x`, or a last line without `=`) | the rest applied, an empty name set | file refused, exit 10 | agent 2026-11-12 (PGMI-900), owner may revisit |
+| `.env` line with no key (`=x`, or a last line without `=`) | the rest applied, an empty name set | the file does not parse: nothing applied, a WARNING naming the file, exit 0 | agent 2026-11-12 (PGMI-900), owner may revisit |
 | `pgmi help <unknown topic>` | "Unknown help topic", exit 0 | exit 2 | agent 2026-11-12 (PGMI-906), owner may revisit |
 | `pgmi help deploy <extra>` | extra argument ignored, exit 0 | exit 2 | agent 2026-11-12 (PGMI-906), owner may revisit |
 | `pgmi completion bash` script | Cobra's first version: also offers `--flag=` forms of flags that take a value | Cobra's second version: the same words without the `--flag=` forms | agent 2026-11-12 (PGMI-905), owner may revisit |
@@ -1460,7 +1460,7 @@ release notes take their "Behaviour changes" section from this table.
 | `invalid configuration:` inside an error message | `failed to scan directory: invalid configuration: .pgmiignore excludes deploy.sql ...` | the same message without the infix; exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
 | Driver error text in connection and retry lines | pgx's text, sorted by pgmi (`server at h:p refused the connection: ...`, `password authentication failed for user "u" on database "d"`, `SSL/TLS connection error: ...`) | each host as `h:p: ` with the server's message and SQLSTATE, or the TLS or driver library's text; the next-step lines and exit codes unchanged | agent 2026-11-12 (PGMI-907), owner may revisit |
 | Azure, AWS and Google sign-in failure text | the Go SDKs' wording, credential chain and troubleshooting links | pgmi's own sign-in chain: one line per credential tried; `connect to "<db>": ` and the exit codes unchanged | agent 2026-11-12 (PGMI-907), owner may revisit |
-| Help layout (`--help`, `help <command>`) | cobra's: `Usage:` on its own line, `Flags:` with `[=true|false]` and a type word, examples after the usage | clap's: `Usage: pgmi ...`, `Arguments:`, `Options:` with `[default: ...]`, examples last; the descriptions and examples are Go's, except `pgmi help help`, reworded without "simply" | agent 2026-11-12 (PGMI-907, PGMI-908), owner may revisit |
+| Help layout (`--help`, `help <command>`) | cobra's: `Usage:` on its own line, `Flags:` with `[=true|false]` and a type word, examples after the usage | clap's: `Usage: pgmi ...`, `Arguments:`, `Options:` with `[default: ...]`, examples last; the descriptions and examples are Go's, except `pgmi help help`, reworded without "simply", and `init --template`, whose default reads `[default: minimal; on a terminal, init asks]` | agent 2026-11-12 (PGMI-907, PGMI-908), owner may revisit |
 | Session-preparation failure | `session preparation failed: execution failed: failed to create internal tables: failed to create pgmi schema: ...; pgmi's session tables need the TEMPORARY privilege: GRANT ...` | `session preparation failed: create the session tables: ...`, the `GRANT` on its own line | agent 2026-11-12 (PGMI-907), owner may revisit |
 | Input refused before connecting | `FAILED <db>: failed after ...`, then the error (a connection option value, a client certificate without its key, AWS sign-in without a region) | the error alone; exit 10 both (a refused parameter key or value prints the FAILED line in both) | agent 2026-11-12 (PGMI-907), owner may revisit |
 | `pgmi.yaml` that is not valid YAML or has an unknown key | yaml.v3's text (`yaml: unmarshal errors: line 2: field x not found in type config.ProjectConfig`) | the line, column and parser text, naming the keys expected (`line 2 column 3: unknown field ...`); exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
@@ -1550,7 +1550,8 @@ release notes take their "Behaviour changes" section from this table.
 | `connect_timeout` or `sslmode` in a connection string that is not a valid value | `invalid connection string: invalid connect_timeout [value] "x": strconv.Atoi: ...`; `invalid sslmode "x" in the connection (valid: disable, allow, ...)` | `invalid connect_timeout "x"`; `invalid sslmode value: "x"`, libpq's words; exit 10 both | owner 2026-11-13 (PGMI-973): wording only |
 | A failure to connect to the maintenance database | `maintenance database: connect to "<db>": ...` | `connect to "<db>": ...`; exit codes unchanged | owner 2026-11-13 (PGMI-973): wording only, the line names the database |
 | Refusal order: a `pgmi.yaml` port that is not a number, or a quoted one, and no database | the port (`cannot unmarshal !!str ... into int`) | the missing database; with a database, `invalid port "x"` (a quoted number is accepted, row above); exit 10 both | owner 2026-11-13 (PGMI-973): wording only |
-| A database name holding `"` or `\` in the `--overwrite` lines | Go-escaped (`"o2\"x"`) | as written between double quotes | owner 2026-11-13 (PGMI-973): wording only |
+| A database name holding `"` or `\` in the `--overwrite` lines and the `does not exist; creating` line | Go-escaped (`"o2\"x"`) | as written between double quotes | owner 2026-11-13 (PGMI-973): wording only |
+| A project file over `PGMI_MAX_FILE_SIZE` | `failed to read ./lib/a.sql: file lib/a.sql is N bytes, ...` | `failed to read ./lib/a.sql: file a.sql is N bytes, ...`: the prefix names the path | owner 2026-11-13 (PGMI-973): wording only |
 
 No case of its own: each row's section above names its cases or its Rust unit
 test.

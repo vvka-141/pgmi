@@ -169,7 +169,11 @@ Examples:
 #[derive(Debug, Args)]
 pub(crate) struct InitArgs {
     pub(crate) path: Option<PathBuf>,
-    #[arg(short = 't', long, help = "Template to use (minimal, basic, advanced)")]
+    #[arg(
+        short = 't',
+        long,
+        help = "Template to use (minimal, basic, advanced) [default: minimal; on a terminal, init asks]"
+    )]
     pub(crate) template: Option<String>,
 }
 
@@ -684,6 +688,7 @@ mod tests {
             text.contains("Template to use (minimal, basic, advanced)"),
             "{text}"
         );
+        assert!(text.contains("[default: minimal"), "{text}");
     }
 
     #[test]

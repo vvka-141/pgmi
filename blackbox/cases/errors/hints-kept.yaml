@@ -23,6 +23,7 @@ steps:
     expect:
       exit: 0
       stdout: ["Template to use \\(minimal, basic, advanced\\)"]
+      rust: {stdout: ["Template to use \\(minimal, basic, advanced\\) \\[default: minimal; on a terminal, init asks\\]"]}
   - pgmi: [deploy, "{project}/p", -d, "{db}", --azure, --aws, --json]
     env: {PGHOST: "{host}"}
     expect:
