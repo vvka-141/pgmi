@@ -13,6 +13,7 @@
 -- inside the deploy's transaction.
 --   deploy/preflight.sql      server version, a database this template can deploy onto
 --   deploy/settings.sql       the lists a project edits: extensions, settings, grants, guards
+--   deploy/providers.sql      hosting providers (Lakebase, Azure): detection, quirks, overrides
 --   deploy/parameters.sql     session.xml parameters, defaults, checks, environment label
 --   deploy/project_rules.sql  file rules: dev/ folders, sort keys, run-once vs re-run
 --   deploy/bootstrap.sql      host grants, roles, database settings, extensions
@@ -50,6 +51,7 @@ END $$;
 -- ############################################################################
 SELECT pg_temp.run_file('./deploy/preflight.sql');
 SELECT pg_temp.run_file('./deploy/settings.sql');
+SELECT pg_temp.run_file('./deploy/providers.sql');
 SELECT pg_temp.run_file('./deploy/parameters.sql');
 SELECT pg_temp.run_file('./deploy/project_rules.sql');
 

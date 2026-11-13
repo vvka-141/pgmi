@@ -39,7 +39,7 @@ BEGIN
     -- The kernel calls the helpers of membership and common from the moment
     -- they exist; the request-context readers it calls are granted with them.
     EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA common, membership GRANT EXECUTE ON ROUTINES TO %I', v_kernel_role);
-    PERFORM pg_temp.revoke_provider_create('{internal,core,api,common,membership}');
+    PERFORM pg_temp.revoke_provider_create('{internal,core,api,common,membership}');  -- deploy/providers.sql
 
     RAISE NOTICE '[pgmi] Schemas configured';
 END $schemas$;

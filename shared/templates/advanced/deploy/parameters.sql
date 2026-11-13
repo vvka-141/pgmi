@@ -50,14 +50,6 @@ BEGIN
 END $$;
 
 
--- Databricks Lakebase, told by two marks every Lakebase database carries. Its
--- defaults let the guards pass the provider's own roles and schema, so one
--- mark alone does not count.
-CREATE FUNCTION pg_temp.on_lakebase()
-RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT to_regrole('databricks_superuser') IS NOT NULL
-       AND to_regnamespace('__db_system') IS NOT NULL
-$$;
 
 -- Each parameter's default, beside its value. A parameter without one is
 -- required, and a blank value counts as not given. env has none: a deploy that
@@ -77,8 +69,8 @@ SET default_value = CASE key
     WHEN 'exchange_retention_days' THEN '30'
     WHEN 'www_authenticate' THEN 'Session'
     WHEN 'api_base_path' THEN '/api'
-    WHEN 'provider_role_pattern' THEN CASE WHEN pg_temp.on_lakebase() THEN 'databricks\_%' ELSE '' END
-    WHEN 'provider_schemas' THEN CASE WHEN pg_temp.on_lakebase() THEN '["__db_system"]' ELSE '[]' END
+    WHEN 'provider_role_pattern' THEN pg_temp.provider_default(key)
+    WHEN 'provider_schemas' THEN pg_temp.provider_default(key)
 END;
 
 UPDATE pg_temp.deployment_parameter

@@ -95,7 +95,7 @@ myproject/
 | `api/` | Your HTTP handlers (REST, RPC, MCP) | Yes - your application code |
 | `__test__/` | Tests of the whole project; an API test goes in `api/__test__/`, over its Alice fixture | Yes - add tests here |
 | `deploy.sql` | Deployment phases, transaction control, the file loop | Yes - customize deployment |
-| `deploy/` | Setup `deploy.sql` runs by name: settings, parameters, file rules, roles, schemas, ledger, finalize | `settings.sql` yes; others rarely, in the file whose name fits |
+| `deploy/` | Setup `deploy.sql` runs by name: settings, providers, parameters, file rules, roles, schemas, ledger, finalize | `settings.sql` yes; others rarely, in the file whose name fits |
 
 ### deploy.sql and deploy/
 

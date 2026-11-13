@@ -5,7 +5,8 @@
 -- ============================================================================
 
 -- A managed provider's own roles and schemas (provider_role_pattern,
--- provider_schemas): the schema, routine and membership grant guards in
+-- provider_schemas; detection and defaults in deploy/providers.sql): the
+-- schema, routine and membership grant guards in
 -- lib/__test__/ and membership/__test__/ leave them out. Row-level security
 -- never does.
 CREATE FUNCTION pg_temp.provider_role(p_role oid)

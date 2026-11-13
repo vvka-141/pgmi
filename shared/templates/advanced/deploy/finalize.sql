@@ -170,6 +170,7 @@ BEGIN
     END IF;
 END $access$;
 
+-- The provider's whole-table privileges on new tables (deploy/providers.sql).
 SELECT pg_temp.revoke_provider_table_privileges();
 
 
