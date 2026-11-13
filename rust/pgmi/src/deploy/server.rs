@@ -27,6 +27,7 @@ pub(super) async fn create_database(maintenance: &Session, db: &str) -> Result<(
 /// that does not answer within `CLEANUP` is closed instead.
 pub(super) async fn release(session: &Session) {
     let cleanup = async {
+        session.client.batch_execute("").await?;
         if session.tap.status() != crate::conn::tap::TxStatus::Idle {
             session.client.batch_execute("ROLLBACK").await?;
         }
@@ -178,5 +179,72 @@ mod tests {
         ] {
             assert!(supported_server(num, text).is_ok(), "{text}");
         }
+    }
+
+    #[tokio::test]
+    async fn release_rolls_back_a_failed_transaction_whose_ready_for_query_came_late() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        async fn query(s: &mut tokio::net::TcpStream) -> String {
+            assert_eq!(s.read_u8().await.unwrap(), b'Q');
+            let len = s.read_u32().await.unwrap();
+            let mut body = vec![0; usize::try_from(len).unwrap() - 4];
+            s.read_exact(&mut body).await.unwrap();
+            String::from_utf8(body)
+                .unwrap()
+                .trim_end_matches('\0')
+                .to_string()
+        }
+        let (listener, port) = crate::conn::dial::fake::listen().await;
+        let server = tokio::spawn(async move {
+            let mut s = crate::conn::dial::fake::signed_in(&listener).await.unwrap();
+            let mut seen = vec![query(&mut s).await];
+            s.write_all(b"E\0\0\0\x19SERROR\0C22012\0Mboom\0\0")
+                .await
+                .unwrap();
+            s.flush().await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            s.write_all(b"Z\0\0\0\x05E").await.unwrap();
+            let mut status = b'E';
+            loop {
+                let Ok(q) =
+                    tokio::time::timeout(std::time::Duration::from_secs(2), query(&mut s)).await
+                else {
+                    break;
+                };
+                if q == "ROLLBACK" {
+                    status = b'I';
+                }
+                let answer: &[u8] = if q.is_empty() {
+                    b"I\0\0\0\x04"
+                } else {
+                    b"C\0\0\0\x0dSELECT 1\0"
+                };
+                s.write_all(answer).await.unwrap();
+                s.write_all(&[b'Z', 0, 0, 0, 5, status]).await.unwrap();
+                let unlocked = q.contains("unlock_all");
+                seen.push(q);
+                if unlocked {
+                    break;
+                }
+            }
+            seen
+        });
+        let spec = crate::conn::dial::fake::spec_for(&format!(
+            "host=127.0.0.1 port={port} user=u dbname=d sslmode=disable"
+        ));
+        let session = crate::conn::dial::fake::quiet()
+            .connect(&spec, "d")
+            .await
+            .unwrap();
+        session
+            .client
+            .batch_execute("BEGIN; SELECT 1/0")
+            .await
+            .unwrap_err();
+        release(&session).await;
+        let seen = server.await.unwrap();
+        let rollback = seen.iter().position(|q| q == "ROLLBACK");
+        let unlock = seen.iter().position(|q| q.contains("unlock_all"));
+        assert!(rollback.is_some() && rollback < unlock, "{seen:?}");
     }
 }
