@@ -136,8 +136,10 @@ contract's "Behaviour changes in 0.20" table and a line in
 - A sign-in happens in the first attempt that has no token; a token, once
   had, renews per connection as before.
 - A wait cut by the deadline keeps the last error's kind and diagnostics;
-  a deadline inside a later attempt names the earlier attempt's error. Both
-  read `time box of <d> used up after N attempts; last error: ...`; with no
+  a deadline inside a later attempt names the earlier attempt's error. The
+  first reads `stopped after N attempts: the next retry would pass the <d>
+  time box; last error: ...` (PGMI-945), the second `time box of <d> used up
+  after N attempts; last error: ...`; with no
   time box, `gave up after 5 attempts with no time box (--timeout 0); ...`.
 - `--json` names an attempt's start `startedAt`, as the record's own.
 - Owner decision PGMI-909 (option A): only a run whose attempt reached the

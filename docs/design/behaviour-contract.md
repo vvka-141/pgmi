@@ -1325,7 +1325,8 @@ a concurrent deploy, exit 15, as before.
 before attempt n+1 is `min(30 s, 1 s * 2^(n-1))` times a random factor in
 [0.8, 1.2]. A wait that would end after the deadline is not started: the run
 fails at once with the last attempt's error and exit code, the message
-`time box of <d> used up after N attempts; last error: ...`. A deadline in
+`stopped after N attempts: the next retry would pass the <d> time box; last
+error: ...` (PGMI-945). A deadline in
 the middle of an attempt cancels it as before, exit 16 (11 while
 connecting), with that message when an earlier attempt failed. With
 `--timeout 0` the run stops after 5 attempts (`gave up after 5 attempts with

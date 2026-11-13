@@ -160,7 +160,13 @@ pub(super) fn used_up(kind: Kind, timeout: Duration, n: usize, last: &Error) -> 
 /// `last` as the error that ends a run whose next wait would pass the
 /// deadline: its kind, diagnostics and failure record kept.
 pub(super) fn cut_short(timeout: Duration, n: usize, last: Error) -> Error {
-    let (kind, text) = (last.kind(), used_up_text(timeout, n, &last));
+    let text = format!(
+        "stopped after {}: the next retry would pass the {} time box; last error: {}",
+        attempts(n),
+        crate::duration::render(timeout),
+        last.text()
+    );
+    let kind = last.kind();
     last.reworded(kind, text)
 }
 
@@ -381,11 +387,9 @@ mod tests {
             cut.sql_diagnostics().and_then(|d| d.sqlstate.as_deref()),
             Some("40001")
         );
-        assert!(
-            cut.text()
-                .starts_with("time box of 5s used up after 1 attempt; "),
-            "{}",
-            cut.text()
+        assert_eq!(
+            cut.text(),
+            "stopped after 1 attempt: the next retry would pass the 5s time box; last error: ERROR: x (SQLSTATE 40001)"
         );
         let unboxed = gave_up(5, Error::connection("connect to \"d\": refused"));
         assert_eq!(unboxed.exit_code(), 11);

@@ -16,7 +16,7 @@ steps:
     timeout: 30
     expect:
       exit: 13
-      stderr: ["^pgmi: attempt 1 failed \\(25006 read-only transaction on a hot standby\\); retrying in", "time box of 3s used up after [23] attempts; last error: .*read-only"]
+      stderr: ["^pgmi: attempt 1 failed \\(25006 read-only transaction on a hot standby\\); retrying in", "(time box of 3s used up after [23] attempts|stopped after [23] attempts: the next retry would pass the 3s time box); last error: .*read-only"]
   - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{standby_port}/postgres?target_session_attrs=read-only", -d, "{db}", --timeout, 30s]
     timeout: 30
     expect:

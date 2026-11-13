@@ -14,10 +14,10 @@ steps:
     timeout: 15
     expect:
       exit: 13
-      stderr: ["^pgmi: attempt 1 failed \\(40001 serialization failure\\); retrying in", "^pgmi: error: time box of 2s used up after 2 attempts; last error: ERROR: .*\\(SQLSTATE 40001\\)"]
+      stderr: ["^pgmi: attempt 1 failed \\(40001 serialization failure\\); retrying in", "^pgmi: error: stopped after 2 attempts: the next retry would pass the 2s time box; last error: ERROR: .*\\(SQLSTATE 40001\\)"]
       stderr_not: ["attempt 2 failed"]
       stderr_within:
-        - {pattern: "^pgmi: error: time box", seconds: 1.9}
+        - {pattern: "^pgmi: error: stopped after", seconds: 1.9}
       json: {exitCode: 13, sqlstate: "40001"}
       stdout: ['"attempts": \[\s*\{[^}]*"sqlstate": "40001"[^}]*\},\s*\{[^}]*"sqlstate": "40001"[^}]*\}\s*\]']
       sql:

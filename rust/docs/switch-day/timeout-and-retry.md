@@ -90,7 +90,7 @@ With no time box the line ends `3 attempts left`.
 |---|---|---|
 | an attempt succeeded | 0 | |
 | a failure that is never retried | its own (11, 13, ...) | the error |
-| the next wait would end after the deadline | the last error's (11, 13, ...) | `time box of 3m used up after N attempts; last error: ...` |
+| the next wait would end after the deadline | the last error's (11, 13, ...) | `stopped after N attempts: the next retry would pass the 3m time box; last error: ...` |
 | the deadline passed while SQL ran | 16; the statement is cancelled on the server and rolled back | the same, once an earlier attempt failed; else `the deploy exceeded --timeout ...` |
 | the deadline passed while connecting | 11 | as above |
 | the connection was lost once the session was open (not retried, or retried until the time box ended) | 13, as Go exits once deploy.sql runs; 11 only when no session ever opened | the error, and the units that committed or whose outcome is unknown |
