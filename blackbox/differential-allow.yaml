@@ -8,6 +8,7 @@ skip:
   cases/terminal/init-wizard.yaml: *wizard
   cases/terminal/init-wizard-connection.yaml: *wizard
   cases/terminal/init-wizard-connection-esc.yaml: *wizard
+  cases/terminal/init-wizard-esc-and-ctrl-c.yaml: *wizard
   cases/terminal/config-replace-unparseable.yaml: *wizard
 
 accept:
