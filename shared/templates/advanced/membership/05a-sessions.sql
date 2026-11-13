@@ -316,12 +316,13 @@ BEGIN
     IF v_login.object_id IS NOT NULL THEN
         v_work := membership.fn_resolve_organization_session(p_organization_session, v_login.object_id);
     END IF;
-    PERFORM set_config('auth.login_session_id', coalesce(v_login.object_id::text, ''), true);
-    PERFORM set_config('auth.principal_id', coalesce(v_login.principal_object_id::text, ''), true);
-    PERFORM set_config('auth.actual_principal_id', '', true);
-    PERFORM set_config('auth.mfa', CASE WHEN v_login.is_mfa THEN 'on' ELSE '' END, true);
-    PERFORM set_config('auth.organization_session_id', coalesce(v_work.object_id::text, ''), true);
-    PERFORM set_config('auth.organization_id', coalesce(v_work.organization_object_id::text, ''), true);
+    PERFORM membership.fn_set_request_inputs(
+        p_principal_id            => v_login.principal_object_id,
+        p_actual_principal_id     => NULL,
+        p_organization_id         => v_work.organization_object_id,
+        p_mfa                     => v_login.is_mfa,
+        p_login_session_id        => v_login.object_id,
+        p_organization_session_id => v_work.object_id);
     PERFORM membership.fn_snapshot_request_context();
 END $$;
 
@@ -343,16 +344,16 @@ $$;
 CREATE OR REPLACE FUNCTION internal.apply_request_log_context(p_context jsonb)
 RETURNS void
 LANGUAGE sql AS $$
-    SELECT set_config('auth.login_session_id', '', true),
-           set_config('auth.organization_session_id', '', true),
-           set_config('auth.principal_id', coalesce(p_context->>'principalId', ''), true),
-           set_config('auth.actual_principal_id', coalesce(p_context->>'actualPrincipalId', ''), true),
-           set_config('auth.organization_id', coalesce(p_context->>'organizationId', ''), true),
-           set_config('auth.mfa', CASE WHEN p_context->'mfa' = 'true'::jsonb THEN 'on' ELSE '' END, true),
-           set_config('auth.ctx', '', true);
+    SELECT membership.fn_set_request_inputs(
+        p_principal_id            => common.try_cast(p_context->>'principalId', NULL::uuid),
+        p_actual_principal_id     => common.try_cast(p_context->>'actualPrincipalId', NULL::uuid),
+        p_organization_id         => common.try_cast(p_context->>'organizationId', NULL::uuid),
+        p_mfa                     => p_context->'mfa' = 'true'::jsonb,
+        p_login_session_id        => NULL,
+        p_organization_session_id => NULL);
 $$;
 
-SELECT pg_temp.kernel_owns(r::regprocedure, false)
+SELECT pg_temp.kernel_owns(r::regprocedure, p_owner_executes => false)
 FROM unnest(ARRAY[
     'membership.fn_start_login_session(uuid, text[])',
     'membership.fn_resolve_login_session(text)',

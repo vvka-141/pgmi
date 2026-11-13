@@ -58,6 +58,9 @@ CREATE POLICY principal_visible ON membership.principal FOR SELECT
                         AND upper_inf(m.valid_during))
            OR (SELECT api.is_platform_operator()));
 
+-- Visible exactly when its principal row is: row-level security applies inside
+-- a policy's subquery, so the EXISTS sees membership.principal through
+-- principal_visible.
 CREATE POLICY user_principal_visible ON membership.user_principal FOR SELECT
     USING (EXISTS (SELECT FROM membership.principal p WHERE p.object_id = user_principal.principal_object_id));
 

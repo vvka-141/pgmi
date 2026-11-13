@@ -24,6 +24,39 @@
 </pgmi-meta>
 */
 
+-- The answer to a refused approval, for both approval routes. A problem not
+-- named here is a 422, never a 201 without a connection.
+CREATE OR REPLACE FUNCTION api.connection_approval_refusal(p_problem text)
+RETURNS api.http_response
+LANGUAGE sql IMMUTABLE AS $$
+    SELECT CASE p_problem
+        WHEN 'membership.connection.login_session_required' THEN
+            api.problem_response(403, 'Forbidden', 'Only a person signed in on the web approves a connection', code => p_problem)
+        WHEN 'membership.connection.pairing_code_unknown' THEN
+            api.problem_response(422, 'Unprocessable Content', 'pairingCode names no client waiting for you; it may have expired',
+                                 code => p_problem)
+        WHEN 'membership.connection.validity_invalid' THEN
+            api.problem_response(422, 'Unprocessable Content', 'validDays must be between 1 and 365', code => p_problem)
+        WHEN 'membership.connection.not_member' THEN
+            api.problem_response(422, 'Unprocessable Content', 'organizationId names no active organization you are a member of',
+                                 code => p_problem)
+        WHEN 'membership.connection.role_unknown' THEN
+            api.problem_response(422, 'Unprocessable Content', 'roleId names no agent role', code => p_problem)
+        WHEN 'membership.connection.role_too_broad' THEN
+            api.problem_response(422, 'Unprocessable Content', 'The agent role grants a permission you do not hold in that organization',
+                                 code => p_problem)
+        WHEN 'membership.connection.agents_disabled' THEN
+            api.problem_response(409, 'Conflict', 'The organization''s owner has switched its agents off', code => p_problem)
+        WHEN 'membership.connection.paused_by_manager' THEN
+            api.problem_response(409, 'Conflict', 'An organization manager paused one of your agents there; no new connection until a manager lifts it',
+                                 code => p_problem)
+        WHEN 'membership.connection.refused' THEN
+            api.problem_response(409, 'Conflict', 'The membership changed meanwhile; retry', code => p_problem)
+        ELSE
+            api.problem_response(422, 'Unprocessable Content', 'The connection cannot be approved', code => p_problem)
+    END;
+$$;
+
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
         'id', 'e1000004-0001-4000-8000-000000000001',
@@ -34,6 +67,7 @@ SELECT api.create_or_replace_rest_handler(
         'access', 'authenticated',
         'successStatus', 201,
         'locationTemplate', '/connections/{connectionId}',
+        -- The answer carries the connection's handle; the exchange log keeps answers.
         'autoLog', false,
         'inputSchema', jsonb_build_object(
             'type', 'object',
@@ -68,36 +102,14 @@ BEGIN
     SELECT * INTO v_approved FROM membership.fn_approve_connection(
         common.try_cast(v_b->>'organizationId', NULL::uuid), v_b->>'roleId', v_b->>'clientName',
         coalesce(common.try_cast(v_b->>'validDays', NULL::int), 90));
-    CASE v_approved.problem
-        WHEN 'membership.connection.login_session_required' THEN
-            RETURN api.problem_response(403, 'Forbidden', 'Only a person signed in on the web approves a connection',
-                                        code => v_approved.problem);
-        WHEN 'membership.connection.client_name_invalid' THEN
-            RETURN api.problem_response(422, 'Unprocessable Content', 'clientName must be 1 to 100 characters without surrounding spaces',
-                                        code => v_approved.problem);
-        WHEN 'membership.connection.validity_invalid' THEN
-            RETURN api.problem_response(422, 'Unprocessable Content', 'validDays must be between 1 and 365',
-                                        code => v_approved.problem);
-        WHEN 'membership.connection.not_member' THEN
-            RETURN api.problem_response(422, 'Unprocessable Content', 'organizationId names no active organization you are a member of',
-                                        code => v_approved.problem);
-        WHEN 'membership.connection.role_unknown' THEN
-            RETURN api.problem_response(422, 'Unprocessable Content', 'roleId names no agent role',
-                                        code => v_approved.problem);
-        WHEN 'membership.connection.role_too_broad' THEN
-            RETURN api.problem_response(422, 'Unprocessable Content', 'The agent role grants a permission you do not hold in that organization',
-                                        code => v_approved.problem);
-        WHEN 'membership.connection.agents_disabled' THEN
-            RETURN api.problem_response(409, 'Conflict', 'The organization''s owner has switched its agents off',
-                                        code => v_approved.problem);
-        WHEN 'membership.connection.paused_by_manager' THEN
-            RETURN api.problem_response(409, 'Conflict', 'An organization manager paused one of your agents there; no new connection until a manager lifts it',
-                                        code => v_approved.problem);
-        WHEN 'membership.connection.refused' THEN
-            RETURN api.problem_response(409, 'Conflict', 'The membership changed meanwhile; retry', code => v_approved.problem);
-        ELSE
-            NULL;
-    END CASE;
+    -- clientName is this route's own input; the pairing route names its
+    -- client from the OAuth client id, so there it is the generic refusal.
+    IF v_approved.problem = 'membership.connection.client_name_invalid' THEN
+        RETURN api.problem_response(422, 'Unprocessable Content', 'clientName must be 1 to 100 characters without surrounding spaces',
+                                    code => v_approved.problem);
+    ELSIF v_approved.problem IS NOT NULL THEN
+        RETURN api.connection_approval_refusal(v_approved.problem);
+    END IF;
 
     RETURN api.json_response(201, jsonb_build_object(
         'connectionId', v_approved.connection_object_id,
@@ -153,39 +165,9 @@ BEGIN
 
     SELECT * INTO v_approved FROM membership.fn_approve_connection_by_code(
         v_b->>'pairingCode', v_org, v_b->>'roleId', coalesce(common.try_cast(v_b->>'validDays', NULL::int), 90));
-    CASE v_approved.problem
-        WHEN 'membership.connection.login_session_required' THEN
-            RETURN api.problem_response(403, 'Forbidden', 'Only a person signed in on the web approves a connection',
-                                        code => v_approved.problem);
-        WHEN 'membership.connection.pairing_code_unknown' THEN
-            RETURN api.problem_response(422, 'Unprocessable Content', 'pairingCode names no client waiting for you; it may have expired',
-                                        code => v_approved.problem);
-        WHEN 'membership.connection.validity_invalid' THEN
-            RETURN api.problem_response(422, 'Unprocessable Content', 'validDays must be between 1 and 365',
-                                        code => v_approved.problem);
-        WHEN 'membership.connection.not_member' THEN
-            RETURN api.problem_response(422, 'Unprocessable Content', 'organizationId names no active organization you are a member of',
-                                        code => v_approved.problem);
-        WHEN 'membership.connection.role_unknown' THEN
-            RETURN api.problem_response(422, 'Unprocessable Content', 'roleId names no agent role',
-                                        code => v_approved.problem);
-        WHEN 'membership.connection.role_too_broad' THEN
-            RETURN api.problem_response(422, 'Unprocessable Content', 'The agent role grants a permission you do not hold in that organization',
-                                        code => v_approved.problem);
-        WHEN 'membership.connection.agents_disabled' THEN
-            RETURN api.problem_response(409, 'Conflict', 'The organization''s owner has switched its agents off',
-                                        code => v_approved.problem);
-        WHEN 'membership.connection.paused_by_manager' THEN
-            RETURN api.problem_response(409, 'Conflict', 'An organization manager paused one of your agents there; no new connection until a manager lifts it',
-                                        code => v_approved.problem);
-        WHEN 'membership.connection.refused' THEN
-            RETURN api.problem_response(409, 'Conflict', 'The membership changed meanwhile; retry', code => v_approved.problem);
-        ELSE
-            IF v_approved.problem IS NOT NULL THEN
-                RETURN api.problem_response(422, 'Unprocessable Content', 'The connection cannot be approved',
-                                            code => v_approved.problem);
-            END IF;
-    END CASE;
+    IF v_approved.problem IS NOT NULL THEN
+        RETURN api.connection_approval_refusal(v_approved.problem);
+    END IF;
 
     RETURN api.json_response(201, jsonb_build_object(
         'connectionId', v_approved.connection_object_id,
@@ -198,9 +180,13 @@ END;
     $body$
 );
 
+-- One block for the rest of the file: the list, get, pause, resume and
+-- revoke routes answer the same connection object (v_connection), and the
+-- six pause/resume/revoke routes and the two agents switches are each
+-- registered by one loop.
 DO $register$
 DECLARE
-    v_connection jsonb := jsonb_build_object(
+    v_connection      jsonb := jsonb_build_object(
         'type', 'object',
         'properties', jsonb_build_object(
             'connectionId', jsonb_build_object('type', 'string', 'format', 'uuid'),
@@ -218,7 +204,8 @@ DECLARE
             'pausedAt', jsonb_build_object('type', 'string', 'format', 'date-time')),
         'required', jsonb_build_array('connectionId', 'organizationId', 'principalId', 'clientName', 'roleId', 'status',
                                       'approvedAt', 'expiresAt'));
-    v_route record;
+    v_connection_page jsonb := api.page_output_schema(v_connection);
+    v_route           record;
 BEGIN
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
@@ -229,7 +216,7 @@ BEGIN
             'description', 'The signed-in person''s connections in every organization, newest first, without their handles',
             'access', 'authenticated',
             'querySchema', api.page_query_schema(),
-            'outputSchema', api.page_output_schema(v_connection)
+            'outputSchema', v_connection_page
         ),
         $body$
 DECLARE
@@ -286,11 +273,10 @@ END;
             'description', 'Every connection into the organization, newest first, and whether its agents are switched on',
             'permissions', jsonb_build_array('members.manage'),
             'querySchema', api.page_query_schema(),
-            'outputSchema', api.page_output_schema(v_connection)
+            'outputSchema', v_connection_page
                 || jsonb_build_object(
-                    'properties', (api.page_output_schema(v_connection)->'properties')
-                                  || jsonb_build_object('agentsEnabled', jsonb_build_object('type', 'boolean')),
-                    'required', (api.page_output_schema(v_connection)->'required') || '["agentsEnabled"]'::jsonb)
+                    'properties', (v_connection_page->'properties') || jsonb_build_object('agentsEnabled', jsonb_build_object('type', 'boolean')),
+                    'required', (v_connection_page->'required') || '["agentsEnabled"]'::jsonb)
         ),
         $body$
 DECLARE
@@ -344,6 +330,8 @@ END;
                                'name', v_route.name, 'description', v_route.description, 'outputSchema', v_connection)
             || CASE WHEN v_route.permission IS NULL THEN jsonb_build_object('access', 'authenticated')
                     ELSE jsonb_build_object('permissions', jsonb_build_array(v_route.permission)) END,
+            -- %1$s: the route's scope, a predicate on c naming which connections
+            -- it may touch; %2$s: the operation, pause | resume | revoke.
             format($body$
 DECLARE
     v_id      uuid := ((request).path_params->>'connectionId')::uuid;
@@ -398,6 +386,7 @@ END;
                         'organizationId', jsonb_build_object('type', 'string', 'format', 'uuid'),
                         'agentsEnabled', jsonb_build_object('type', 'boolean')),
                     'required', jsonb_build_array('organizationId', 'agentsEnabled'))),
+            -- %L: true to switch the agents on, false off.
             format($body$
 DECLARE
     v_org     uuid := api.current_organization_id();

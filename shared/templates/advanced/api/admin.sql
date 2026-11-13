@@ -17,6 +17,9 @@
 </pgmi-meta>
 */
 
+-- ============================================================================
+-- ANALYTICS - handler, route and exchange views as JSON
+-- ============================================================================
 
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
@@ -346,6 +349,9 @@ END;
     $body$
 );
 
+-- ============================================================================
+-- REPLAY - one logged exchange: read it, or run it again and roll back
+-- ============================================================================
 
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
@@ -390,6 +396,54 @@ END;
     $body$
 );
 
+-- Runs the logged request again as its caller and rolls it back
+-- (api.replay_exchange): what would it answer now?
+
+SELECT api.create_or_replace_rest_handler(
+    jsonb_build_object(
+        'id', 'a7f02000-0005-4000-8000-00000000000a',
+        'path', '/admin/exchanges/{exchangeId:uuid}/replay',
+        'httpMethod', '^POST$',
+        'name', 'admin_replay_exchange',
+        'description', 'Replay a logged REST, RPC or MCP exchange in its logged context, rolled back; answers the replayed response',
+        'permissions', jsonb_build_array('platform.operate'),
+        'outputSchema', jsonb_build_object(
+            'type', 'object',
+            'properties', jsonb_build_object(
+                'exchangeId', jsonb_build_object('type', 'string', 'format', 'uuid'),
+                'status', jsonb_build_object('type', 'integer'),
+                'headers', jsonb_build_object('type', 'object'),
+                'body', jsonb_build_object('type', 'string')
+            ),
+            'required', jsonb_build_array('exchangeId', 'status', 'headers')
+        )
+    ),
+    $body$
+DECLARE
+    v_exchange_id uuid := ((request).path_params->>'exchangeId')::uuid;
+    v_response api.http_response;
+BEGIN
+    IF NOT EXISTS (SELECT FROM api.rest_exchange WHERE object_id = v_exchange_id
+                   UNION ALL
+                   SELECT FROM api.rpc_exchange WHERE object_id = v_exchange_id
+                   UNION ALL
+                   SELECT FROM api.mcp_exchange WHERE object_id = v_exchange_id) THEN
+        RETURN api.problem_response(404, 'Not Found', format('No exchange %s', v_exchange_id), code => 'api.exchange.not_found');
+    END IF;
+
+    v_response := api.replay_exchange(v_exchange_id);
+    RETURN api.json_response(200, jsonb_strip_nulls(jsonb_build_object(
+        'exchangeId', v_exchange_id,
+        'status', (v_response).status_code,
+        'headers', extensions.hstore_to_jsonb((v_response).headers),
+        'body', convert_from((v_response).content, 'UTF8'))));
+END;
+    $body$
+);
+
+-- ============================================================================
+-- MAINTENANCE - purge the exchange log
+-- ============================================================================
 
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
@@ -441,54 +495,34 @@ END;
     $body$
 );
 
--- Runs the logged request again as its caller and rolls it back
--- (api.replay_exchange): what would it answer now?
-
-SELECT api.create_or_replace_rest_handler(
-    jsonb_build_object(
-        'id', 'a7f02000-0005-4000-8000-00000000000a',
-        'path', '/admin/exchanges/{exchangeId:uuid}/replay',
-        'httpMethod', '^POST$',
-        'name', 'admin_replay_exchange',
-        'description', 'Replay a logged REST, RPC or MCP exchange in its logged context, rolled back; answers the replayed response',
-        'permissions', jsonb_build_array('platform.operate'),
-        'outputSchema', jsonb_build_object(
-            'type', 'object',
-            'properties', jsonb_build_object(
-                'exchangeId', jsonb_build_object('type', 'string', 'format', 'uuid'),
-                'status', jsonb_build_object('type', 'integer'),
-                'headers', jsonb_build_object('type', 'object'),
-                'body', jsonb_build_object('type', 'string')
-            ),
-            'required', jsonb_build_array('exchangeId', 'status', 'headers')
-        )
-    ),
-    $body$
-DECLARE
-    v_exchange_id uuid := ((request).path_params->>'exchangeId')::uuid;
-    v_response api.http_response;
-BEGIN
-    IF NOT EXISTS (SELECT FROM api.rest_exchange WHERE object_id = v_exchange_id
-                   UNION ALL
-                   SELECT FROM api.rpc_exchange WHERE object_id = v_exchange_id
-                   UNION ALL
-                   SELECT FROM api.mcp_exchange WHERE object_id = v_exchange_id) THEN
-        RETURN api.problem_response(404, 'Not Found', format('No exchange %s', v_exchange_id), code => 'api.exchange.not_found');
-    END IF;
-
-    v_response := api.replay_exchange(v_exchange_id);
-    RETURN api.json_response(200, jsonb_strip_nulls(jsonb_build_object(
-        'exchangeId', v_exchange_id,
-        'status', (v_response).status_code,
-        'headers', extensions.hstore_to_jsonb((v_response).headers),
-        'body', convert_from((v_response).content, 'UTF8'))));
-END;
-    $body$
-);
+-- ============================================================================
+-- ORGANIZATIONS - the invitation-only way an organization is created
+-- ============================================================================
 
 -- The default, invitation-only path: an operator creates a pending
 -- organization and invites its owner; it becomes active when that person
 -- signs in with the verified address and accepts.
+
+-- Why an organization that passed the probe was not created: what the probe
+-- says now, or, when it still finds nothing, the slug another request took
+-- between the probe and the insert. Shared with api/dev/self-serve-organizations.sql.
+CREATE OR REPLACE FUNCTION api.organization_lost_race_problem(p_name text, p_slug text)
+RETURNS text
+LANGUAGE sql STABLE AS $$
+    SELECT coalesce(membership.fn_organization_problem(p_name, p_slug), 'membership.organization.slug_taken');
+$$;
+
+-- The 422 for an organization's name or slug problem, naming the field.
+CREATE OR REPLACE FUNCTION api.organization_refusal(p_problem text)
+RETURNS api.http_response
+LANGUAGE sql IMMUTABLE AS $$
+    SELECT api.problem_response(422, 'Unprocessable Content', 'The name or slug is not valid', code => p_problem,
+        invalid_params => jsonb_build_array(CASE p_problem
+            WHEN 'membership.organization.name_invalid' THEN api.invalid_param('name', 'invalid')
+            WHEN 'membership.organization.slug_taken' THEN api.invalid_param('slug', 'duplicate')
+            WHEN 'membership.organization.slug_reserved' THEN api.invalid_param('slug', 'reserved')
+            ELSE api.invalid_param('slug', 'invalid') END));
+$$;
 
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(
@@ -538,17 +572,11 @@ BEGIN
     IF v_problem IS NULL THEN
         v_org := membership.fn_create_organization(v_name, v_slug, v_email);
         IF v_org.object_id IS NULL THEN
-            -- Another request took the slug between the probe and the insert.
-            v_problem := coalesce(membership.fn_organization_problem(v_name, v_slug), 'membership.organization.slug_taken');
+            v_problem := api.organization_lost_race_problem(v_name, v_slug);
         END IF;
     END IF;
     IF v_problem IS NOT NULL THEN
-        RETURN api.problem_response(422, 'Unprocessable Content', 'The name or slug is not valid', code => v_problem,
-            invalid_params => jsonb_build_array(CASE v_problem
-                WHEN 'membership.organization.name_invalid' THEN api.invalid_param('name', 'invalid')
-                WHEN 'membership.organization.slug_taken' THEN api.invalid_param('slug', 'duplicate')
-                WHEN 'membership.organization.slug_reserved' THEN api.invalid_param('slug', 'reserved')
-                ELSE api.invalid_param('slug', 'invalid') END));
+        RETURN api.organization_refusal(v_problem);
     END IF;
     RETURN api.json_response(201, jsonb_build_object(
         'id', v_org.object_id, 'name', v_org.name, 'slug', v_org.slug, 'status', v_org.status));

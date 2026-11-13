@@ -156,7 +156,9 @@ END $$;
 --     only unverified is no one's: the login gets a new person of its own;
 --   * a new person without a usable email.
 -- A known login refreshes the email, its verification and the display name.
--- Creates no organization and no membership.
+-- Creates no organization and no membership. It stays one routine because
+-- both the refresh and the first sign-in must run under the advisory locks
+-- it takes first.
 CREATE OR REPLACE FUNCTION membership.fn_provision_login(
     p_issuer_id         text,
     p_subject           text,
@@ -194,6 +196,10 @@ BEGIN
     WHERE ei.issuer_id = p_issuer_id AND ei.subject = p_subject;
 
     IF v_principal IS NOT NULL THEN
+        -- A known login's email follows the provider, verified when this
+        -- sign-in verified it. Written only when it changes, and never when
+        -- the result would be verified while another person holds the address
+        -- verified: the address stays theirs (uq_user_principal_verified_email).
         IF membership.fn_is_well_formed_email(v_email) THEN
             UPDATE membership.user_principal u
             SET email = v_email,
@@ -798,7 +804,9 @@ $$;
 
 -- Invites an address into an organization with an intended role. A pending
 -- invitation to the same address is refreshed instead of duplicated, with the
--- newest role; created says which happened.
+-- newest role; created says which happened. Dropped first: it once returned
+-- membership.invitation, and CREATE OR REPLACE cannot change a result type
+-- on a database deployed before.
 DROP FUNCTION IF EXISTS membership.fn_invite(uuid, text, text);
 
 CREATE FUNCTION membership.fn_invite(
@@ -932,7 +940,7 @@ BEGIN
     RETURN v_inv;
 END $$;
 
-SELECT pg_temp.kernel_owns(r::regprocedure, false)
+SELECT pg_temp.kernel_owns(r::regprocedure, p_owner_executes => false)
 FROM unnest(ARRAY[
     'membership.fn_record_audit_event(text, uuid, uuid, jsonb)',
     'membership.fn_create_user_principal(text, text, boolean)',

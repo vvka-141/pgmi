@@ -17,6 +17,8 @@
 </pgmi-meta>
 */
 
+-- One block: both routes answer the same proposal object (v_proposal), and
+-- confirm and reject are registered by one loop.
 DO $register$
 DECLARE
     v_proposal jsonb := jsonb_build_object(

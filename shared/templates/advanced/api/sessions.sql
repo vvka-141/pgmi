@@ -24,6 +24,7 @@ SELECT api.create_or_replace_rest_handler(
         'name', 'open_organization_session',
         'description', 'Open an organization session for this tab in an organization the signed-in person is a member of',
         'access', 'authenticated',
+        -- The answer carries a live session handle; the exchange log keeps answers.
         'autoLog', false,
         'inputSchema', jsonb_build_object(
             'type', 'object',

@@ -30,6 +30,13 @@
 </pgmi-meta>
 */
 
+-- ============================================================================
+-- TRUST GATE - which connections' auth.* settings count, and the permission hook
+-- ============================================================================
+
+-- The framework's permission hook (lib/api/02a-access-control-functions.sql),
+-- replaced: a permission exists when data/authorization.json lists it, and
+-- this says whether it is a platform one.
 CREATE OR REPLACE FUNCTION internal.is_platform_permission(p_permission_id text)
 RETURNS boolean
 LANGUAGE sql STABLE
@@ -60,18 +67,59 @@ END $$;
 COMMENT ON FUNCTION membership.fn_is_trusted_context() IS
     'The trust gate: whether this connection''s auth.* settings count. True only for a login that is a member of the api role.';
 
--- The key of the inputs a snapshot was taken from; NULL from an untrusted
--- connection, so no reader there ever returns a snapshot it set itself.
-CREATE OR REPLACE FUNCTION membership.fn_request_context_key()
-RETURNS text LANGUAGE sql STABLE AS $$
-    SELECT CASE WHEN membership.fn_is_trusted_context() THEN concat_ws('|', 'v2',
-        coalesce(current_setting('auth.principal_id', true), ''),
-        coalesce(current_setting('auth.actual_principal_id', true), ''),
-        coalesce(current_setting('auth.organization_id', true), ''),
-        coalesce(current_setting('auth.mfa', true), ''),
-        coalesce(current_setting('auth.login_session_id', true), ''),
-        coalesce(current_setting('auth.organization_session_id', true), '')) END;
+-- ============================================================================
+-- INPUTS - the auth.* settings a request is resolved from
+-- ============================================================================
+
+-- The request's inputs, in key order. fn_set_request_inputs writes every one
+-- and fn_request_context_key reads every one, so an input added here is
+-- cleared by each request and keys the snapshot.
+CREATE OR REPLACE FUNCTION membership.fn_request_input_settings()
+RETURNS text[] LANGUAGE sql IMMUTABLE AS $$
+    SELECT '{auth.principal_id,auth.actual_principal_id,auth.organization_id,auth.mfa,auth.login_session_id,auth.organization_session_id}'::text[];
 $$;
+
+-- States a request's inputs, all of them, and drops the snapshot. An input
+-- with no argument here is cleared.
+CREATE OR REPLACE FUNCTION membership.fn_set_request_inputs(
+    p_principal_id            uuid,
+    p_actual_principal_id     uuid,
+    p_organization_id         uuid,
+    p_mfa                     boolean,
+    p_login_session_id        uuid,
+    p_organization_session_id uuid)
+RETURNS void
+LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM set_config(i.setting, coalesce(i.value, ''), true)
+    FROM unnest(membership.fn_request_input_settings(),
+                ARRAY[p_principal_id::text, p_actual_principal_id::text, p_organization_id::text,
+                      CASE WHEN p_mfa THEN 'on' END, p_login_session_id::text, p_organization_session_id::text])
+         AS i(setting, value)
+    WHERE i.setting IS NOT NULL;
+    PERFORM set_config('auth.ctx', '', true);
+END $$;
+
+-- The key of the inputs a snapshot was taken from; NULL from an untrusted
+-- connection, so no reader there ever returns a snapshot it set itself. The
+-- v2 names the snapshot's layout: bumped when the inputs or the ctx_* settings
+-- change, so a snapshot the previous functions took earlier in the same
+-- transaction (the deploy's own) never matches. Every reader calls it, so the
+-- list is spelled into its body at deploy: one current_setting per input.
+DO $$
+BEGIN
+    EXECUTE format($fn$
+        CREATE OR REPLACE FUNCTION membership.fn_request_context_key()
+        RETURNS text LANGUAGE sql STABLE AS $body$
+            SELECT CASE WHEN membership.fn_is_trusted_context() THEN concat_ws('|', 'v2', %s) END;
+        $body$
+    $fn$, (SELECT string_agg(format('coalesce(current_setting(%L, true), %L)', s.setting, ''), ', ' ORDER BY s.n)
+           FROM unnest(membership.fn_request_input_settings()) WITH ORDINALITY AS s(setting, n)));
+END $$;
+
+-- ============================================================================
+-- RESOLVER - who acts, in which organization, holding what
+-- ============================================================================
 
 CREATE OR REPLACE FUNCTION membership.fn_is_platform_operator(p_principal_object_id uuid)
 RETURNS boolean
@@ -85,9 +133,39 @@ AS $$
                      AND upper_inf(po.valid_during));
 $$;
 
+-- The one definition of an organization permission held now: the request
+-- context reads it as the kernel (fn_effective_permissions), the access
+-- explorer (10-access-explorer.sql) as the request. Whether the principal is
+-- disabled is each reader's check: the resolver refused a disabled one before
+-- it asks, so the hot path pays no join for it, and the explorer views
+-- filter them.
+SELECT core.ensure_view('membership.vw_effective_permission', $view$
+CREATE OR REPLACE VIEW membership.vw_effective_permission
+WITH (security_invoker = true) AS
+SELECT m.organization_object_id,
+       m.principal_object_id,
+       m.object_id AS membership_object_id,
+       ra.role_id,
+       rp.permission_id
+FROM membership.organization_membership m
+JOIN membership.organization o ON o.object_id = m.organization_object_id AND o.status = 'active'
+JOIN membership.role_assignment ra ON ra.membership_object_id = m.object_id AND upper_inf(ra.valid_during)
+JOIN membership.role_permission rp ON rp.role_id = ra.role_id
+WHERE upper_inf(m.valid_during)
+$view$);
+
+COMMENT ON VIEW membership.vw_effective_permission IS
+    'Each organization permission a principal holds now, and the role it comes through: a current role of a current membership in an active organization. A disabled principal is listed; the reader filters it.';
+
+DO $$
+BEGIN
+    EXECUTE format('GRANT SELECT ON membership.vw_effective_permission TO %I',
+                   pg_temp.deployment_setting('database_kernel_role'));
+END $$;
+
 -- The permissions a principal holds in an organization: its current roles'
--- there, in an active organization, plus every platform permission while it
--- is a platform operator in a session that satisfied MFA.
+-- there, plus every platform permission while it is a platform operator in a
+-- session that satisfied MFA. The caller has refused a disabled principal.
 CREATE OR REPLACE FUNCTION membership.fn_effective_permissions(
     p_principal_object_id    uuid,
     p_organization_object_id uuid,
@@ -99,14 +177,10 @@ SET search_path = membership, common, pg_temp
 AS $$
     SELECT coalesce(array_agg(DISTINCT s.permission_id ORDER BY s.permission_id), '{}')
     FROM (
-        SELECT rp.permission_id
-        FROM membership.organization_membership m
-        JOIN membership.organization o ON o.object_id = m.organization_object_id AND o.status = 'active'
-        JOIN membership.role_assignment ra ON ra.membership_object_id = m.object_id AND upper_inf(ra.valid_during)
-        JOIN membership.role_permission rp ON rp.role_id = ra.role_id
-        WHERE m.principal_object_id = p_principal_object_id
-          AND m.organization_object_id = p_organization_object_id
-          AND upper_inf(m.valid_during)
+        SELECT e.permission_id
+        FROM membership.vw_effective_permission e
+        WHERE e.principal_object_id = p_principal_object_id
+          AND e.organization_object_id = p_organization_object_id
         UNION
         SELECT p.id
         FROM membership.permission p
@@ -193,6 +267,10 @@ BEGIN
     is_platform_operator := v_mfa AND membership.fn_is_platform_operator(principal_object_id);
     permissions := membership.fn_effective_permissions(principal_object_id, organization_object_id, v_mfa);
 END $$;
+
+-- ============================================================================
+-- SNAPSHOT - resolve once per request, keyed by its inputs
+-- ============================================================================
 
 -- Resolves the context once and keeps it, with the key of its inputs, in
 -- transaction-local settings. The readers return it while the key matches and
@@ -298,8 +376,8 @@ BEGIN
                    pg_temp.deployment_setting('database_kernel_role'));
 END $$;
 
-SELECT pg_temp.kernel_owns('membership.fn_is_platform_operator(uuid)', false);
-SELECT pg_temp.kernel_owns('membership.fn_effective_permissions(uuid, uuid, boolean)', false);
-SELECT pg_temp.kernel_owns('membership.fn_agent_permissions(membership.connection)', false);
+SELECT pg_temp.kernel_owns('membership.fn_is_platform_operator(uuid)', p_owner_executes => false);
+SELECT pg_temp.kernel_owns('membership.fn_effective_permissions(uuid, uuid, boolean)', p_owner_executes => false);
+SELECT pg_temp.kernel_owns('membership.fn_agent_permissions(membership.connection)', p_owner_executes => false);
 SELECT pg_temp.kernel_owns('membership.fn_resolve_request_context()');
-SELECT pg_temp.kernel_owns('membership.fn_snapshot_request_context()', false);
+SELECT pg_temp.kernel_owns('membership.fn_snapshot_request_context()', p_owner_executes => false);

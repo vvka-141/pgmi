@@ -58,17 +58,11 @@ BEGIN
     IF v_problem IS NULL THEN
         v_org := membership.fn_create_organization_with_owner(v_name, v_slug, api.current_principal_id());
         IF v_org.object_id IS NULL THEN
-            -- Another request took the slug between the probe and the insert.
-            v_problem := coalesce(membership.fn_organization_problem(v_name, v_slug), 'membership.organization.slug_taken');
+            v_problem := api.organization_lost_race_problem(v_name, v_slug);
         END IF;
     END IF;
     IF v_problem IS NOT NULL THEN
-        RETURN api.problem_response(422, 'Unprocessable Content', 'The name or slug is not valid', code => v_problem,
-            invalid_params => jsonb_build_array(CASE v_problem
-                WHEN 'membership.organization.name_invalid' THEN api.invalid_param('name', 'invalid')
-                WHEN 'membership.organization.slug_taken' THEN api.invalid_param('slug', 'duplicate')
-                WHEN 'membership.organization.slug_reserved' THEN api.invalid_param('slug', 'reserved')
-                ELSE api.invalid_param('slug', 'invalid') END));
+        RETURN api.organization_refusal(v_problem);
     END IF;
     RETURN api.json_response(201, jsonb_build_object(
         'id', v_org.object_id, 'name', v_org.name, 'slug', v_org.slug, 'status', v_org.status));

@@ -19,7 +19,13 @@
 </pgmi-meta>
 */
 
--- Grant patterns: '*' is every organization permission, 'project.*' a prefix.
+-- A role's grant pattern as a LIKE pattern: '*' is every organization
+-- permission, 'project.*' a prefix; '_' is literal.
+CREATE OR REPLACE FUNCTION pg_temp.grant_pattern_like(p_pattern text)
+RETURNS text LANGUAGE sql IMMUTABLE AS $$
+    SELECT replace(replace(p_pattern, '_', '\_'), '*', '%');
+$$;
+
 -- Platform permissions are never granted to a role. A permission the file no
 -- longer lists loses its handler declarations first; a handler that still
 -- declares it fails its registration later in the deploy.
@@ -47,7 +53,7 @@ BEGIN
     FROM jsonb_array_elements(p_catalogue->'roles') e
     CROSS JOIN LATERAL jsonb_array_elements_text(e->'grants') pattern
     WHERE NOT EXISTS (SELECT FROM jsonb_to_recordset(v_permissions) p(id text, is_platform boolean)
-                      WHERE NOT p.is_platform AND p.id LIKE replace(replace(pattern, '_', '\_'), '*', '%'));
+                      WHERE NOT p.is_platform AND p.id LIKE pg_temp.grant_pattern_like(pattern));
     IF v_bad IS NOT NULL THEN
         RAISE EXCEPTION 'data/authorization.json: a role grant matches no organization permission: %', v_bad;
     END IF;
@@ -57,7 +63,7 @@ BEGIN
     FROM jsonb_array_elements(p_catalogue->'roles') e
     CROSS JOIN LATERAL jsonb_array_elements_text(e->'grants') pattern
     JOIN jsonb_to_recordset(v_permissions) p(id text, is_platform boolean)
-      ON NOT p.is_platform AND p.id LIKE replace(replace(pattern, '_', '\_'), '*', '%');
+      ON NOT p.is_platform AND p.id LIKE pg_temp.grant_pattern_like(pattern);
 
     SELECT string_agg(a.permission_id, ', ' ORDER BY a.permission_id) INTO v_bad
     FROM jsonb_to_recordset(v_grants) a(role_id text, permission_id text)
@@ -125,6 +131,51 @@ BEGIN
     END;
 END $seed$;
 
+-- The person one platform_operators entry names: the one behind its login
+-- when that login exists, taking the entry's address verified; otherwise the
+-- person holding the address verified, or a new one, with the entry's login
+-- linked when it names one. Refuses an entry it cannot honour. Runs as the
+-- kernel role, inside pg_temp.sync_platform_operators.
+CREATE OR REPLACE FUNCTION pg_temp.platform_operator_principal(p_entry jsonb)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE
+    v_email     text;
+    v_principal uuid;
+BEGIN
+    v_email := membership.fn_normalize_email(p_entry->>'email');
+    IF NOT coalesce(membership.fn_is_well_formed_email(v_email), false)
+       OR ((p_entry->>'issuer') IS NULL) IS DISTINCT FROM ((p_entry->>'subject') IS NULL) THEN
+        RAISE EXCEPTION 'platform_operators: each entry needs a valid email, and issuer with subject or neither: %', p_entry
+            USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+    SELECT ei.user_principal_object_id INTO v_principal
+    FROM membership.external_identity ei
+    WHERE ei.issuer_id = p_entry->>'issuer' AND ei.subject = p_entry->>'subject';
+    IF v_principal IS NOT NULL THEN
+        PERFORM membership.fn_provision_login(p_entry->>'issuer', p_entry->>'subject', v_email, NULL, true);
+        IF NOT EXISTS (SELECT FROM membership.user_principal u
+                       WHERE u.principal_object_id = v_principal AND u.email = v_email AND u.is_email_verified) THEN
+            RAISE EXCEPTION 'platform operator %: another person holds this address verified, so the login %|% cannot take it',
+                v_email, p_entry->>'issuer', p_entry->>'subject'
+                USING ERRCODE = 'invalid_parameter_value';
+        END IF;
+    ELSE
+        SELECT u.principal_object_id INTO v_principal
+        FROM membership.user_principal u WHERE u.email = v_email AND u.is_email_verified;
+        IF v_principal IS NULL THEN
+            v_principal := (membership.fn_create_user_principal(v_email, p_entry->>'displayName', true)).principal_object_id;
+        END IF;
+        IF p_entry->>'issuer' IS NOT NULL
+           AND (membership.fn_provision_login(p_entry->>'issuer', p_entry->>'subject', v_email, NULL, true)).principal_object_id
+               IS DISTINCT FROM v_principal THEN
+            RAISE EXCEPTION 'platform operator %: the login %|% cannot be linked (unknown issuer or malformed subject)',
+                v_email, p_entry->>'issuer', p_entry->>'subject'
+                USING ERRCODE = 'invalid_parameter_value';
+        END IF;
+    END IF;
+    RETURN v_principal;
+END $$;
+
 -- [{"email": "...", "displayName": "...", "issuer": "...", "subject": "..."}],
 -- issuer and subject together or neither. The deploy parameter vouches for the
 -- address, so a new operator's email counts as verified. A pg_temp function:
@@ -137,7 +188,6 @@ DECLARE
     v_caller    text := current_user;
     v_at        timestamptz := clock_timestamp();
     v_op        jsonb;
-    v_email     text;
     v_principal uuid;
     v_listed    uuid[] := '{}';
     v_ended     uuid;
@@ -149,37 +199,7 @@ BEGIN
     EXECUTE format('SET ROLE %I', pg_temp.deployment_setting('database_kernel_role'));
 
     FOR v_op IN SELECT * FROM jsonb_array_elements(p_operators) LOOP
-        v_email := membership.fn_normalize_email(v_op->>'email');
-        IF NOT coalesce(membership.fn_is_well_formed_email(v_email), false)
-           OR ((v_op->>'issuer') IS NULL) IS DISTINCT FROM ((v_op->>'subject') IS NULL) THEN
-            RAISE EXCEPTION 'platform_operators: each entry needs a valid email, and issuer with subject or neither: %', v_op
-                USING ERRCODE = 'invalid_parameter_value';
-        END IF;
-        SELECT ei.user_principal_object_id INTO v_principal
-        FROM membership.external_identity ei
-        WHERE ei.issuer_id = v_op->>'issuer' AND ei.subject = v_op->>'subject';
-        IF v_principal IS NOT NULL THEN
-            PERFORM membership.fn_provision_login(v_op->>'issuer', v_op->>'subject', v_email, NULL, true);
-            IF NOT EXISTS (SELECT FROM membership.user_principal u
-                           WHERE u.principal_object_id = v_principal AND u.email = v_email AND u.is_email_verified) THEN
-                RAISE EXCEPTION 'platform operator %: another person holds this address verified, so the login %|% cannot take it',
-                    v_email, v_op->>'issuer', v_op->>'subject'
-                    USING ERRCODE = 'invalid_parameter_value';
-            END IF;
-        ELSE
-            SELECT u.principal_object_id INTO v_principal
-            FROM membership.user_principal u WHERE u.email = v_email AND u.is_email_verified;
-            IF v_principal IS NULL THEN
-                v_principal := (membership.fn_create_user_principal(v_email, v_op->>'displayName', true)).principal_object_id;
-            END IF;
-            IF v_op->>'issuer' IS NOT NULL
-               AND (membership.fn_provision_login(v_op->>'issuer', v_op->>'subject', v_email, NULL, true)).principal_object_id
-                   IS DISTINCT FROM v_principal THEN
-                RAISE EXCEPTION 'platform operator %: the login %|% cannot be linked (unknown issuer or malformed subject)',
-                    v_email, v_op->>'issuer', v_op->>'subject'
-                    USING ERRCODE = 'invalid_parameter_value';
-            END IF;
-        END IF;
+        v_principal := pg_temp.platform_operator_principal(v_op);
         v_listed := v_listed || v_principal;
         IF NOT EXISTS (SELECT FROM membership.platform_operator po
                        WHERE po.user_principal_object_id = v_principal AND upper_inf(po.valid_during)) THEN
@@ -198,6 +218,12 @@ BEGIN
         PERFORM membership.fn_record_audit_event('membership.platform_operator.ended', NULL, v_ended);
     END LOOP;
     EXECUTE format('SET ROLE %I', v_caller);
+END $$;
+
+DO $$
+BEGIN
+    EXECUTE format('GRANT EXECUTE ON FUNCTION pg_temp.platform_operator_principal(jsonb) TO %I',
+                   pg_temp.deployment_setting('database_kernel_role'));
 END $$;
 
 DO $seed$

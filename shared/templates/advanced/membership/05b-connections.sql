@@ -34,6 +34,10 @@
 </pgmi-meta>
 */
 
+-- ============================================================================
+-- APPROVAL - a person signed in on the web approves a connection with an agent role
+-- ============================================================================
+
 -- Why a person cannot give an agent this role in this organization, or NULL:
 -- membership.connection.role_unknown (not an agent role) | membership.connection.role_too_broad (it
 -- grants a permission the person does not hold there).
@@ -211,6 +215,10 @@ BEGIN
     expires_at := v_started.expires_at;
 END $$;
 
+-- ============================================================================
+-- PAIRING - an OAuth client waits for its person to approve the code it shows
+-- ============================================================================
+
 -- A new pairing code: 6 characters from the 30 that cannot be misread (no 0,
 -- O, 1, I, L, U), each from a cryptographically random byte below 240, so
 -- every character is equally likely.
@@ -269,6 +277,10 @@ BEGIN
     FOR UPDATE;
     v_name := btrim(left(v_pending.client_id, 100));
     problem := membership.fn_connection_approval_problem(p_organization_object_id, p_role_id, coalesce(v_name, 'unknown'), p_valid_days);
+    -- A missing login session stays first: the request is not a person who
+    -- could hold a code. Past that, no live code outranks every other
+    -- problem: there is no client to approve, and the checks ran on a
+    -- placeholder name.
     IF problem IS DISTINCT FROM 'membership.connection.login_session_required' AND v_pending.object_id IS NULL THEN
         problem := 'membership.connection.pairing_code_unknown';
     END IF;
@@ -283,6 +295,7 @@ BEGIN
           AND c.client_id = v_pending.client_id AND c.revoked_at IS NULL
         RETURNING c
     )
+    -- count() makes every revoked row record its event; the number is unused.
     SELECT count((membership.fn_record_connection_event('membership.connection.revoked', r.c)).object_id)::int
     INTO v_revoked
     FROM r;
@@ -302,8 +315,15 @@ BEGIN
     expires_at := v_started.expires_at;
 END $$;
 
--- The request manages its organization's agents: it holds members.manage there.
-CREATE OR REPLACE FUNCTION membership.fn_is_connection_managed(p_organization_object_id uuid)
+-- ============================================================================
+-- PAUSE, RESUME, REVOKE - who may change a connection, and the changes
+-- ============================================================================
+
+DROP FUNCTION IF EXISTS membership.fn_is_connection_managed(uuid);
+
+-- Whether the request works in this organization and holds members.manage
+-- there, which lets it manage the organization's agents.
+CREATE OR REPLACE FUNCTION membership.fn_request_manages_members(p_organization_object_id uuid)
 RETURNS boolean
 LANGUAGE sql STABLE AS $$
     SELECT coalesce(api.current_organization_id() = p_organization_object_id AND api.has_permission('members.manage'), false);
@@ -318,7 +338,7 @@ LANGUAGE sql STABLE AS $$
     SELECT coalesce(r.principal_object_id IS NULL
                     OR (api.current_actor_kind() = 'human'
                         AND (r.principal_object_id = p_principal_object_id
-                             OR membership.fn_is_connection_managed(p_organization_object_id)
+                             OR membership.fn_request_manages_members(p_organization_object_id)
                              OR api.is_platform_operator())), false)
     FROM (SELECT api.current_principal_id() AS principal_object_id) r;
 $$;
@@ -350,7 +370,7 @@ AS $$
         WHEN p_operation IN ('resume', 'revoke') AND c.paused_at IS NOT NULL
              AND c.paused_by_object_id IS DISTINCT FROM api.current_principal_id()
              AND api.current_principal_id() IS NOT NULL
-             AND NOT membership.fn_is_connection_managed(c.organization_object_id) AND NOT api.is_platform_operator()
+             AND NOT membership.fn_request_manages_members(c.organization_object_id) AND NOT api.is_platform_operator()
             THEN 'membership.connection.paused_by_manager'
     END
     FROM (SELECT p_connection_object_id AS id) asked
@@ -446,9 +466,14 @@ AS $$
           AND c.revoked_at IS NULL
         RETURNING c
     )
+    -- count() makes every revoked row record its event.
     SELECT count((membership.fn_record_connection_event('membership.connection.revoked', r.c)).object_id)::int
     FROM r;
 $$;
+
+-- ============================================================================
+-- AGENT SWITCH - the owner turns every agent of an organization off and on
+-- ============================================================================
 
 -- Why this request cannot switch an organization's agents off or on, or NULL:
 -- membership.organization.not_found | membership.organization.owner_required.
@@ -500,6 +525,10 @@ BEGIN
         p_organization_object_id, NULL);
     RETURN v_org;
 END $$;
+
+-- ============================================================================
+-- RESOLUTION - a handle or an OAuth client becomes a live connection, or why not
+-- ============================================================================
 
 -- The live connection of an agent: not revoked, paused or expired, its
 -- membership current, its organization active with agents switched on, its
@@ -674,6 +703,10 @@ BEGIN
         'message', format('Approve this client on the web with pairing code %s', v_pending.pairing_code));
 END $$;
 
+-- ============================================================================
+-- HOOKS - a resolved connection becomes the request context
+-- ============================================================================
+
 -- Makes a connection the request's context: the person acted for by the
 -- connection's agent, in the connection's organization; nobody when NULL.
 -- Every setting is written, so nothing an earlier request in this
@@ -685,12 +718,13 @@ SECURITY DEFINER
 SET search_path = membership, common, pg_temp
 AS $$
 BEGIN
-    PERFORM set_config('auth.login_session_id', '', true);
-    PERFORM set_config('auth.organization_session_id', '', true);
-    PERFORM set_config('auth.principal_id', coalesce(p_connection.principal_object_id::text, ''), true);
-    PERFORM set_config('auth.actual_principal_id', coalesce(p_connection.agent_principal_object_id::text, ''), true);
-    PERFORM set_config('auth.mfa', '', true);
-    PERFORM set_config('auth.organization_id', coalesce(p_connection.organization_object_id::text, ''), true);
+    PERFORM membership.fn_set_request_inputs(
+        p_principal_id            => p_connection.principal_object_id,
+        p_actual_principal_id     => p_connection.agent_principal_object_id,
+        p_organization_id         => p_connection.organization_object_id,
+        p_mfa                     => false,
+        p_login_session_id        => NULL,
+        p_organization_session_id => NULL);
     PERFORM membership.fn_snapshot_request_context();
 END $$;
 
@@ -724,7 +758,7 @@ BEGIN
     RETURN v_resolved.refusal;
 END $$;
 
-SELECT pg_temp.kernel_owns(r::regprocedure, false)
+SELECT pg_temp.kernel_owns(r::regprocedure, p_owner_executes => false)
 FROM unnest(ARRAY[
     'membership.fn_record_connection_event(text, membership.connection)',
     'membership.fn_find_membership(uuid, uuid)',

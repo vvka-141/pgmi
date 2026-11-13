@@ -27,6 +27,7 @@ DECLARE
     v_stranger uuid;
     v_headers  extensions.hstore;
     v_body     jsonb;
+    v_held     int;
 BEGIN
     RAISE DEBUG '-> Access explorer';
     PERFORM pg_temp.test_act_as(NULL);
@@ -116,6 +117,19 @@ BEGIN
            IS DISTINCT FROM '{list_access_handlers,list_access_paths,simulate_access}'::text[] THEN
         RAISE EXCEPTION 'TEST FAILED: membership.vw_permission names the roles and handlers of access.explore';
     END IF;
+
+    PERFORM pg_temp.test_act_as(current_setting('test.alice_subject'), v_acme);
+    v_held := (SELECT holder_count FROM membership.vw_permission WHERE permission_id = 'members.read');
+    PERFORM pg_temp.test_act_as(NULL);
+    PERFORM membership.fn_disable_principal(v_bob, 'access explorer test');
+    v_body := pg_temp.expect_status('GET /access/paths with Bob disabled',
+        api.rest_invoke('GET', '/access/paths', v_headers, NULL::bytea), 200);
+    PERFORM pg_temp.test_act_as(current_setting('test.alice_subject'), v_acme);
+    IF v_body->'paths' @> jsonb_build_array(jsonb_build_object('principalId', v_bob))
+       OR (SELECT holder_count FROM membership.vw_permission WHERE permission_id = 'members.read') IS DISTINCT FROM v_held - 1 THEN
+        RAISE EXCEPTION 'TEST FAILED: a disabled person has no access path and holds no permission: %', v_body;
+    END IF;
+    PERFORM pg_temp.test_act_as(NULL);
 
     RAISE NOTICE '  + access explorer: operations, paths and the simulation stay inside the request''s organization';
 END $$;

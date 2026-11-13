@@ -25,52 +25,11 @@
 -- ============================================================================
 -- Demonstrates the simplest possible REST handler.
 --
--- api.create_or_replace_rest_handler() takes two arguments:
---
---   1. METADATA (jsonb): Routing and behavior configuration.
---      The router uses this to match incoming HTTP requests to this handler:
---        - id:           Stable UUID — survives redeploys without breaking references
---        - path:         The route's template, e.g. /projects/{id}. A parameter takes a
---                        whole segment. The matcher, parameter names and OpenAPI path
---                        are derived from it; the gateway canonicalizes each request
---                        (trailing slash, duplicate slashes, percent-encoding,
---                        dot-segments) before matching. A literal segment outranks a
---                        parameter: /projects/stats is never taken for a project id.
---        - httpMethod:   POSIX regex anchored with ^ and $, matched against the HTTP
---                        method (default: ^(GET|POST|PUT|DELETE|PATCH)$)
---        - name:         Becomes the PostgreSQL function name (api.<name>)
---        - description:  Human-readable — shown in pgAdmin and introspection views
---        - access / permissions: who may call it. Exactly one is REQUIRED; a
---                        handler that declares neither fails the deploy.
---                          'access', 'public'         anyone
---                          'access', 'authenticated'  any signed-in caller
---                          'access', 'organization'   any signed-in caller in an organization session
---                          'permissions', jsonb_build_array('task.read', ...)
---                                                     a caller holding any of them
---                        The gateway decides before the handler runs: 401 or 403.
---        - autoLog:      If true, request/response logged to api.rest_exchange
---                        (default true, false for a readOnly route)
---        - outputSchema: REQUIRED on every REST handler (the OpenAPI test enforces it).
---        - minTransactionIsolation: Minimum isolation floor the gateway enforces
---                        (read committed | repeatable read | serializable). Omit for none.
---                        The client gateway resolves it via api.rest_route_policy and
---                        opens the transaction at max(floor, requested); a proxy that
---                        skips the lookup gets 428. See lib/api/00-transaction-isolation.sql.
---        - readOnly:     If true, the route declares it only reads. The client gateway
---                        opens the transaction READ ONLY (accidental writes become hard
---                        errors; SERIALIZABLE READ ONLY opens DEFERRABLE and needs no
---                        retries) and OpenAPI advertises x-pgmi-read-only plus the
---                        derived x-pgmi-replica-safe hint. Default false. Unlogged:
---                        a READ ONLY transaction cannot write the log.
---
---   2. HANDLER BODY (text): The function body executed when the route matches.
---      - The function receives a single parameter called "request" (api.rest_request)
---        containing: method, url, headers, content (raw bytea body), path_params (jsonb)
---      - The function must return api.http_response (status_code, headers, content)
---      - Use api.json_response() to build the response
---      - Use api.content_json() to parse the request body
---      - Use api.query_params() to parse URL query parameters
---      - Use api.header() for case-insensitive header lookup
+-- api.create_or_replace_rest_handler(metadata, body): metadata routes and
+-- guards the handler (id, path, httpMethod, name, access or permissions,
+-- outputSchema); body is a PL/pgSQL body over the parameter request
+-- (api.rest_request) that returns api.http_response. Every metadata key, its
+-- default and what it refuses: .agents/skills/pgmi-endpoint/references/metadata.md.
 
 SELECT api.create_or_replace_rest_handler(
     jsonb_build_object(

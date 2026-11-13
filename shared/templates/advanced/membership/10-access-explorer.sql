@@ -10,32 +10,15 @@
     a person, an organization and METHOD URL with the gateway's own routing
     (internal.rest_route_lookup) and decision (internal.access_denial_reason).
     The views are security_invoker, so a request sees the rows the forced
-    membership policies let it see. Served by api/access-explorer.sql.
+    membership policies let it see. They build on
+    membership.vw_effective_permission, which 03-session.sql defines because
+    the request context reads it too. Served by api/access-explorer.sql.
   </description>
   <sortKeys>
     <key>005/000/010</key>
   </sortKeys>
 </pgmi-meta>
 */
-
-SELECT core.ensure_view('membership.vw_effective_permission', $view$
-CREATE OR REPLACE VIEW membership.vw_effective_permission
-WITH (security_invoker = true) AS
-SELECT m.organization_object_id,
-       m.principal_object_id,
-       m.object_id AS membership_object_id,
-       ra.role_id,
-       rp.permission_id
-FROM membership.organization_membership m
-JOIN membership.organization o ON o.object_id = m.organization_object_id AND o.status = 'active'
-JOIN membership.principal p ON p.object_id = m.principal_object_id AND p.disabled_at IS NULL
-JOIN membership.role_assignment ra ON ra.membership_object_id = m.object_id AND upper_inf(ra.valid_during)
-JOIN membership.role_permission rp ON rp.role_id = ra.role_id
-WHERE upper_inf(m.valid_during)
-$view$);
-
-COMMENT ON VIEW membership.vw_effective_permission IS
-    'Each organization permission a person holds now, and the role it comes through: a current role of a current membership in an active organization, for a person who is not disabled.';
 
 SELECT core.ensure_view('membership.vw_handler_operation', $view$
 CREATE OR REPLACE VIEW membership.vw_handler_operation
@@ -102,7 +85,9 @@ SELECT p.id AS permission_id, p.is_platform, p.description,
                  FROM membership.role_permission rp JOIN membership.role r ON r.id = rp.role_id
                  WHERE rp.permission_id = p.id), '{}') AS role_ids,
        (SELECT count(DISTINCT e.principal_object_id)::int
-        FROM membership.vw_effective_permission e WHERE e.permission_id = p.id) AS holder_count
+        FROM membership.vw_effective_permission e
+        JOIN membership.principal pr ON pr.object_id = e.principal_object_id AND pr.disabled_at IS NULL
+        WHERE e.permission_id = p.id) AS holder_count
 FROM membership.permission p
 $view$);
 
@@ -117,7 +102,7 @@ SELECT e.organization_object_id, e.principal_object_id, u.email AS principal_ema
        'role'::text AS via, e.role_id, e.permission_id,
        o.handler_object_id, o.handler_name, o.kind, o.method, o.path
 FROM membership.vw_effective_permission e
-JOIN membership.principal p ON p.object_id = e.principal_object_id
+JOIN membership.principal p ON p.object_id = e.principal_object_id AND p.disabled_at IS NULL
 LEFT JOIN membership.user_principal u ON u.principal_object_id = e.principal_object_id
 JOIN api.handler_permission hp ON hp.permission_id = e.permission_id
 JOIN membership.vw_handler_operation o ON o.handler_object_id = hp.handler_object_id

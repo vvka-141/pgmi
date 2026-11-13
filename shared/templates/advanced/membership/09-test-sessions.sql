@@ -5,29 +5,8 @@
   <description>
     Helpers the tests sign in with, as pg_temp functions: they die with the
     deploy session, so no role can call them later. A login is named
-    'issuer|subject' and must exist (membership.fn_provision_login).
-      pg_temp.test_session_headers(login, organization, amr) opens a login
-        session (and an organization session when an organization is given)
-        and returns the request headers that carry their handles; an unknown
-        login gets no headers. It signs in outside the test's request context,
-        which it keeps.
-      pg_temp.test_mcp_context(login, organization, role) approves a
-        connection for the login's current membership in the organization, as
-        the person would on the web, and returns the MCP context that carries
-        its handle; no membership, no handle. Without a role, the agent role
-        covering what the person holds there, so the agent can do what they can.
-      pg_temp.test_act_as(login, organization, mfa) states a request context
-        directly, as a trusted SQL session may; NULL clears it.
-      pg_temp.test_login(issuer, subject, email, name, verified) provisions a
-        login as a sign-in does (membership.fn_provision_login) and returns
-        the person.
-      pg_temp.test_person('issuer|subject') and pg_temp.test_organization(slug)
-        look up a person and an organization outside any request.
-      pg_temp.test_operator(person) makes a person a platform operator, as
-        the deploy does.
-      pg_temp.test_as_kernel() / pg_temp.test_as_owner() switch the test to
-        the kernel role, to read or plant membership rows no request may, and
-        back. Tests run as the owner, which runs every handler.
+    'issuer|subject' and must exist (membership.fn_provision_login). Tests
+    run as the owner, which runs every handler.
   </description>
   <sortKeys>
     <key>005/000/009</key>
@@ -35,6 +14,8 @@
 </pgmi-meta>
 */
 
+-- Switch the test to the kernel role, to read or plant membership rows no
+-- request may, and back to the owner.
 CREATE OR REPLACE FUNCTION pg_temp.test_as_kernel()
 RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
@@ -47,6 +28,7 @@ BEGIN
     EXECUTE format('SET ROLE %I', pg_temp.deployment_setting('database_owner_role'));
 END $$;
 
+-- Provisions a login as a sign-in does and returns the person.
 CREATE OR REPLACE FUNCTION pg_temp.test_login(
     p_issuer      text,
     p_subject     text,
@@ -65,6 +47,7 @@ BEGIN
     RETURN v_person;
 END $$;
 
+-- A person and an organization, looked up outside any request.
 CREATE OR REPLACE FUNCTION pg_temp.test_person(p_login text)
 RETURNS uuid
 LANGUAGE plpgsql AS $$
@@ -93,6 +76,7 @@ BEGIN
     RETURN v_org;
 END $$;
 
+-- Makes a person a platform operator, as the deploy does.
 CREATE OR REPLACE FUNCTION pg_temp.test_operator(p_person uuid)
 RETURNS void
 LANGUAGE plpgsql AS $$
@@ -105,6 +89,10 @@ BEGIN
     EXECUTE format('SET ROLE %I', v_caller);
 END $$;
 
+-- Opens a login session (and an organization session when an organization
+-- is given) and returns the request headers that carry their handles; an
+-- unknown login gets no headers. It signs in outside the test's request
+-- context, which it keeps.
 CREATE OR REPLACE FUNCTION pg_temp.test_session_headers(
     p_login        text,
     p_organization uuid DEFAULT NULL,
@@ -113,10 +101,8 @@ RETURNS extensions.hstore
 LANGUAGE plpgsql AS $$
 DECLARE
     v_caller  text := current_user;
-    v_context text[] := ARRAY[current_setting('auth.principal_id', true), current_setting('auth.organization_id', true),
-                             current_setting('auth.mfa', true), current_setting('auth.login_session_id', true),
-                             current_setting('auth.organization_session_id', true), current_setting('auth.ctx', true),
-                             current_setting('auth.actual_principal_id', true)];
+    v_settings text[] := membership.fn_request_input_settings() || 'auth.ctx'::text;
+    v_context  text[] := ARRAY(SELECT current_setting(s, true) FROM unnest(v_settings) s);
     v_login   text;
     v_session uuid;
     v_org     text;
@@ -134,13 +120,8 @@ BEGIN
         v_org := (membership.fn_open_organization_session(v_session, p_organization)).token;
     END IF;
     EXECUTE format('SET ROLE %I', v_caller);
-    PERFORM set_config('auth.principal_id', coalesce(v_context[1], ''), true),
-            set_config('auth.organization_id', coalesce(v_context[2], ''), true),
-            set_config('auth.mfa', coalesce(v_context[3], ''), true),
-            set_config('auth.login_session_id', coalesce(v_context[4], ''), true),
-            set_config('auth.organization_session_id', coalesce(v_context[5], ''), true),
-            set_config('auth.ctx', coalesce(v_context[6], ''), true),
-            set_config('auth.actual_principal_id', coalesce(v_context[7], ''), true);
+    PERFORM set_config(c.setting, coalesce(c.value, ''), true)
+    FROM unnest(v_settings, v_context) AS c(setting, value);
     IF v_login IS NULL THEN
         RETURN ''::extensions.hstore;
     END IF;
@@ -149,6 +130,11 @@ BEGIN
                 ELSE ''::extensions.hstore END;
 END $$;
 
+-- Approves a connection for the login's current membership in the
+-- organization, as the person would on the web, and returns the MCP context
+-- that carries its handle; no membership, no handle. Without a role, the
+-- agent role covering what the person holds there, so the agent can do what
+-- they can.
 CREATE OR REPLACE FUNCTION pg_temp.test_mcp_context(
     p_login        text,
     p_organization uuid,
@@ -180,23 +166,22 @@ BEGIN
     RETURN CASE WHEN v_token IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('connection', v_token) END;
 END $$;
 
+-- States a request context directly, as a trusted SQL session may; NULL
+-- clears it.
 CREATE OR REPLACE FUNCTION pg_temp.test_act_as(
     p_login        text,
     p_organization uuid DEFAULT NULL,
     p_mfa          boolean DEFAULT false)
 RETURNS void
 LANGUAGE plpgsql AS $$
-DECLARE
-    v_person text;
 BEGIN
-    v_person := pg_temp.test_person(p_login)::text;
-    PERFORM set_config('auth.principal_id', coalesce(v_person, ''), true),
-            set_config('auth.actual_principal_id', '', true),
-            set_config('auth.organization_id', coalesce(p_organization::text, ''), true),
-            set_config('auth.mfa', CASE WHEN p_mfa THEN 'on' ELSE '' END, true),
-            set_config('auth.login_session_id', '', true),
-            set_config('auth.organization_session_id', '', true),
-            set_config('auth.ctx', '', true);
+    PERFORM membership.fn_set_request_inputs(
+        p_principal_id            => pg_temp.test_person(p_login),
+        p_actual_principal_id     => NULL,
+        p_organization_id         => p_organization,
+        p_mfa                     => p_mfa,
+        p_login_session_id        => NULL,
+        p_organization_session_id => NULL);
 END $$;
 
 DO $$

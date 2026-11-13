@@ -44,6 +44,11 @@ DECLARE
     v_items jsonb;
     v_total bigint;
 BEGIN
+    -- One CTE for the count and the page: vw_member aggregates each member's
+    -- roles, and the CTE computes it once where two queries computed it twice.
+    WITH member AS (
+        SELECT m FROM membership.vw_member m WHERE m.organization_object_id = api.current_organization_id()
+    )
     SELECT coalesce(jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
                'memberId', (p.m).membership_object_id,
                'principalId', (p.m).principal_object_id,
@@ -52,11 +57,10 @@ BEGIN
                'isEmailVerified', (p.m).is_email_verified,
                'memberSince', (p.m).member_since,
                'roleIds', to_jsonb((p.m).role_ids))) ORDER BY (p.m).member_since, (p.m).membership_object_id), '[]'),
-           (SELECT count(*) FROM membership.vw_member m WHERE m.organization_object_id = api.current_organization_id())
+           (SELECT count(*) FROM member)
     INTO v_items, v_total
-    FROM (SELECT m FROM membership.vw_member m
-          WHERE m.organization_object_id = api.current_organization_id()
-          ORDER BY m.member_since, m.membership_object_id
+    FROM (SELECT m FROM member
+          ORDER BY (m).member_since, (m).membership_object_id
           LIMIT v_page.o_limit OFFSET v_page.o_offset) p;
 
     RETURN api.page_response(v_items, v_total, v_page.o_limit, v_page.o_offset);
