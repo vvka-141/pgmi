@@ -2,12 +2,21 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     #[cfg(unix)]
-    restore_sigpipe();
+    if !deploys(std::env::args_os()) {
+        restore_sigpipe();
+    }
     pgmi::install_panic_hook();
     let code =
         std::panic::catch_unwind(|| pgmi::run(std::env::args_os(), pgmi::Env::snapshot(), export))
             .unwrap_or(pgmi::PANIC_EXIT_CODE);
     ExitCode::from(code)
+}
+
+#[cfg(unix)]
+fn deploys(args: impl Iterator<Item = std::ffi::OsString>) -> bool {
+    args.skip(1)
+        .find(|a| !a.to_string_lossy().starts_with('-'))
+        .is_some_and(|a| a == "deploy")
 }
 
 #[cfg(unix)]

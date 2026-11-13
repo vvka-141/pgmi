@@ -1416,6 +1416,7 @@ release notes take their "Behaviour changes" section from this table.
 | Encrypted client key whose PBKDF2 or PKCS#12 iteration count is above 1,000,000, or whose scrypt N·r·p is above 2^23 (openssl writes 2048 and 2^17) | derived, however long it takes | newly refused, exit 10, naming the file (Rust unit tests `a_key_whose_encryption_would_run_for_hours_is_refused_by_name`, `keys_openssl_writes_open_and_a_runaway_cost_is_refused`) | owner 2026-11-11 |
 | Windows: files under `%APPDATA%\postgresql` | read, and `pgmi config` saves the password there | unchanged | no change |
 | `min_protocol_version=3.2` or `latest` | protocol 3.2 | newly refused before connecting, exit 10 (known gap, PGMI-865) | owner 2026-11-11 |
+| SIGHUP (a closed terminal or SSH session) or a stderr reader that went away, during `deploy` | the process dies at once; the statement runs on and keeps the deploy lock | SIGHUP is handled as SIGTERM (statement cancelled, exit 130); writes to a closed pipe are dropped and the deploy goes on | PGMI-946 |
 | Two `<pgmi-meta>` elements in one comment | the first used, the rest ignored | newly refused, exit 10 | owner 2026-11-11 |
 | A `<pgmi-meta>` element with an attribute given twice (two `id`s) | the last value used | refused, exit 10 | owner 2026-11-12 (PGMI-942) |
 | `serve`: a line over 16 MiB | read | newly refused with `-32600`, session goes on | owner 2026-11-11 |

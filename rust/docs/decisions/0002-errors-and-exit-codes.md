@@ -59,7 +59,11 @@ pub struct Error {
 - **Broken pipe.** Rust ignores SIGPIPE, so `pgmi ai | head` would panic
   inside `println!`. On Unix `main` restores the default SIGPIPE action
   first, so pgmi dies quietly as Go does. Everything writes through
-  `writeln!`, never `println!`.
+  `writeln!`, never `println!`. `deploy` is the exception (PGMI-946): it
+  keeps SIGPIPE ignored, so a stderr or stdout reader that went away gives
+  failed writes, which the reporter drops, and the deploy finishes or stops
+  through its own cancel instead of dying with a statement still running on
+  the server. SIGHUP stops a deploy as SIGTERM does.
 - A cargo feature `testhooks`, off in releases, adds a `PGMI_TEST_PANIC`
   trigger so an integration test proves the panic path exits 3. A release
   binary cannot panic on purpose, as the contract says.
