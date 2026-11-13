@@ -36,7 +36,7 @@ BEGIN
                    'api.catalog_version(), '
                    'api.open_login_session(text, text, text, text, boolean, text[]), '
                    'api.close_login_session(text) TO %I', v_api_role);
-    IF current_setting('deployment.env') = 'dev' THEN
+    IF current_setting('pgmi.env') = 'dev' THEN
 
         IF to_regprocedure('api.open_dev_login_session(text, text, text, text)') IS NOT NULL THEN
             EXECUTE format('GRANT EXECUTE ON ROUTINE api.open_dev_login_session(text, text, text, text) TO %I', v_api_role);

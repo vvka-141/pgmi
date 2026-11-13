@@ -316,7 +316,7 @@ BEGIN
     EXECUTE format('SET ROLE %I', v_owner);
     CREATE FUNCTION internal.provider_probe_owned() RETURNS int LANGUAGE sql AS 'SELECT 1';
     GRANT EXECUTE ON FUNCTION internal.provider_probe_owned() TO PUBLIC;
-    PERFORM set_config('deployment.provider_role_pattern', '', true);
+    PERFORM set_config('pgmi.provider_role_pattern', '', true);
 
     SELECT string_agg(format('%s %s', role_name, routine), ', ' ORDER BY role_name, routine) INTO v_drift
     FROM pg_temp.grant_drift() WHERE routine LIKE '%provider_probe%';
@@ -326,7 +326,7 @@ BEGIN
         RAISE EXCEPTION 'TEST FAILED: without provider_role_pattern all three PUBLIC routines must fail, named: %', v_drift;
     END IF;
 
-    PERFORM set_config('deployment.provider_role_pattern', 'pgmi\_provider\_%', true);
+    PERFORM set_config('pgmi.provider_role_pattern', 'pgmi\_provider\_%', true);
     SELECT string_agg(format('%s %s', role_name, routine), ', ' ORDER BY role_name, routine) INTO v_drift
     FROM pg_temp.grant_drift() WHERE routine LIKE '%provider_probe%';
     IF coalesce(v_drift, '') LIKE '%public.provider_probe()%'

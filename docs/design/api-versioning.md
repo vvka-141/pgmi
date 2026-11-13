@@ -411,7 +411,7 @@ FROM pg_temp.pgmi_source_view WHERE ...
 ```
 
 Affected locations in advanced template:
-- Parameter loading (reads `pgmi_source_view` for `session.xml`)
+- Parameter loading (reads `pgmi_source_view` for `deploy/parameters.xml`)
 - Deploy function (joins `pgmi_plan_view` with `pgmi_source_view`)
 
 ### Basic Template (`deploy.sql`)

@@ -14,7 +14,7 @@
 --   deploy/preflight.sql      server version, a database this template can deploy onto
 --   deploy/settings.sql       the lists a project edits: extensions, settings, grants, guards
 --   deploy/providers.sql      hosting providers (Lakebase, Azure): detection, quirks, overrides
---   deploy/parameters.sql     session.xml parameters, defaults, checks, environment label
+--   deploy/parameters.sql     parameters declared in deploy/parameters.xml: defaults, checks, environment label
 --   deploy/project_rules.sql  file rules: dev/ folders, sort keys, run-once vs re-run
 --   deploy/bootstrap.sql      host grants, roles, database settings, extensions
 --   deploy/schemas.sql        application schemas and the deploy's own tables
@@ -82,7 +82,7 @@ SELECT pg_temp.run_file('./deploy/ledger.sql');
 INSERT INTO pg_temp.access_baseline SELECT * FROM pg_temp.access_entry();
 SELECT pg_temp.kernel_reclaim();
 INSERT INTO internal.deployment (xact_id, environment)
-VALUES (pg_current_xact_id(), current_setting('deployment.env'));
+VALUES (pg_current_xact_id(), current_setting('pgmi.env'));
 
 DO $deploy$
 DECLARE

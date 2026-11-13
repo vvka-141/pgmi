@@ -1,7 +1,7 @@
 -- ============================================================================
 -- deploy/parameters.sql
--- Parameters declared in session.xml, their defaults, their checks and the
--- environment label. Ends with each value set as deployment.<key>, read
+-- Parameters declared in deploy/parameters.xml, their defaults, their checks
+-- and the environment label. Ends with each value set as pgmi.<key>, read
 -- through pg_temp.deployment_setting.
 -- ============================================================================
 
@@ -20,10 +20,10 @@ DECLARE
 BEGIN
     SELECT content::xml INTO v_xml
     FROM pg_temp.pgmi_source_view
-    WHERE path = './session.xml';
+    WHERE path = './deploy/parameters.xml';
 
     IF v_xml IS NULL THEN
-        RAISE EXCEPTION 'session.xml not found in project. Create it to declare deployment parameters.'
+        RAISE EXCEPTION 'deploy/parameters.xml not found in project. Create it to declare deployment parameters.'
             USING ERRCODE = 'invalid_parameter_value';
     END IF;
 
@@ -39,7 +39,7 @@ BEGIN
             trim(param_key) AS original_key,
             regexp_replace(lower(trim(param_key)), '[^a-z0-9]+', '_', 'g') AS normalized_key,
             NULLIF(trim(COALESCE(param_desc, '')), '') AS description
-        FROM XMLTABLE('/session/parameter' PASSING v_xml
+        FROM XMLTABLE('/parameters/parameter' PASSING v_xml
             COLUMNS param_key TEXT PATH '@key', param_desc TEXT PATH '@description')
         WHERE param_key IS NOT NULL AND trim(param_key) != ''
     ) xml
@@ -79,7 +79,7 @@ WHERE value IS NULL;
 
 -- One block, in order: refuse unknown parameters, check each value, check the
 -- environment label, default dev passwords, refuse missing ones, publish every
--- value as deployment.<key> and pgmi.<key>.
+-- value as pgmi.<key>.
 -- The database keeps the environment it was deployed as (internal.environment),
 -- and a redeploy must name the same one. This runs before any role is touched:
 -- env=dev against a prod database would otherwise reset its role passwords to
@@ -102,7 +102,7 @@ BEGIN
     FROM pg_temp.deployment_parameter;
 
     IF v_redundant IS NOT NULL THEN
-        RAISE EXCEPTION 'Unknown parameters: %. These are not declared in session.xml', v_redundant
+        RAISE EXCEPTION 'Unknown parameters: %. These are not declared in deploy/parameters.xml', v_redundant
             USING ERRCODE = 'invalid_parameter_value';
     END IF;
 
@@ -230,7 +230,6 @@ BEGIN
     END IF;
 
     FOR v_param IN SELECT * FROM pg_temp.deployment_parameter ORDER BY key LOOP
-        PERFORM set_config('deployment.' || v_param.key, v_param.value, false);
         PERFORM set_config('pgmi.' || v_param.key, v_param.value, false);
         RAISE NOTICE '[pgmi] Parameter: % = %',
             v_param.original_key,
@@ -242,12 +241,12 @@ END $$;
 CREATE FUNCTION pg_temp.deployment_setting(p_key text, p_required boolean DEFAULT true)
 RETURNS TEXT LANGUAGE plpgsql AS $$
 DECLARE
-    v_normalized TEXT := 'deployment.' || regexp_replace(lower(p_key), '[^a-z0-9]+', '_', 'g');
+    v_normalized TEXT := 'pgmi.' || regexp_replace(lower(p_key), '[^a-z0-9]+', '_', 'g');
     v_value TEXT;
 BEGIN
     v_value := current_setting(v_normalized, true);
     IF v_value IS NULL AND p_required THEN
-        RAISE EXCEPTION 'Required deployment parameter "%" not set. Declare it in session.xml and set PGMI_PARAM_%.', p_key, upper(p_key)
+        RAISE EXCEPTION 'Required deployment parameter "%" not set. Declare it in deploy/parameters.xml and set PGMI_PARAM_%.', p_key, upper(p_key)
             USING ERRCODE = 'invalid_parameter_value';
     END IF;
     RETURN v_value;

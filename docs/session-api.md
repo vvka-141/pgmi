@@ -240,7 +240,7 @@ For iterating over parameters or building dynamic logic:
 pgmi passes parameters through as text and checks nothing else. Types,
 defaults, required parameters and descriptions belong to your `deploy.sql`.
 The advanced template shows one way: it declares its parameters in
-`session.xml`, and its `deploy.sql` rejects unknown ones and fails on
+`deploy/parameters.xml`, and its `deploy.sql` rejects unknown ones and fails on
 missing ones before any schema work.
 
 **Compare lower-cased.** `key` mirrors the session variable pgmi set, and
@@ -325,7 +325,7 @@ v_cutoff := COALESCE(current_setting('pgmi.since', true), '2024-01-01')::timesta
 #### Template Responsibility
 
 pgmi core provides raw parameter storage. Templates handle:
-- Declaring expected parameters (advanced template uses `session.xml`)
+- Declaring expected parameters (advanced template uses `deploy/parameters.xml`)
 - Validating required parameters
 - Providing default values
 - Type validation and coercion

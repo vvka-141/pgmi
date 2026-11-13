@@ -881,7 +881,7 @@ Completion covers commands, flags, template names (for `init --template`), and S
 | `current transaction is aborted` | Earlier error in transaction | Fix the root cause; check `RAISE EXCEPTION` in your SQL |
 | `syntax error at or near` | Invalid SQL | Check the file path in error message, fix syntax |
 | `Missing required parameter(s)` (SQLSTATE `22023`) | Your `deploy.sql` requires a parameter you did not pass | Set `PGMI_PARAM_<NAME>`, or `--param key=value` for a non-secret; this is your SQL raising, not a pgmi config error |
-| `Unknown parameters: ... These are not declared in session.xml` (SQLSTATE `22023`) | Parameter not declared in the template's `session.xml` | Declare it there or drop it from the command line |
+| `Unknown parameters: ... These are not declared in deploy/parameters.xml` (SQLSTATE `22023`) | Parameter not declared in the template's `deploy/parameters.xml` | Declare it there or drop it from the command line |
 | `invalid regex pattern` | Bad pattern passed to `pgmi_test()` | Fix the POSIX regex |
 
 ### Configuration Errors (Exit Code 10)

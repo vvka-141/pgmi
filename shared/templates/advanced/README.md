@@ -79,8 +79,7 @@ myproject/
 ├── data/catalogs/            # Reference data synced by pg_temp.sync_catalog (create when needed)
 ├── gateways/                  # Reference gateways per language (gateways/README.md); never deployed
 ├── deploy.sql                # The deployment, top to bottom: phases, transaction, file loop
-├── deploy/                   # Setup deploy.sql runs by name (settings.sql: the lists you edit)
-├── session.xml               # Parameter declarations consumed by deploy.sql
+├── deploy/                   # Setup deploy.sql runs by name (settings.sql: the lists you edit; parameters.xml: the declared parameters)
 ├── pgmi.yaml                 # Project configuration (connection, params, timeout)
 ├── ARCHITECTURE.md           # Design rationale
 └── README.md
@@ -521,6 +520,16 @@ stdin or a params file, never as command-line `--param` — see [Deploy](#1-depl
 Defaults sit beside the values, in one `CASE` in `deploy/parameters.sql`. A parameter
 without a default is required, and a blank value counts as not given.
 
+The parameters are declared in `deploy/parameters.xml`; a parameter it does not
+declare is refused. Each value is readable in SQL as
+`current_setting('pgmi.<key>')`, or through `pg_temp.deployment_setting('<key>')`
+during the deploy.
+
+Every deploy sets the admin role's password to `database_admin_password`, so
+the parameter is the password's source of truth: rotating it is a redeploy with
+the new value, for example from a key vault through
+`PGMI_PARAM_DATABASE_ADMIN_PASSWORD`.
+
 ## Environments
 
 The first deploy records `env` in `internal.environment`. Every later deploy
@@ -545,7 +554,7 @@ file-contract check and the run-once drift check all ask
 `pg_temp.deploys_file(path)`, so a run-once `dev/` file that ran while the
 database was dev is not drift on a `test` deploy. Tests run in every
 environment, so a `__test__/` under `dev/` is refused; branch on
-`current_setting('deployment.env')` in an ordinary test instead.
+`current_setting('pgmi.env')` in an ordinary test instead.
 
 ## Sign-in, sessions and connections
 

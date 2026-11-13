@@ -270,7 +270,7 @@ Before the first run:
 
 - **Secrets:** `DATABASE_URL` (a direct connection) and
   `DATABASE_ADMIN_PASSWORD`. **Variables:** `PLATFORM_OPERATORS` and
-  `OIDC_ISSUERS`, as JSON arrays (see the template's `session.xml`).
+  `OIDC_ISSUERS`, as JSON arrays (see the template's `deploy/parameters.xml`).
 - **The job redeploys an existing database.** `PGMI_PARAM_UPGRADE: "true"`
   refuses to build a fresh one by mistake, so leave it out of the one deploy
   that creates the database.

@@ -67,7 +67,7 @@ BEGIN
     GRANT SELECT ON membership.organization TO pgmi_provider_probe;
     GRANT SELECT ON membership.organization TO PUBLIC;
     GRANT TRUNCATE ON membership.connection TO pgmi_provider_probe;
-    PERFORM set_config('deployment.provider_role_pattern', 'pgmi\_provider\_%', true);
+    PERFORM set_config('pgmi.provider_role_pattern', 'pgmi\_provider\_%', true);
 
     v_offender := pg_temp.membership_grant_beyond();
     IF coalesce(v_offender, '') LIKE '%organization to pgmi\_provider\_probe%'

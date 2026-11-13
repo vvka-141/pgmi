@@ -1,4 +1,4 @@
-<session>
+<parameters>
     <!--
     Deployment parameters come from pgmi.yaml params, PGMI_PARAM_NAME variables,
     params files and the command line. Pass a password as PGMI_PARAM_NAME (a CI
@@ -21,4 +21,4 @@
     <parameter key="env" description="Deployment environment: dev, test or prod. Required, no default. The first deploy labels the database with it (internal.environment) and every redeploy must name the same label. Only env=dev deploys files under a dev/ folder"/>
     <parameter key="relabel_environment" description="Change the database's environment label to this value, which must equal env. Refused when the database is new or already carries that label, so it cannot stay switched on. Relabelling to dev does not default passwords. Defaults to empty (no relabel)"/>
     <parameter key="upgrade" description="true: refuse the deploy unless the database already carries the label env names, so a pipeline never builds a fresh database by mistake. Cannot be combined with relabel_environment. Defaults to false"/>
-</session>
+</parameters>

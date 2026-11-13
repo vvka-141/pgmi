@@ -21,6 +21,6 @@ CREATE TABLE internal.environment (
 COMMENT ON TABLE internal.environment IS
     'One row: dev, test or prod, from the env parameter of the first deploy. Changed only by a deploy with relabel_environment.';
 
-INSERT INTO internal.environment (label) VALUES (current_setting('deployment.env'));
+INSERT INTO internal.environment (label) VALUES (current_setting('pgmi.env'));
 
 SELECT pg_temp.exempt_from_rls('internal.environment', 'deploy bookkeeping: written and read by deploy.sql only');

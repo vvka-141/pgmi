@@ -99,8 +99,8 @@ BEGIN
     CREATE ROLE pgmi_provider_probe NOLOGIN;
     CREATE SCHEMA provider_probe;
     EXECUTE format('SET ROLE %I', v_owner);
-    PERFORM set_config('deployment.provider_role_pattern', 'pgmi\_provider\_%', true);
-    PERFORM set_config('deployment.provider_schemas', '["provider_probe", "membership"]', true);
+    PERFORM set_config('pgmi.provider_role_pattern', 'pgmi\_provider\_%', true);
+    PERFORM set_config('pgmi.provider_schemas', '["provider_probe", "membership"]', true);
     GRANT USAGE ON SCHEMA internal TO pgmi_provider_probe;
     GRANT USAGE ON SCHEMA internal TO PUBLIC;
     GRANT CREATE ON SCHEMA core TO pgmi_provider_probe;

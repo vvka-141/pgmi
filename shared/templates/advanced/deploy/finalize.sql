@@ -47,7 +47,7 @@ BEGIN
     END LOOP;
 
     PERFORM internal.grant_gateway_entry_points();
-    IF current_setting('deployment.env') <> 'dev' THEN
+    IF current_setting('pgmi.env') <> 'dev' THEN
         PERFORM internal.retire_dev_login();
     END IF;
     PERFORM internal.grant_jobs();

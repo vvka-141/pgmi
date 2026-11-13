@@ -48,6 +48,22 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   allow-listed, before it changes anything. On Databricks Lakebase it sets
   `provider_role_pattern` and `provider_schemas` itself. Both template
   READMEs say what each host needs.
+- **The advanced template's deploy.sql reads top to bottom.** Five banners
+  (PREFLIGHT, BOOTSTRAP, DEPLOY, VERIFY, TAIL) and the file loop in plain
+  sight; the setup lives in `deploy/` files it runs by name, with the lists a
+  project edits in `deploy/settings.sql` and hosting providers in
+  `deploy/providers.sql`. Parameters are declared in `deploy/parameters.xml`
+  (was `session.xml`, root element `<parameters>`) and read only as
+  `pgmi.<key>` (the `deployment.<key>` copies are gone). On a server older
+  than PostgreSQL 18 the refusal says the project's code can be adapted.
+  **Upgrading:** move `session.xml` to `deploy/parameters.xml` and rename its
+  root element, and replace `current_setting('deployment.<key>')` with
+  `current_setting('pgmi.<key>')` in your files, except in run-once files that
+  already ran: an edit there is refused as drift. A project whose
+  `lib/internal/environment.sql` already ran keeps that file, which reads
+  `deployment.env` on a fresh database, so it also keeps one line in
+  `deploy/parameters.sql`, beside the `pgmi.` `set_config`:
+  `PERFORM set_config('deployment.env', v_param.value, false) WHERE v_param.key = 'env';`
 - **The Go library is gone.** pgmi 0.20 is a Rust program with no library
   crate. Go programs that embedded `pkg/pgmi` pin the `go-legacy` tag; Python
   and Node get thin wrappers over `deploy --json` (PGMI-850).
