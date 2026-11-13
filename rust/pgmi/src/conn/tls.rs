@@ -680,6 +680,65 @@ mod tests {
             .unwrap();
     }
 
+    fn cert(pem: &[u8]) -> CertificateDer<'static> {
+        CertificateDer::from_pem_slice(pem).unwrap()
+    }
+
+    fn verifying(root: &[u8], names: Names) -> Arc<Verifier> {
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(cert(root)).unwrap();
+        let chain = WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider())
+            .build()
+            .unwrap();
+        Verifier::new(Some(chain), names)
+    }
+
+    fn verdict(v: &Verifier, host: &str) -> std::result::Result<(), rustls::Error> {
+        let leaf = cert(include_bytes!("testdata/db-example.crt"));
+        let now = UnixTime::since_unix_epoch(std::time::Duration::from_hours(500_000));
+        v.verify_server_cert(
+            &leaf,
+            &[],
+            &ServerName::try_from(host.to_string()).unwrap(),
+            &[],
+            now,
+        )
+        .map(drop)
+    }
+
+    #[test]
+    fn verify_full_refuses_a_certificate_for_another_host() {
+        let root = include_bytes!("testdata/root.crt");
+        verdict(&verifying(root, Names::Check), "db.example").unwrap();
+        assert_eq!(
+            verdict(&verifying(root, Names::Check), "other.example"),
+            Err(rustls::Error::InvalidCertificate(
+                CertificateError::NotValidForNameContext {
+                    expected: ServerName::try_from("other.example").unwrap(),
+                    presented: vec!["DnsName(\"db.example\")".into()],
+                }
+            ))
+        );
+        verdict(&verifying(root, Names::Ignore), "other.example").unwrap();
+    }
+
+    #[test]
+    fn a_chain_error_is_never_ignored_whatever_the_name_rule() {
+        let other = include_bytes!("testdata/other-root.crt");
+        for names in [
+            Names::Check,
+            Names::Ignore,
+            Names::CommonName("db.example".into()),
+        ] {
+            assert_eq!(
+                verdict(&verifying(other, names), "db.example"),
+                Err(rustls::Error::InvalidCertificate(
+                    CertificateError::UnknownIssuer
+                ))
+            );
+        }
+    }
+
     fn a_root() -> Vec<CertificateDer<'static>> {
         CertificateDer::pem_slice_iter(include_bytes!("cloud/testdata/sp.crt"))
             .collect::<std::result::Result<_, _>>()
