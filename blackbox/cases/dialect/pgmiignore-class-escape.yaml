@@ -1,0 +1,21 @@
+description: a backslash inside a .pgmiignore class is a literal backslash on Go and escapes the next character on Rust, as in gitignore (contract "Backslash inside a class in .pgmiignore")
+project:
+  files:
+    .pgmiignore: "a[\\]]b.sql\n"
+    a]b.sql: SELECT 1;
+    axb.sql: SELECT 1;
+    deploy.sql: CREATE TABLE seen AS SELECT path FROM pg_temp.pgmi_source_view;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      stderr: ["Loaded 2 files"]
+      sql:
+        - query: SELECT path FROM seen ORDER BY path
+          rows: [["./a]b.sql"], ["./axb.sql"]]
+      rust:
+        exit: 0
+        stderr: ["Loaded 1 files"]
+        sql:
+          - query: SELECT path FROM seen ORDER BY path
+            rows: [["./axb.sql"]]

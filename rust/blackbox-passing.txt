@@ -115,6 +115,7 @@ dialect/pgmiignore-broken-patterns
 dialect/pgmiignore-hides-deploy
 dialect/pgmiignore-latin1
 dialect/pgmiignore-posix-class
+dialect/pgmiignore-class-escape
 dialect/pgmi-test-macro
 dialect/pgmi-test-macro-arguments
 dialect/pgmi-test-macro-comments

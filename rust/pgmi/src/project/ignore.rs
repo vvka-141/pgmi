@@ -433,6 +433,14 @@ mod tests {
     ];
 
     #[test]
+    fn backslash_in_class_escapes_as_git_does() {
+        let rules = Rules::parse("a[\\]]b").unwrap();
+        assert!(rules.ignored("a]b", false));
+        assert!(!rules.ignored("a\\]b", false));
+        assert!(!rules.ignored("a\\", false));
+    }
+
+    #[test]
     fn patterns_match_and_refuse_as_go_does() {
         let table: &[(&str, Option<&[&str]>)] = &[
             ("caf?.sql", Some(&["café.sql", "cafe.sql"][..])),

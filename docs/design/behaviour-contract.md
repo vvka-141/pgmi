@@ -818,6 +818,16 @@ that `sp[[:space:]]ace.sql` hides `sp ace.sql` and keeps `spxace.sql`.
 
 Cases: `dialect/pgmiignore-posix-class`.
 
+### Backslash inside a class in .pgmiignore
+
+Go reads a backslash inside `[...]` as a literal backslash, so `a[\]]b.sql`
+is the class `[\]` followed by `]b.sql` and hides a file named `a\]b.sql`.
+git's wildmatch, and the Rust binary, read it as an escape: the class holds
+`]`, and the pattern hides `a]b.sql`. The case checks that Rust hides
+`a]b.sql` and keeps `axb.sql`, while Go keeps both.
+
+Cases: `dialect/pgmiignore-class-escape`.
+
 ### metadata scaffold stops at the repository root
 
 `pgmi metadata scaffold` stops its search for the project root at the first
@@ -1389,6 +1399,7 @@ release notes take their "Behaviour changes" section from this table.
 | `pgmi.yaml` negative timeout (`-5s`) | runs, then exit 11 "exceeded --timeout -5s" | refused before connecting, exit 10 | agent 2026-11-12 (PGMI-895), owner may revisit |
 | A host with several addresses fails to connect | only the last address's error, retried when that one is transient | every address's error; a certificate failure among them is final, not retried; exit 11 both | intended |
 | POSIX class such as `[[:space:]]` in `.pgmiignore` | refused, exit 10 | accepted | intended |
+| Backslash inside a class in `.pgmiignore` (`a[\]]b`) | a literal backslash | escapes the next character, as in gitignore | owner 2026-11-13 (PGMI-947) |
 | `invalid configuration:` inside an error message | `failed to scan directory: invalid configuration: .pgmiignore excludes deploy.sql ...` | the same message without the infix; exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
 | Driver error text in connection and retry lines | pgx's text, sorted by pgmi (`server at h:p refused the connection: ...`, `password authentication failed for user "u" on database "d"`, `SSL/TLS connection error: ...`) | each host as `h:p: ` with the server's message and SQLSTATE, or the TLS or driver library's text; the next-step lines and exit codes unchanged | agent 2026-11-12 (PGMI-907), owner may revisit |
 | Azure, AWS and Google sign-in failure text | the Go SDKs' wording, credential chain and troubleshooting links | pgmi's own sign-in chain: one line per credential tried; `connect to "<db>": ` and the exit codes unchanged | agent 2026-11-12 (PGMI-907), owner may revisit |
