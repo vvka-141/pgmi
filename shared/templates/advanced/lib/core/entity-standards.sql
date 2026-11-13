@@ -50,7 +50,7 @@ BEGIN
             ('deleted_at', 'timestamptz', 'Soft-delete timestamp; NULL while active (injected by entity standards reconcile)')
         ) AS c(name, definition, comment)
     LOOP
-        CONTINUE WHEN pg_temp.has_column(p_table, v_column.name);
+        CONTINUE WHEN common.has_column(p_table, v_column.name);
         EXECUTE format('ALTER TABLE %s ADD COLUMN %I %s', p_table, v_column.name, v_column.definition);
         EXECUTE format('COMMENT ON COLUMN %s.%I IS %L', p_table, v_column.name, v_column.comment);
     END LOOP;
@@ -76,8 +76,8 @@ BEGIN
     SELECT string_agg(t.tbl::text, ', ')
     INTO v_missing
     FROM pg_temp.entity_standard_tables() AS t(tbl)
-    WHERE NOT pg_temp.has_column(t.tbl, 'created_at')
-       OR NOT pg_temp.has_column(t.tbl, 'deleted_at');
+    WHERE NOT common.has_column(t.tbl, 'created_at')
+       OR NOT common.has_column(t.tbl, 'deleted_at');
 
     IF v_missing IS NOT NULL THEN
         RAISE EXCEPTION 'Entity standards conformance failure: tables still missing created_at/deleted_at after sweep: %', v_missing;

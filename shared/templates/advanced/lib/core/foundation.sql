@@ -74,10 +74,10 @@ DECLARE
 BEGIN
     SELECT relname INTO v_rel FROM pg_class WHERE oid = p_table;
 
-    ASSERT pg_temp.has_column(p_table, 'organization_id'), format('apply_org_rls: %s must have an organization_id column', p_table);
+    ASSERT common.has_column(p_table, 'organization_id'), format('apply_org_rls: %s must have an organization_id column', p_table);
 
     IF p_has_created_by THEN
-        ASSERT pg_temp.has_column(p_table, 'created_by_user_id'), format('apply_org_rls: %s declares p_has_created_by but lacks created_by_user_id', p_table);
+        ASSERT common.has_column(p_table, 'created_by_user_id'), format('apply_org_rls: %s declares p_has_created_by but lacks created_by_user_id', p_table);
     END IF;
 
     EXECUTE format('ALTER TABLE %s ENABLE ROW LEVEL SECURITY', p_table);

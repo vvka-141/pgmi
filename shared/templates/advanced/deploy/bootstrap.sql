@@ -67,15 +67,6 @@ RETURNS void LANGUAGE sql AS $$
     WHERE current_setting('deploy.bootstrap_quieted', true) = 'on'
 $$;
 
--- Whether a table has a live column of that name. The deploy-time helpers in
--- lib/core call it, from pg_temp and from core routines called only in a
--- deploy; defined here for the same reason as the quieting helpers.
-CREATE FUNCTION pg_temp.has_column(p_table regclass, p_column name)
-RETURNS boolean LANGUAGE sql STABLE AS $$
-    SELECT EXISTS (SELECT FROM pg_attribute
-                   WHERE attrelid = p_table AND attname = p_column AND attnum > 0 AND NOT attisdropped)
-$$;
-
 -- ############################################################################
 -- ROLES - owner, kernel, api and admin, and the database handed to the owner
 -- ############################################################################

@@ -147,6 +147,7 @@ Pure utility functions and domain types shared across every schema.
 
 | File | Purpose |
 |------|---------|
+| `catalog.sql` | `common.has_column(table, column)`: whether a table has a live column; used by the core setup functions and the deploy-time helpers |
 | `cast.sql` | Safe type casting: `common.try_cast(text, default)` overloads (uuid, boolean, integer, bigint, numeric, interval, timestamp, timestamptz, date, inet); whitespace ignored, NaN/infinity/overflow give the default |
 | `cast-operators.sql` | The `common.?>` try-cast operator over `try_cast` (run-once: operators have no `OR REPLACE`). Every pinned `search_path` names `common`, so it resolves everywhere (`lib/__test__/test_common_reach.sql`) |
 | `encoding-structure.sql` | Bytea encoding wrapper types (`common.utf8`, `common.latin1`, `common.win1252`) (run once) |

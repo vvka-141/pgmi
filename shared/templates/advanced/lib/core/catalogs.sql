@@ -36,7 +36,7 @@ BEGIN
 
     SELECT string_agg(DISTINCT k, ', ' ORDER BY k) INTO v_problem
     FROM jsonb_array_elements(p_rows) r, jsonb_object_keys(r) k
-    WHERE NOT pg_temp.has_column(p_table, k);
+    WHERE NOT common.has_column(p_table, k);
     IF v_problem IS NOT NULL THEN
         RETURN format('table %s has no column %s', p_table_name, v_problem);
     END IF;
