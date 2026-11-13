@@ -18,6 +18,7 @@ pub(crate) enum Reason {
     Unterminated(char),
     Ambiguous { key: String, why: Ambiguity },
     Nul,
+    Expands(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +35,10 @@ impl std::fmt::Display for ParseError {
         match &self.reason {
             Reason::NoEquals => f.write_str("invalid format, expected KEY=VALUE"),
             Reason::Nul => f.write_str("a NUL byte cannot be put in the environment"),
+            Reason::Expands(key) => write!(
+                f,
+                "the value of {key} grows past 1 MiB when its variables expand"
+            ),
             Reason::InvalidKey(key) => write!(f, "invalid key {key:?}"),
             Reason::Unterminated(q) => write!(f, "unterminated {q} quote"),
             Reason::Ambiguous { key, why } => {
@@ -242,7 +247,9 @@ fn dotenv(text: &str) -> Result<Vec<(String, String)>, ParseError> {
                         Some(_) => k += 1,
                     }
                 }
-                let v = expand(&unescape(&s[i + 1..k]), &out);
+                let Some(v) = expand(&unescape(&s[i + 1..k]), &out) else {
+                    return fail(Reason::Expands(key));
+                };
                 i = k + 1;
                 v
             }
@@ -261,7 +268,10 @@ fn dotenv(text: &str) -> Result<Vec<(String, String)>, ParseError> {
                     v = rest;
                 }
                 i = end;
-                expand(v, &out)
+                let Some(v) = expand(v, &out) else {
+                    return fail(Reason::Expands(key));
+                };
+                v
             }
         };
         out.push((key, value));
@@ -302,7 +312,10 @@ fn unescape(s: &[char]) -> Vec<char> {
     out
 }
 
-fn expand(s: &[char], earlier: &[(String, String)]) -> String {
+const EXPANDED_MAX: usize = 1 << 20;
+
+/// `s` with its variables expanded; `None` past [`EXPANDED_MAX`] bytes.
+fn expand(s: &[char], earlier: &[(String, String)]) -> Option<String> {
     let lookup = |name: &str| {
         earlier
             .iter()
@@ -343,11 +356,15 @@ fn expand(s: &[char], earlier: &[(String, String)]) -> String {
         } else if name.is_empty() {
             out.extend(&s[start..p]);
         } else {
-            out.push_str(lookup(&name));
+            let value = lookup(&name);
+            if out.len() + value.len() > EXPANDED_MAX {
+                return None;
+            }
+            out.push_str(value);
         }
         k = p;
     }
-    out
+    Some(out)
 }
 
 fn ambiguous(line: usize, key: &str, why: Ambiguity) -> ParseError {
@@ -368,6 +385,18 @@ fn find_comment(s: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_value_that_doubles_on_every_line_is_refused_past_1_mib() {
+        let text = format!("V=xy\n{}", "V=$V$V\n".repeat(40));
+        let started = std::time::Instant::now();
+        let e = parse(&text, Mode::Dotenv).unwrap_err();
+        assert_eq!(e.reason, Reason::Expands("V".into()));
+        assert_eq!(e.line, 21);
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        let fits = format!("V=xy\n{}", "V=$V$V\n".repeat(18));
+        assert_eq!(parse(&fits, Mode::Dotenv).unwrap()[18].1.len(), 1 << 19);
+    }
 
     fn get(v: &[(String, String)], k: &str) -> String {
         v.iter()
