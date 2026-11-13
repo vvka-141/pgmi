@@ -276,10 +276,7 @@ BEGIN
         api.rest_invoke('DELETE', '/agents/' || v_far, v_alice, NULL::bytea),
         api.rest_invoke('POST', '/connections/' || v_id || '/pause', v_alice, NULL::bytea)]
     LOOP
-        IF (v_response).status_code IS DISTINCT FROM 404 THEN
-            RAISE EXCEPTION 'TEST FAILED: a manager reaches only the organization''s agents through /agents, got %',
-                (v_response).status_code;
-        END IF;
+        PERFORM pg_temp.expect_status('a manager reaches only the organization''s agents through /agents', v_response, 404);
     END LOOP;
 
     IF (api.rest_invoke('POST', '/agents/' || v_id || '/pause', v_alice, NULL::bytea)).status_code IS DISTINCT FROM 200 THEN

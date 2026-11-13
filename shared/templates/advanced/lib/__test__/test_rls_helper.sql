@@ -1,6 +1,9 @@
 -- Tests for core.apply_org_rls(): the one-call multi-tenant RLS guardrail.
 -- Runs in a savepoint, so the throwaway table and its policies roll back.
 
+-- ############################################################################
+-- POLICIES - core.apply_org_rls() forces RLS and installs the tenant policies
+-- ############################################################################
 DO $$
 DECLARE
     v_force   boolean;
@@ -8,8 +11,6 @@ DECLARE
     v_count   int;
     v_qual    text;
 BEGIN
-    RAISE NOTICE '-> Testing core.apply_org_rls()';
-
     CREATE TABLE core.rls_probe (
         id                  uuid PRIMARY KEY,
         organization_id     uuid NOT NULL,
@@ -55,8 +56,6 @@ BEGIN
     IF (v_qual !~ 'created_by_user_id') IS NOT FALSE THEN
         RAISE EXCEPTION 'apply_org_rls: insert policy does not pin created_by_user_id (with_check: %)', v_qual;
     END IF;
-
-    RAISE NOTICE '  + ENABLE+FORCE RLS and four org-scoped policies installed';
 END $$;
 
 -- p_has_created_by => false: a table without created_by_user_id is still scoped
@@ -81,12 +80,11 @@ BEGIN
     IF (v_qual !~ 'current_organization_id') IS NOT FALSE THEN
         RAISE EXCEPTION 'apply_org_rls: insert policy not org-scoped without created_by';
     END IF;
-
-    RAISE NOTICE '  + p_has_created_by => false omits the created_by predicate';
 END $$;
 
--- ============================================================================
--- Behaviour, not policy text. Everything above reads pg_class and pg_policies:
+-- ############################################################################
+-- BEHAVIOUR - the policies scope real rows to the organization, read as the owner
+-- Everything above reads pg_class and pg_policies:
 -- break api.current_organization_id() so it matches every org, or revert FORCE to
 -- ENABLE-only, and the catalog is unchanged and every assertion still passes —
 -- while every domain table built on this helper leaks across tenants.
@@ -94,8 +92,7 @@ END $$;
 -- So this block inserts real rows and reads them back as the owner, which runs
 -- every handler: the only thing that can tell a scoped policy from a
 -- decorative one.
--- ============================================================================
-
+-- ############################################################################
 DO $$
 DECLARE
     v_alice    uuid;
@@ -106,8 +103,6 @@ DECLARE
     v_affected int;
     v_denied   boolean := false;
 BEGIN
-    RAISE NOTICE '-> Testing core.apply_org_rls() behaviour as the owner';
-
     v_alice := pg_temp.test_login('google', 'rls-alice', 'rls-alice@example.test', 'RLS Alice', true);
     v_bob := pg_temp.test_login('github', 'rls-bob', 'rls-bob@example.test', 'RLS Bob', true);
 
@@ -211,8 +206,5 @@ BEGIN
         RAISE EXCEPTION 'apply_org_rls: Alice could not update her own row (% affected) — the policies deny everything',
             v_affected;
     END IF;
-
-    RAISE NOTICE '  + rows are org-scoped for select, insert, update and delete, and FORCE holds through a SECURITY DEFINER kernel';
 END $$;
 
-DO $$ BEGIN RAISE NOTICE '+ core.apply_org_rls tests passed'; END $$;

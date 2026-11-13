@@ -5,16 +5,6 @@
 -- handler is test_access_matrix.sql; this file checks what each one does.
 -- ============================================================================
 
-CREATE FUNCTION pg_temp.expect_status(p_label text, p_response api.http_response, p_status int)
-RETURNS jsonb LANGUAGE plpgsql AS $$
-BEGIN
-    IF (p_response).status_code IS DISTINCT FROM p_status THEN
-        RAISE EXCEPTION 'TEST FAILED: % expected %, got %: %', p_label, p_status, (p_response).status_code,
-            api.content_json((p_response).content);
-    END IF;
-    RETURN api.content_json((p_response).content);
-END $$;
-
 DO $$
 DECLARE
     v_acme       uuid := current_setting('test.acme_org_id')::uuid;

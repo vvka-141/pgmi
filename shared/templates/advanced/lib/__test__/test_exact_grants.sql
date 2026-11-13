@@ -17,6 +17,7 @@
 -- than the owner) are not the application's and are left out.
 -- ============================================================================
 
+-- One query, one UNION branch per rule; each row names the rule it breaks.
 CREATE FUNCTION pg_temp.grant_drift()
 RETURNS TABLE (role_name text, routine text, problem text)
 LANGUAGE sql

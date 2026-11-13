@@ -134,13 +134,9 @@ BEGIN
     v_other_web := pg_temp.test_session_headers(current_setting('test.alice_subject'), v_other, ARRAY['pwd', 'mfa']);
 
     v_response := api.rest_invoke('POST', '/connections', v_web, '{"clientName": "Desktop assistant"}'::jsonb);
-    IF (v_response).status_code IS DISTINCT FROM 400 THEN
-        RAISE EXCEPTION 'TEST FAILED: approval without organizationId and roleId expected 400, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('approval without organizationId and roleId', v_response, 400);
     v_response := api.rest_invoke('POST', '/connections', v_web, jsonb_build_object('clientName', ' padded ', 'organizationId', v_acme, 'roleId', 'agent.reader'));
-    IF (v_response).status_code IS DISTINCT FROM 422 THEN
-        RAISE EXCEPTION 'TEST FAILED: a padded client name expected 422, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('a padded client name', v_response, 422);
     PERFORM pg_temp.test_act_as(current_setting('test.alice_subject'), v_acme, true);
     SELECT * INTO v_approved FROM membership.fn_approve_connection(v_acme, 'agent.reader', 'From SQL', 30);
     PERFORM pg_temp.test_act_as(NULL);

@@ -49,9 +49,7 @@ BEGIN
     SELECT * INTO v_login FROM api.open_login_session(
         'https://idp.example.com', 'samlp|acme-sso|alice', 'alice@acme-sso.example', NULL, true, '{}');
     v_response := api.rest_invoke('GET', '/me', extensions.hstore('x-login-session', v_login.token), NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'TEST FAILED: samlp alice GET /me expected 200, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('samlp alice GET /me', v_response, 200);
     v_alice := api.content_json((v_response).content)->>'principalId';
 
     SELECT * INTO v_login FROM api.open_login_session(

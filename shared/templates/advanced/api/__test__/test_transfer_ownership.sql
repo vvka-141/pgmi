@@ -46,9 +46,7 @@ BEGIN
 
     v_response := api.rest_invoke('PUT', format('/members/%s/roles/org.admin', v_bob_member),
         pg_temp.test_session_headers(current_setting('test.alice_subject'), v_acme), NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 201 THEN
-        RAISE EXCEPTION 'TEST FAILED: Alice must make Bob an admin, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('Alice must make Bob an admin', v_response, 201);
 
     v_response := pg_temp.transfer(current_setting('test.bob_subject'), v_bob);
     v_error := api.content_json((v_response).content)->'error';

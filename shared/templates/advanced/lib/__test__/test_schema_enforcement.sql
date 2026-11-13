@@ -190,8 +190,6 @@ $body$);
     END IF;
 
     v_response := api.rest_invoke('POST', '/schema-ref-probe', ''::extensions.hstore, '{"owner": {"name": "Ann"}}'::jsonb);
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'TEST FAILED: a conforming REST body must reach the handler, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('a conforming REST body must reach the handler', v_response, 200);
     RAISE DEBUG '  + REST follows nested component references and refuses false';
 END $$;

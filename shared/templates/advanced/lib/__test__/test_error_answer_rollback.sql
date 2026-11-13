@@ -27,9 +27,7 @@ END;
 $body$);
 
     v_response := api.rest_invoke('POST', '/error-answer-probe', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 409 THEN
-        RAISE EXCEPTION 'TEST FAILED: the REST probe must answer 409, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('the REST probe must answer 409', v_response, 409);
     IF EXISTS (SELECT FROM pg_temp.error_answer_probe WHERE protocol = 'rest') THEN
         RAISE EXCEPTION 'TEST FAILED: a REST 409 answer kept the handler''s write';
     END IF;
@@ -52,9 +50,7 @@ $body$);
 
     v_response := api.rpc_invoke(api.rpc_resolve('test.errorAnswer'), ''::extensions.hstore,
         convert_to('{"jsonrpc":"2.0","method":"test.errorAnswer","id":1}', 'UTF8'));
-    IF (v_response).status_code IS DISTINCT FROM 400 THEN
-        RAISE EXCEPTION 'TEST FAILED: the RPC probe must answer 400, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('the RPC probe must answer 400', v_response, 400);
     IF EXISTS (SELECT FROM pg_temp.error_answer_probe WHERE protocol = 'rpc') THEN
         RAISE EXCEPTION 'TEST FAILED: an RPC error answer kept the handler''s write';
     END IF;

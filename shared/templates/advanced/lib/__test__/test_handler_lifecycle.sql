@@ -1,25 +1,17 @@
 -- ============================================================================
--- Test: Handler Lifecycle and Content Negotiation
--- ============================================================================
--- Validates the full handler round-trip with transactional rollback:
---   • Handler registration
---   • Request invocation
---   • Queue logging verification
---   • Content negotiation (Accept header enforcement)
+-- Test: a registered handler answers and is logged; the gateway enforces
+-- Accept and Content-Type; registration refuses unsafe or colliding names
 -- ============================================================================
 
+-- ############################################################################
+-- LIFECYCLE - a registered handler answers its route and lands in the exchange log
+-- ############################################################################
 DO $$
 DECLARE
     v_handler_id uuid := 'ffffffff-0001-4000-8000-000000000001';
     v_response api.http_response;
-    v_queue_count int;
+    v_logged     int;
 BEGIN
-    RAISE NOTICE '-> Testing Handler Lifecycle';
-
-    -- ========================================================================
-    -- Test: Register handler, invoke, verify queue logging
-    -- ========================================================================
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', v_handler_id,
@@ -37,23 +29,16 @@ END;
         $body$
     );
 
-    RAISE NOTICE '  + Handler registered';
-
-    -- Invoke handler
     v_response := api.rest_invoke('GET', '/test-lifecycle', ''::extensions.hstore, NULL::bytea);
 
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'Handler invocation failed: %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('Handler invocation failed', v_response, 200);
 
-    RAISE NOTICE '  + Handler invoked';
-
-    SELECT COUNT(*) INTO v_queue_count
+    SELECT COUNT(*) INTO v_logged
     FROM api.exchange
     WHERE handler_object_id = v_handler_id;
 
-    IF v_queue_count IS DISTINCT FROM 1 THEN
-        RAISE EXCEPTION 'Expected 1 exchange entry, got %', v_queue_count;
+    IF v_logged IS DISTINCT FROM 1 THEN
+        RAISE EXCEPTION 'Expected 1 exchange entry, got %', v_logged;
     END IF;
 
     IF NOT EXISTS (
@@ -62,19 +47,17 @@ END;
     ) THEN
         RAISE EXCEPTION 'REST exchange not logged';
     END IF;
-
-    RAISE NOTICE '  + Exchange logging verified';
-
-    RAISE NOTICE '+ Handler Lifecycle tests passed';
 END $$;
 
+-- ############################################################################
+-- CONTENT NEGOTIATION - an Accept the route cannot produce is 406, a body type
+-- it does not take is 415
+-- ############################################################################
 DO $$
 DECLARE
     v_handler_id uuid := 'ffffffff-0002-4000-8000-000000000001';
     v_response api.http_response;
 BEGIN
-    RAISE NOTICE '-> Testing Content Negotiation';
-
     -- Register a handler for content negotiation tests
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
@@ -93,52 +76,31 @@ END;
         $body$
     );
 
-    -- ========================================================================
-    -- Test: Accept: application/json -> 200 (matches default produces)
-    -- ========================================================================
-
+    -- Accept: application/json -> 200 (matches default produces)
     v_response := api.rest_invoke(
         'GET', '/test-content-nego',
         'accept=>application/json'::extensions.hstore,
         NULL::bytea
     );
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'Accept: application/json should return 200, got %', (v_response).status_code;
-    END IF;
-    RAISE NOTICE '  + Accept: application/json -> 200';
+    PERFORM pg_temp.expect_status('Accept: application/json should return 200', v_response, 200);
 
-    -- ========================================================================
-    -- Test: Accept: */* -> 200 (wildcard)
-    -- ========================================================================
-
+    -- Accept: */* -> 200 (wildcard)
     v_response := api.rest_invoke(
         'GET', '/test-content-nego',
         'accept=>*/*'::extensions.hstore,
         NULL::bytea
     );
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'Accept: */* should return 200, got %', (v_response).status_code;
-    END IF;
-    RAISE NOTICE '  + Accept: */* -> 200';
+    PERFORM pg_temp.expect_status('Accept: */* should return 200', v_response, 200);
 
-    -- ========================================================================
-    -- Test: Accept: application/xml -> 406 (not supported)
-    -- ========================================================================
-
+    -- Accept: application/xml -> 406 (not supported)
     v_response := api.rest_invoke(
         'GET', '/test-content-nego',
         'accept=>application/xml'::extensions.hstore,
         NULL::bytea
     );
-    IF (v_response).status_code IS DISTINCT FROM 406 THEN
-        RAISE EXCEPTION 'Accept: application/xml should return 406, got %', (v_response).status_code;
-    END IF;
-    RAISE NOTICE '  + Accept: application/xml -> 406 Not Acceptable';
+    PERFORM pg_temp.expect_status('Accept: application/xml should return 406', v_response, 406);
 
-    -- ========================================================================
-    -- Test: handler.accepts enforcement -> 415 on unsupported request body type
-    -- ========================================================================
-
+    -- handler.accepts enforcement -> 415 on unsupported request body type
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'dddddddd-0050-4000-8000-000000000001',
@@ -162,49 +124,29 @@ END;
         extensions.hstore('content-type', 'application/json; charset=utf-8'),
         convert_to('{}', 'UTF8')
     );
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'Content-Type application/json should be accepted (200), got %', (v_response).status_code;
-    END IF;
-    RAISE NOTICE '  + Content-Type: application/json -> 200 (declared accepts)';
+    PERFORM pg_temp.expect_status('Content-Type application/json should be accepted (200)', v_response, 200);
 
     v_response := api.rest_invoke(
         'POST', '/test-accepts',
         extensions.hstore('content-type', 'application/xml'),
         convert_to('<x/>', 'UTF8')
     );
-    IF (v_response).status_code IS DISTINCT FROM 415 THEN
-        RAISE EXCEPTION 'Content-Type application/xml should return 415, got %', (v_response).status_code;
-    END IF;
-    RAISE NOTICE '  + Content-Type: application/xml -> 415 Unsupported Media Type';
+    PERFORM pg_temp.expect_status('Content-Type application/xml should return 415', v_response, 415);
 
-    -- ========================================================================
-    -- Test: No Accept header -> 200 (no preference)
-    -- ========================================================================
-
+    -- No Accept header -> 200 (no preference)
     v_response := api.rest_invoke('GET', '/test-content-nego', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'No Accept header should return 200, got %', (v_response).status_code;
-    END IF;
-    RAISE NOTICE '  + No Accept header -> 200';
+    PERFORM pg_temp.expect_status('No Accept header should return 200', v_response, 200);
 
-    -- ========================================================================
-    -- Test: Accept with multiple types including json -> 200
-    -- ========================================================================
-
+    -- Accept with multiple types including json -> 200
     v_response := api.rest_invoke(
         'GET', '/test-content-nego',
         '"accept"=>"text/html, application/json, text/plain"'::extensions.hstore,
         NULL::bytea
     );
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'Accept with json in list should return 200, got %', (v_response).status_code;
-    END IF;
-    RAISE NOTICE '  + Accept: text/html, application/json, text/plain -> 200';
+    PERFORM pg_temp.expect_status('Accept with json in list should return 200', v_response, 200);
 
-    -- ========================================================================
     -- Media-range Accept must not false-406, and a superstring
     -- subtype must not false-accept.
-    -- ========================================================================
 
     -- Accept: application/* matches a JSON-producing handler (no false 406).
     v_response := api.rest_invoke(
@@ -212,10 +154,7 @@ END;
         'accept=>application/*'::extensions.hstore,
         NULL::bytea
     );
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'Accept: application/* should match application/json (200), got %', (v_response).status_code;
-    END IF;
-    RAISE NOTICE '  + Accept: application/* -> 200 (media range, no false 406)';
+    PERFORM pg_temp.expect_status('Accept: application/* should match application/json (200)', v_response, 200);
 
     -- Accept: application/json-patch+json must NOT match application/json.
     v_response := api.rest_invoke(
@@ -223,26 +162,18 @@ END;
         'accept=>application/json-patch+json'::extensions.hstore,
         NULL::bytea
     );
-    IF (v_response).status_code IS DISTINCT FROM 406 THEN
-        RAISE EXCEPTION 'Accept: application/json-patch+json must NOT match application/json (expected 406), got %', (v_response).status_code;
-    END IF;
-    RAISE NOTICE '  + Accept: application/json-patch+json -> 406 (no false accept)';
-
-    RAISE NOTICE '+ Content Negotiation tests passed';
+    PERFORM pg_temp.expect_status('Accept: application/json-patch+json must NOT match application/json', v_response, 406);
 END $$;
 
--- ============================================================================
--- Test: REST route resolution strips query string before regex match.
--- Patterns no longer need '(\?.*)?$' boilerplate.
--- ============================================================================
-
+-- ############################################################################
+-- QUERY STRINGS - route resolution strips the query string before the path
+-- regex matches
+-- ############################################################################
 DO $$
 DECLARE
     v_handler_id uuid := 'ffffffff-c004-4000-8000-000000000001';
     v_response api.http_response;
 BEGIN
-    RAISE NOTICE '-> Testing REST query-string-aware routing';
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', v_handler_id,
@@ -259,28 +190,20 @@ END;
     );
 
     v_response := api.rest_invoke('GET', '/qs-probe', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'route should match bare path: %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('route should match bare path', v_response, 200);
 
     v_response := api.rest_invoke('GET', '/qs-probe?foo=bar&baz=quux', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'route should match path with query string (gateway strips it): %', (v_response).status_code;
-    END IF;
-
-    RAISE NOTICE '  + REST routes match path-only; query string ignored';
+    PERFORM pg_temp.expect_status('route should match path with query string (gateway strips it)', v_response, 200);
 END $$;
 
--- ============================================================================
--- Test: handler registration rejects names that risk identifier truncation
--- ============================================================================
-
+-- ############################################################################
+-- NAMES - registration refuses a name that would be truncated as an identifier,
+-- or is empty; a rename drops the old function
+-- ############################################################################
 DO $$
 DECLARE
     v_caught boolean := false;
 BEGIN
-    RAISE NOTICE '-> Testing handler name validation';
-
     BEGIN
         PERFORM api.create_or_replace_rest_handler(
             jsonb_build_object(
@@ -329,8 +252,6 @@ BEGIN
     IF v_caught IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'expected validation error for empty handler name';
     END IF;
-
-    RAISE NOTICE '  + Handler name validation rejects oversized and empty names';
 END $$;
 
 DO $$
@@ -340,8 +261,6 @@ DECLARE
     v_beta_exists boolean;
     v_registered text;
 BEGIN
-    RAISE NOTICE '-> Testing handler rename drops the orphaned function';
-
     -- Register under the first name
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
@@ -391,25 +310,18 @@ BEGIN
     IF v_registered IS DISTINCT FROM 'rename_beta' THEN
         RAISE EXCEPTION 'registry should point at rename_beta, got %', v_registered;
     END IF;
-
-    RAISE NOTICE '  + Renaming a handler drops the old function and leaves no orphan';
 END $$;
 
 DO $$
 BEGIN
-    RAISE NOTICE '';
-    RAISE NOTICE '===============================================================';
-    RAISE NOTICE '+ ALL HANDLER LIFECYCLE AND CONTENT NEGOTIATION TESTS PASSED';
-    RAISE NOTICE '===============================================================';
 END $$;
 
--- ============================================================================
--- Test: a handler name cannot be claimed by two handlers
+-- ############################################################################
+-- COLLISIONS - a name, a folded name or an id is claimed by one handler only
 -- Names become function names (api.<name>), so a second CREATE OR REPLACE would
 -- overwrite the first handler's body. Registration must refuse and say who owns
--- the name — not fail with a raw constraint violation that names neither.
--- ============================================================================
-
+-- the name, not fail with a raw constraint violation that names neither.
+-- ############################################################################
 DO $$
 DECLARE
     v_first  uuid := 'ffffffff-0186-4000-8000-000000000001';
@@ -417,8 +329,6 @@ DECLARE
     v_message text;
     v_body text;
 BEGIN
-    RAISE NOTICE '-> Testing REST handler name-collision guard';
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object('id', v_first, 'path', '/collide-first', 'httpMethod', '^GET$',
             'name', 'collision_probe', 'access', 'public', 'autoLog', false),
@@ -442,15 +352,11 @@ BEGIN
         RAISE EXCEPTION 'TEST FAILED: the error must name the route and the handler that owns it, got: %', v_message;
     END IF;
 
-    RAISE NOTICE '  + A colliding REST name is refused, naming the handler that owns it';
-
     -- And the incumbent still runs its OWN body — the whole point of the guard.
     v_body := convert_from((api.rest_invoke('GET', '/collide-first')).content, 'UTF8');
     IF coalesce(v_body, '') NOT LIKE '%first%' THEN
         RAISE EXCEPTION 'TEST FAILED: the incumbent handler''s body was overwritten, got: %', v_body;
     END IF;
-
-    RAISE NOTICE '  + The incumbent handler still executes its own body';
 
     -- Re-registering under the SAME id must still work: that is a replacement,
     -- not a collision. A guard that blocked this would break every redeploy.
@@ -464,9 +370,6 @@ BEGIN
     IF coalesce(v_body, '') NOT LIKE '%first-v2%' THEN
         RAISE EXCEPTION 'TEST FAILED: re-registering the same id must replace the body, got: %', v_body;
     END IF;
-
-    RAISE NOTICE '  + Re-registering the same id still replaces the handler (not a collision)';
-    RAISE NOTICE '✓ REST name-collision tests passed';
 END $$;
 
 DO $$
@@ -475,8 +378,6 @@ DECLARE
     v_second uuid := 'ffffffff-0186-4000-8000-000000000004';
     v_message text;
 BEGIN
-    RAISE NOTICE '-> Testing MCP handler name-collision guard';
-
     PERFORM api.create_or_replace_mcp_handler(
         jsonb_build_object('id', v_first, 'type', 'tool', 'effect', 'read', 'name', 'mcp_collision_probe',
             'description', 'first', 'access', 'public'),
@@ -498,22 +399,17 @@ BEGIN
     IF coalesce(v_message, '') NOT LIKE '%mcp_collision_probe%' OR coalesce(v_message, '') NOT LIKE '%' || v_first::text || '%' THEN
         RAISE EXCEPTION 'TEST FAILED: MCP collision must report a clean, attributable error, got: %', v_message;
     END IF;
-
-    RAISE NOTICE '  + A colliding MCP name is refused with an attributable error';
-    RAISE NOTICE '✓ MCP name-collision tests passed';
 END $$;
 
 -- RPC and MCP fold '.' and '-' to '_' when deriving the function name, so two
 -- distinct names can claim one function. The raw-name guards above cannot see
--- that; the second registration used to replace the first handler's body and
--- then fail on handler_func with a message naming neither.
+-- that; unguarded, the second registration replaces the first handler's body
+-- and then fails on handler_func with a message naming neither.
 DO $$
 DECLARE
     v_case    record;
     v_message text;
 BEGIN
-    RAISE NOTICE '-> Testing folded-name collisions for RPC and MCP';
-
     PERFORM api.create_or_replace_rpc_handler(
         jsonb_build_object('id', 'ffffffff-0290-4000-8000-000000000001',
             'methodName', 'reports.run', 'access', 'public'),
@@ -558,9 +454,6 @@ BEGIN
             RAISE EXCEPTION 'TEST FAILED: the refused % registration replaced the body of %', v_case.kind, v_case.fn;
         END IF;
     END LOOP;
-
-    RAISE NOTICE '  + Folded-name collisions are refused before the incumbent is touched';
-    RAISE NOTICE '✓ Folded-name collision tests passed';
 END $$;
 
 -- An id belongs to one protocol: reusing it for another is refused and the

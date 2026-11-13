@@ -15,12 +15,7 @@ DECLARE
     v_route_id uuid;
     v_exchange_detail text;
 BEGIN
-    RAISE NOTICE '→ Testing Gateway Error Handling';
-
-    -- ========================================================================
     -- Register handlers that deliberately throw exceptions
-    -- ========================================================================
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-e001-4000-8000-000000000001',
@@ -67,17 +62,12 @@ END;
         $body$
     );
 
-    -- ========================================================================
-    -- Test: REST error handling
+    -- REST error handling
     -- Client receives: sanitized error (no internal details exposed)
     -- Exchange table: full error logged for debugging
-    -- ========================================================================
-
     v_response := api.rest_invoke('GET', '/test-error-rest', ''::extensions.hstore, NULL::bytea);
 
-    IF (v_response).status_code IS DISTINCT FROM 500 THEN
-        RAISE EXCEPTION 'TEST FAILED: REST error should return 500, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('REST error should return 500', v_response, 500);
 
     v_content := api.content_json((v_response).content);
 
@@ -105,14 +95,9 @@ END;
         RAISE EXCEPTION 'TEST FAILED: REST exchange table should contain full error for debugging, got: %', v_exchange_detail;
     END IF;
 
-    RAISE NOTICE '  ✓ REST: Client gets sanitized error, exchange table has full error for debugging';
-
-    -- ========================================================================
-    -- Test: RPC error handling
+    -- RPC error handling
     -- Client receives: sanitized error
     -- Exchange table: full error logged for debugging
-    -- ========================================================================
-
     v_route_id := api.rpc_resolve('test.error');
     v_response := api.rpc_invoke(
         v_route_id,
@@ -150,14 +135,9 @@ END;
         RAISE EXCEPTION 'TEST FAILED: RPC exchange table should contain full error for debugging, got: %', v_exchange_detail;
     END IF;
 
-    RAISE NOTICE '  ✓ RPC: Client gets sanitized error, exchange table has full error for debugging';
-
-    -- ========================================================================
-    -- Test: MCP tool error handling
+    -- MCP tool error handling
     -- Client receives: sanitized error
     -- Exchange table: full error logged for debugging
-    -- ========================================================================
-
     v_mcp_response := api.mcp_call_tool('test_error_tool', '{}'::jsonb, NULL, '"err-req-1"'::jsonb);
 
     IF (v_mcp_response).envelope->>'jsonrpc' IS DISTINCT FROM '2.0' THEN
@@ -165,7 +145,7 @@ END;
     END IF;
 
     -- MCP spec: tool *execution* failures MUST use result.isError=true, NOT
-    -- the JSON-RPC error envelope. Reflects the C1 fix from Wave A.
+    -- the JSON-RPC error envelope.
     IF (v_mcp_response).envelope->'error' IS NOT NULL THEN
         RAISE EXCEPTION 'TEST FAILED: Tool execution failure must NOT use JSON-RPC error channel (got %)', (v_mcp_response).envelope->'error';
     END IF;
@@ -200,13 +180,8 @@ END;
         RAISE EXCEPTION 'TEST FAILED: MCP exchange table should contain full error for debugging, got: %', v_exchange_detail;
     END IF;
 
-    RAISE NOTICE '  ✓ MCP: Client gets sanitized error, exchange table has full error for debugging';
-
-    -- ========================================================================
-    -- Test: constraint violations map to 4xx (not a blanket 500)
+    -- constraint violations map to 4xx (not a blanket 500)
     -- An uncaught unique_violation is semantically 409 Conflict.
-    -- ========================================================================
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-e004-4000-8000-000000000001',
@@ -238,14 +213,11 @@ END;
     );
 
     v_response := api.rest_invoke('GET', '/test-conflict-rest', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 409 THEN
-        RAISE EXCEPTION 'TEST FAILED: REST unique_violation should map to 409, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('REST unique_violation should map to 409', v_response, 409);
     v_content := api.content_json((v_response).content);
     IF v_content->>'detail' LIKE '%duplicate key value for test%' THEN
         RAISE EXCEPTION 'TEST FAILED: REST 409 must not leak the raw SQLERRM to clients';
     END IF;
-    RAISE NOTICE '  ✓ REST: unique_violation maps to sanitized 409 Conflict';
 
     v_route_id := api.rpc_resolve('test.conflict');
     v_response := api.rpc_invoke(
@@ -253,9 +225,7 @@ END;
         ''::extensions.hstore,
         convert_to('{"jsonrpc": "2.0", "method": "test.conflict", "id": "conf-1"}', 'UTF8')
     );
-    IF (v_response).status_code IS DISTINCT FROM 409 THEN
-        RAISE EXCEPTION 'TEST FAILED: RPC unique_violation should map to HTTP 409, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('RPC unique_violation should map to HTTP 409', v_response, 409);
     v_content := api.content_json((v_response).content);
     IF (v_content->'error'->>'code')::int IS DISTINCT FROM -32602 THEN
         RAISE EXCEPTION 'TEST FAILED: RPC client-error should use code -32602, got %', v_content->'error'->>'code';
@@ -263,7 +233,4 @@ END;
     IF v_content->'error'->>'message' LIKE '%duplicate key value for test%' THEN
         RAISE EXCEPTION 'TEST FAILED: RPC 409 must not leak the raw SQLERRM to clients';
     END IF;
-    RAISE NOTICE '  ✓ RPC: unique_violation maps to sanitized HTTP 409 / -32602';
-
-    RAISE NOTICE '✓ Gateway Error Handling tests passed';
 END $$;

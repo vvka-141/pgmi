@@ -111,9 +111,7 @@ BEGIN
         v_response := api.rest_invoke('POST', '/organizations',
             pg_temp.test_session_headers(current_setting('test.bob_subject'), current_setting('test.acme_org_id')::uuid),
             '{"name": "Bob Elsewhere", "slug": "bob-elsewhere"}'::jsonb);
-        IF (v_response).status_code IS DISTINCT FROM 409 THEN
-            RAISE EXCEPTION 'TEST FAILED: self-serve inside an organization session expected 409, got %', (v_response).status_code;
-        END IF;
+        PERFORM pg_temp.expect_status('self-serve inside an organization session', v_response, 409);
     ELSIF (v_response).status_code IS DISTINCT FROM 405
           OR v_after IS DISTINCT FROM v_count THEN
         RAISE EXCEPTION 'TEST FAILED: without the self-serve handler POST /organizations must be 405 and create nothing, got %',

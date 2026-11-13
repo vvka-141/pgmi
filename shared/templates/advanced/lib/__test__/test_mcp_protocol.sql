@@ -1,20 +1,18 @@
 -- ============================================================================
--- Test: MCP Protocol Layer
--- ============================================================================
--- Validates the MCP protocol functions: both eras, the builders, the dispatcher.
+-- Test: the MCP protocol functions answer as the specification says, in both
+-- eras - the handshake, the dispatcher, request and definition validation,
+-- discovery, and the envelope a handler returns
 -- ============================================================================
 
+-- ############################################################################
+-- INITIALIZE - answers the negotiated version, server info and capabilities;
+-- a missing version is -32602
+-- ############################################################################
 DO $$
 DECLARE
     v_response api.mcp_response;
     v_envelope jsonb;
 BEGIN
-    RAISE NOTICE '-> Testing MCP Initialize Handshake';
-
-    -- ========================================================================
-    -- Test: Initialize with valid protocol version
-    -- ========================================================================
-
     v_response := api.mcp_initialize('{"protocolVersion":"2024-11-05"}'::jsonb, '"init-1"'::jsonb);
     v_envelope := (v_response).envelope;
 
@@ -40,10 +38,6 @@ BEGIN
 
     RAISE DEBUG '  + Initialize returns protocolVersion, serverInfo, capabilities';
 
-    -- ========================================================================
-    -- Test: Initialize with missing protocol version
-    -- ========================================================================
-
     v_response := api.mcp_initialize('{}'::jsonb, '"init-2"'::jsonb);
     v_envelope := (v_response).envelope;
 
@@ -57,12 +51,9 @@ BEGIN
 
     RAISE DEBUG '  + Initialize without protocolVersion returns -32602';
 
-    -- ========================================================================
-    -- Test: Initialize negotiates an unknown version to the server's best
+    -- Initialize negotiates an unknown version to the server's best
     -- (per the MCP lifecycle, the server suggests a version it supports rather
     -- than erroring).
-    -- ========================================================================
-
     v_response := api.mcp_initialize('{"protocolVersion":"1999-01-01"}'::jsonb, '"init-3"'::jsonb);
     v_envelope := (v_response).envelope;
 
@@ -76,11 +67,8 @@ BEGIN
 
     RAISE DEBUG '  + Initialize negotiates unknown version to server best (2025-11-25)';
 
-    -- ========================================================================
-    -- Test: a current client version (2025-06-18) completes initialize and is
+    -- a current client version (2025-06-18) completes initialize and is
     -- echoed back.
-    -- ========================================================================
-
     v_response := api.mcp_initialize('{"protocolVersion":"2025-06-18"}'::jsonb, '"init-4"'::jsonb);
     v_envelope := (v_response).envelope;
 
@@ -99,13 +87,14 @@ BEGIN
     RAISE DEBUG '+ MCP Initialize tests passed';
 END $$;
 
+-- ############################################################################
+-- PING - answers an empty result under the request id
+-- ############################################################################
 DO $$
 DECLARE
     v_response api.mcp_response;
     v_envelope jsonb;
 BEGIN
-    RAISE NOTICE '-> Testing MCP Ping';
-
     v_response := api.mcp_ping('"ping-1"'::jsonb);
     v_envelope := (v_response).envelope;
 
@@ -125,17 +114,15 @@ BEGIN
     RAISE DEBUG '+ MCP Ping tests passed';
 END $$;
 
+-- ############################################################################
+-- DISPATCH - every method reaches its function; a notification gets no answer;
+-- a malformed request is -32600, an unknown method -32601
+-- ############################################################################
 DO $$
 DECLARE
     v_response api.mcp_response;
     v_envelope jsonb;
 BEGIN
-    RAISE NOTICE '-> Testing MCP Dispatcher';
-
-    -- ========================================================================
-    -- Test: Dispatcher routes initialize
-    -- ========================================================================
-
     v_response := api.mcp_handle_request('{"jsonrpc":"2.0","id":"d1","method":"initialize","params":{"protocolVersion":"2024-11-05"}}'::jsonb);
     v_envelope := (v_response).envelope;
 
@@ -144,10 +131,6 @@ BEGIN
     END IF;
 
     RAISE DEBUG '  + Dispatcher routes initialize';
-
-    -- ========================================================================
-    -- Test: notifications/* is a no-op even when the client supplies an id
-    -- ========================================================================
 
     -- The dispatcher short-circuits on a missing id OR a notifications/* method.
     -- The id-less path is covered inline; this is the only coverage of the
@@ -162,10 +145,6 @@ BEGIN
 
     RAISE DEBUG '  + Dispatcher treats notifications/* as no-op even with an id';
 
-    -- ========================================================================
-    -- Test: Dispatcher routes ping
-    -- ========================================================================
-
     v_response := api.mcp_handle_request('{"jsonrpc":"2.0","id":"d3","method":"ping"}'::jsonb);
     v_envelope := (v_response).envelope;
 
@@ -174,10 +153,6 @@ BEGIN
     END IF;
 
     RAISE DEBUG '  + Dispatcher routes ping';
-
-    -- ========================================================================
-    -- Test: Dispatcher routes tools/list
-    -- ========================================================================
 
     v_response := api.mcp_handle_request('{"jsonrpc":"2.0","id":"d4","method":"tools/list"}'::jsonb);
     v_envelope := (v_response).envelope;
@@ -188,10 +163,6 @@ BEGIN
 
     RAISE DEBUG '  + Dispatcher routes tools/list';
 
-    -- ========================================================================
-    -- Test: Dispatcher routes resources/list
-    -- ========================================================================
-
     v_response := api.mcp_handle_request('{"jsonrpc":"2.0","id":"d5","method":"resources/list"}'::jsonb);
     v_envelope := (v_response).envelope;
 
@@ -200,10 +171,6 @@ BEGIN
     END IF;
 
     RAISE DEBUG '  + Dispatcher routes resources/list';
-
-    -- ========================================================================
-    -- Test: Dispatcher routes prompts/list
-    -- ========================================================================
 
     v_response := api.mcp_handle_request('{"jsonrpc":"2.0","id":"d6","method":"prompts/list"}'::jsonb);
     v_envelope := (v_response).envelope;
@@ -214,10 +181,6 @@ BEGIN
 
     RAISE DEBUG '  + Dispatcher routes prompts/list';
 
-    -- ========================================================================
-    -- Test: Dispatcher returns -32601 for unknown method
-    -- ========================================================================
-
     v_response := api.mcp_handle_request('{"jsonrpc":"2.0","id":"d7","method":"unknown/method"}'::jsonb);
     v_envelope := (v_response).envelope;
 
@@ -226,10 +189,6 @@ BEGIN
     END IF;
 
     RAISE DEBUG '  + Dispatcher returns -32601 for unknown method';
-
-    -- ========================================================================
-    -- Test: Dispatcher returns -32600 for missing jsonrpc
-    -- ========================================================================
 
     v_response := api.mcp_handle_request('{"id":"d8","method":"ping"}'::jsonb);
     v_envelope := (v_response).envelope;
@@ -240,10 +199,6 @@ BEGIN
 
     RAISE DEBUG '  + Dispatcher returns -32600 for missing jsonrpc';
 
-    -- ========================================================================
-    -- Test: Dispatcher returns -32600 for missing method
-    -- ========================================================================
-
     v_response := api.mcp_handle_request('{"jsonrpc":"2.0","id":"d9"}'::jsonb);
     v_envelope := (v_response).envelope;
 
@@ -252,10 +207,6 @@ BEGIN
     END IF;
 
     RAISE DEBUG '  + Dispatcher returns -32600 for missing method';
-
-    -- ========================================================================
-    -- Test: Dispatcher returns -32600 for null request
-    -- ========================================================================
 
     v_response := api.mcp_handle_request(NULL);
     v_envelope := (v_response).envelope;
@@ -269,13 +220,14 @@ BEGIN
     RAISE DEBUG '+ MCP Dispatcher tests passed';
 END $$;
 
+-- ############################################################################
+-- ROUND TRIP - a registered tool is listed after initialize and answers tools/call
+-- ############################################################################
 DO $$
 DECLARE
     v_response api.mcp_response;
     v_envelope jsonb;
 BEGIN
-    RAISE NOTICE '-> Testing MCP Full Round-Trip';
-
     -- Register a test tool for this test block
     PERFORM api.create_or_replace_mcp_handler(
         jsonb_build_object(
@@ -301,10 +253,6 @@ BEGIN
 END;
         $body$
     );
-
-    -- ========================================================================
-    -- Test: Initialize -> tools/list -> tools/call round trip
-    -- ========================================================================
 
     -- Step 1: Initialize
     v_response := api.mcp_handle_request('{"jsonrpc":"2.0","id":"rt1","method":"initialize","params":{"protocolVersion":"2024-11-05"}}'::jsonb);
@@ -350,14 +298,16 @@ END;
     RAISE DEBUG '+ MCP Full Round-Trip tests passed';
 END $$;
 
+-- ############################################################################
+-- RESOURCE TEMPLATES - listed apart from concrete resources; overlapping
+-- templates route by literal characters, then by name
+-- ############################################################################
 DO $$
 DECLARE
     v_response api.mcp_response;
     v_envelope jsonb;
     v_case     record;
 BEGIN
-    RAISE NOTICE '→ Testing MCP resource templates discovery + deterministic routing';
-
     PERFORM api.create_or_replace_mcp_handler(
         jsonb_build_object('id', 'ffffffff-a001-4000-8000-000000000001', 'type', 'resource',
             'name', 'test_templated_res', 'description', 'Test resource template',
@@ -457,18 +407,17 @@ END;
     RAISE DEBUG '  + Overlapping resource templates: literal characters win, the name breaks a tie';
 END $$;
 
+-- ############################################################################
+-- REGISTRATION - a tool without inputSchema gets {"type":"object"}; a malformed
+-- schema and a resource without uriTemplate are refused
+-- ############################################################################
 DO $$
 DECLARE
     v_response api.mcp_response;
     v_envelope jsonb;
     v_tool jsonb;
 BEGIN
-    RAISE NOTICE '-> Testing MCP Registration Validation';
-
-    -- ========================================================================
-    -- Test: Tool with no inputSchema gets a default {"type":"object"}
-    -- ========================================================================
-
+    -- Tool with no inputSchema gets a default {"type":"object"}
     PERFORM api.create_or_replace_mcp_handler(
         jsonb_build_object(
             'id', 'ffffffff-c001-4000-8000-000000000001',
@@ -508,10 +457,6 @@ END;
 
     RAISE DEBUG '  + Tool with no inputSchema gets default {"type":"object"}';
 
-    -- ========================================================================
-    -- Test: Tool with empty {} inputSchema is rejected by domain
-    -- ========================================================================
-
     BEGIN
         PERFORM api.create_or_replace_mcp_handler(
             jsonb_build_object(
@@ -529,10 +474,6 @@ END;
         RAISE DEBUG '  + Empty {} inputSchema rejected by json_schema domain';
     END;
 
-    -- ========================================================================
-    -- Test: Tool with a JSON string inputSchema is rejected by domain
-    -- ========================================================================
-
     BEGIN
         PERFORM api.create_or_replace_mcp_handler(
             jsonb_build_object(
@@ -549,10 +490,6 @@ END;
     EXCEPTION WHEN check_violation THEN
         RAISE DEBUG '  + String inputSchema rejected by json_schema domain';
     END;
-
-    -- ========================================================================
-    -- Test: Resource with no uriTemplate is rejected
-    -- ========================================================================
 
     BEGIN
         PERFORM api.create_or_replace_mcp_handler(
@@ -573,13 +510,15 @@ END;
     RAISE DEBUG '+ MCP Registration Validation tests passed';
 END $$;
 
+-- ############################################################################
+-- REQUEST SHAPE - a body that is no object, and an id that is neither a string
+-- nor an integer, are -32600; valid ids are echoed
+-- ############################################################################
 DO $$
 DECLARE
     v_response api.mcp_response;
     v_envelope jsonb;
 BEGIN
-    RAISE NOTICE '-> Testing MCP Non-Object Request Rejection';
-
     v_response := api.mcp_handle_request('[{"jsonrpc":"2.0","id":"b1","method":"ping"}]'::jsonb);
     v_envelope := (v_response).envelope;
 
@@ -620,9 +559,8 @@ BEGIN
 END $$;
 
 -- MCP: "Requests MUST include a string or integer ID" and "Unlike base
--- JSON-RPC, the ID MUST NOT be null." The gateway used to skip this check
--- entirely and answer every one of these with a result, echoing the offending
--- value back as the response id.
+-- JSON-RPC, the ID MUST NOT be null." None of these gets a result, and the
+-- offending value is never echoed back as the response id.
 DO $$
 DECLARE
     v_case      record;
@@ -687,19 +625,18 @@ BEGIN
     RAISE DEBUG '  + valid string/number ids still accepted and echoed';
 END $$;
 
--- ============================================================================
--- Error objects, NULL handler results, definition shape, argument checks
--- ============================================================================
+-- ############################################################################
+-- VALIDATION - an error keeps its message, a NULL handler result is an isError
+-- result, and malformed definitions and arguments are refused by name
+-- ############################################################################
 DO $$
 DECLARE
     v_env jsonb;
     v_rejected boolean;
     v_bad jsonb;
 BEGIN
-    RAISE NOTICE '-> Testing MCP request and definition validation';
-
     PERFORM api.create_or_replace_mcp_handler(jsonb_build_object(
-        'id', 'f3780000-0000-4000-8000-000000000001', 'type', 'tool', 'effect', 'read', 'name', 'pgmi378_needs_n',
+        'id', 'f3780000-0000-4000-8000-000000000001', 'type', 'tool', 'effect', 'read', 'name', 'validation_probe_needs_n',
         'description', 'needs n', 'access', 'public',
         'inputSchema', '{"type":"object","properties":{"n":{"type":"integer"},"d":{"type":"string"}},"required":["n"]}'::jsonb),
         $b$BEGIN
@@ -707,11 +644,11 @@ BEGIN
             RETURN api.mcp_tool_result(jsonb_build_array(api.mcp_text('ok')), (request).request_id);
         END;$b$);
     PERFORM api.create_or_replace_mcp_handler(jsonb_build_object(
-        'id', 'f3780000-0000-4000-8000-000000000002', 'type', 'tool', 'effect', 'read', 'name', 'pgmi378_returns_null',
+        'id', 'f3780000-0000-4000-8000-000000000002', 'type', 'tool', 'effect', 'read', 'name', 'validation_probe_returns_null',
         'description', 'returns null', 'access', 'public', 'inputSchema', '{"type":"object"}'::jsonb),
         $b$BEGIN RETURN NULL; END;$b$);
     PERFORM api.create_or_replace_mcp_handler(jsonb_build_object(
-        'id', 'f3780000-0000-4000-8000-000000000003', 'type', 'prompt', 'name', 'pgmi378_prompt',
+        'id', 'f3780000-0000-4000-8000-000000000003', 'type', 'prompt', 'name', 'validation_probe_prompt',
         'description', 'needs topic', 'access', 'public',
         'arguments', '[{"name":"topic","required":true}]'::jsonb),
         $b$BEGIN
@@ -733,7 +670,7 @@ BEGIN
     END IF;
 
     -- 2. A NULL handler result is answered, not treated as a notification.
-    v_env := (api.mcp_call_tool('pgmi378_returns_null', '{}'::jsonb, NULL, '3'::jsonb)).envelope;
+    v_env := (api.mcp_call_tool('validation_probe_returns_null', '{}'::jsonb, NULL, '3'::jsonb)).envelope;
     IF v_env IS NULL OR (v_env->'result'->>'isError')::boolean IS DISTINCT FROM true OR v_env->'id' IS DISTINCT FROM '3'::jsonb THEN
         RAISE EXCEPTION 'TEST FAILED: NULL handler result must be an isError result for id 3, got %', v_env;
     END IF;
@@ -749,7 +686,7 @@ BEGIN
         v_rejected := false;
         BEGIN
             PERFORM api.create_or_replace_mcp_handler(
-                v_bad || jsonb_build_object('id', 'f3780000-0000-4000-8000-000000000009', 'name', 'pgmi378_bad', 'description', 'bad', 'access', 'public'),
+                v_bad || jsonb_build_object('id', 'f3780000-0000-4000-8000-000000000009', 'name', 'validation_probe_bad', 'description', 'bad', 'access', 'public'),
                 $b$BEGIN RETURN NULL; END;$b$);
         EXCEPTION WHEN invalid_parameter_value OR check_violation THEN
             v_rejected := true;
@@ -760,22 +697,22 @@ BEGIN
     END LOOP;
 
     -- 4. Tool arguments are validated, and the handler's own message reaches the model.
-    v_env := (api.mcp_call_tool('pgmi378_needs_n', '{}'::jsonb, NULL, '4'::jsonb)).envelope;
+    v_env := (api.mcp_call_tool('validation_probe_needs_n', '{}'::jsonb, NULL, '4'::jsonb)).envelope;
     IF (v_env->'result'->>'isError')::boolean IS DISTINCT FROM true
        OR COALESCE(v_env->'result'->'content'->0->>'text', '') NOT LIKE '%n is required%' THEN
         RAISE EXCEPTION 'TEST FAILED: missing required argument must be a named isError result, got %', v_env;
     END IF;
-    v_env := (api.mcp_call_tool('pgmi378_needs_n', '{"n":"x"}'::jsonb, NULL, '5'::jsonb)).envelope;
+    v_env := (api.mcp_call_tool('validation_probe_needs_n', '{"n":"x"}'::jsonb, NULL, '5'::jsonb)).envelope;
     IF COALESCE(v_env->'result'->'content'->0->>'text', '') NOT LIKE '%n must be integer%' THEN
         RAISE EXCEPTION 'TEST FAILED: wrongly typed argument must be named, got %', v_env;
     END IF;
-    v_env := (api.mcp_call_tool('pgmi378_needs_n', '{"n":1,"d":"yesterday-ish"}'::jsonb, NULL, '6'::jsonb)).envelope;
+    v_env := (api.mcp_call_tool('validation_probe_needs_n', '{"n":1,"d":"yesterday-ish"}'::jsonb, NULL, '6'::jsonb)).envelope;
     IF v_env->'result'->'content'->0->>'text' IS DISTINCT FROM 'A submitted date or time is malformed' THEN
         RAISE EXCEPTION 'TEST FAILED: bad input must reach the model as its class message, got %', v_env;
     END IF;
 
     -- 5. prompts/get enforces required arguments.
-    v_env := (api.mcp_get_prompt('pgmi378_prompt', '{}'::jsonb, NULL, '7'::jsonb)).envelope;
+    v_env := (api.mcp_get_prompt('validation_probe_prompt', '{}'::jsonb, NULL, '7'::jsonb)).envelope;
     IF (v_env->'error'->>'code')::int IS DISTINCT FROM -32602 OR COALESCE(v_env->'error'->>'message', '') NOT LIKE '%topic%' THEN
         RAISE EXCEPTION 'TEST FAILED: missing required prompt argument must be -32602 naming it, got %', v_env;
     END IF;
@@ -783,10 +720,14 @@ BEGIN
     RAISE DEBUG '  + MCP errors, NULL results, definitions and arguments are validated';
 END $$;
 
+-- ############################################################################
+-- OUTPUT SCHEMA - a declared outputSchema is advertised and the result carries
+-- structuredContent that fits it
 -- A tool that declares outputSchema must return structuredContent that fits
 -- it: reference-SDK clients validate the result against the advertised schema
 -- and reject one without it. Registration cannot see the body, so this is the
 -- round trip that pins the pattern.
+-- ############################################################################
 DO $$
 DECLARE
     v_envelope jsonb;
@@ -797,8 +738,6 @@ DECLARE
     v_listed   jsonb;
     v_missing  text;
 BEGIN
-    RAISE NOTICE '-> Testing outputSchema and structuredContent round trip';
-
     PERFORM api.create_or_replace_mcp_handler(
         jsonb_build_object(
             'id', 'ffffffff-0293-4000-8000-000000000001',
@@ -843,9 +782,10 @@ END;
     RAISE DEBUG '  + outputSchema is advertised and the success result carries conforming structuredContent';
 END $$;
 
--- ============================================================================
--- MCP 2026-07-28 beside the legacy era
--- ============================================================================
+-- ############################################################################
+-- MCP 2026-07-28 - discovery, version and capability refusals, the legacy era
+-- beside it, and a handler's envelope checked rather than passed through
+-- ############################################################################
 CREATE FUNCTION pg_temp.mcp_modern(p_method text, p_params jsonb DEFAULT '{}', p_id jsonb DEFAULT '"m"')
 RETURNS jsonb LANGUAGE sql AS $$
     SELECT (api.mcp_handle_request(jsonb_build_object('jsonrpc', '2.0', 'id', p_id, 'method', p_method,
@@ -859,8 +799,6 @@ DECLARE
     v_method text;
     v_names  text[];
 BEGIN
-    RAISE NOTICE '-> Testing MCP 2026-07-28, the legacy era and the envelope guards';
-
     -- server/discover: the stateless entry point, a bare probe included.
     FOREACH v_env IN ARRAY ARRAY[
         pg_temp.mcp_modern('server/discover'),
@@ -938,7 +876,7 @@ BEGIN
         'type', 'tool', 'effect', 'read', 'name', name, 'description', 'order', 'access', 'public',
         'inputSchema', '{"type":"object","properties":{"x":{"type":["string","null"],"default":null}}}'::jsonb),
         $b$BEGIN RETURN api.mcp_tool_result('[]', (request).request_id); END;$b$)
-    FROM (VALUES (1, 'pgmi450_b'), (2, 'pgmi450_B'), (3, 'pgmi450_a')) v(n, name);
+    FROM (VALUES (1, 'order_probe_b'), (2, 'order_probe_B'), (3, 'order_probe_a')) v(n, name);
     FOREACH v_method IN ARRAY ARRAY['tools/list', 'resources/list', 'resources/templates/list', 'prompts/list'] LOOP
         v_env := pg_temp.mcp_modern(v_method);
         IF (v_env->'result' @> '{"ttlMs": 300000, "cacheScope": "private", "resultType": "complete"}'::jsonb) IS NOT TRUE THEN
@@ -947,19 +885,19 @@ BEGIN
     END LOOP;
     SELECT array_agg(t->>'name' ORDER BY o) INTO v_names
     FROM jsonb_array_elements(pg_temp.mcp_modern('tools/list')->'result'->'tools') WITH ORDINALITY AS x(t, o)
-    WHERE t->>'name' LIKE 'pgmi450\_%';
-    IF v_names IS DISTINCT FROM ARRAY['pgmi450_B', 'pgmi450_a', 'pgmi450_b'] THEN
+    WHERE t->>'name' LIKE 'order\_probe\_%';
+    IF v_names IS DISTINCT FROM ARRAY['order_probe_B', 'order_probe_a', 'order_probe_b'] THEN
         RAISE EXCEPTION 'TEST FAILED: tools/list must be in byte order, got %', v_names;
     END IF;
-    IF (pg_temp.mcp_modern('tools/list')->'result'->'tools' @> '[{"name": "pgmi450_a", "inputSchema": {"properties": {"x": {"default": null}}}}]') IS NOT TRUE THEN
+    IF (pg_temp.mcp_modern('tools/list')->'result'->'tools' @> '[{"name": "order_probe_a", "inputSchema": {"properties": {"x": {"default": null}}}}]') IS NOT TRUE THEN
         RAISE EXCEPTION 'TEST FAILED: tools/list stripped a null inside an inputSchema';
     END IF;
 
     -- A call result is not cacheable; a tools/call result keeps nulls in structuredContent.
     PERFORM api.create_or_replace_mcp_handler(jsonb_build_object('id', 'f4500000-0000-4000-8000-000000000010',
-        'type', 'tool', 'effect', 'read', 'name', 'pgmi450_nulls', 'description', 'nulls', 'access', 'public'),
+        'type', 'tool', 'effect', 'read', 'name', 'order_probe_nulls', 'description', 'nulls', 'access', 'public'),
         $b$BEGIN RETURN api.mcp_tool_result('[]', (request).request_id, false, '{"due": null}'); END;$b$);
-    v_env := pg_temp.mcp_modern('tools/call', '{"name": "pgmi450_nulls"}');
+    v_env := pg_temp.mcp_modern('tools/call', '{"name": "order_probe_nulls"}');
     IF v_env->'result'->'structuredContent' IS DISTINCT FROM '{"due": null}'::jsonb
        OR v_env->'result' ?| ARRAY['ttlMs', 'cacheScope'] OR v_env->'result'->>'resultType' IS DISTINCT FROM 'complete' THEN
         RAISE EXCEPTION 'TEST FAILED: tools/call result shape: %', v_env;
@@ -975,39 +913,39 @@ DECLARE
 BEGIN
     PERFORM api.create_or_replace_mcp_handler(jsonb_build_object('id', 'f4020000-0000-4000-8000-00000000000' || n,
         'type', type, 'name', name, 'description', 'envelope', 'access', 'public')
-        || CASE WHEN type = 'resource' THEN jsonb_build_object('uriTemplate', 'pgmi402://' || name) ELSE '{"effect": "read"}' END,
+        || CASE WHEN type = 'resource' THEN jsonb_build_object('uriTemplate', 'envelope-probe://' || name) ELSE '{"effect": "read"}' END,
         body)
     FROM (VALUES
-        (1, 'tool', 'pgmi402_null_id', $b$BEGIN RETURN api.mcp_tool_result(jsonb_build_array(api.mcp_text('ok')), NULL); END;$b$),
-        (2, 'tool', 'pgmi402_no_content', $b$BEGIN RETURN api.mcp_success('{}', (request).request_id); END;$b$),
-        (3, 'tool', 'pgmi402_own_error', $b$BEGIN RETURN api.mcp_error(-32099, 'own', '"wrong"', '{"k": null}'); END;$b$),
-        (4, 'tool', 'pgmi402_raw', $b$BEGIN RETURN ROW('{"result": {"content": []}}'::jsonb)::api.mcp_response; END;$b$),
-        (5, 'resource', 'pgmi402_res_junk', $b$BEGIN RETURN ROW('{"jsonrpc": "2.0"}'::jsonb)::api.mcp_response; END;$b$),
-        (6, 'tool', 'pgmi402_null', $b$BEGIN RETURN NULL; END;$b$)) v(n, type, name, body);
+        (1, 'tool', 'envelope_probe_null_id', $b$BEGIN RETURN api.mcp_tool_result(jsonb_build_array(api.mcp_text('ok')), NULL); END;$b$),
+        (2, 'tool', 'envelope_probe_no_content', $b$BEGIN RETURN api.mcp_success('{}', (request).request_id); END;$b$),
+        (3, 'tool', 'envelope_probe_own_error', $b$BEGIN RETURN api.mcp_error(-32099, 'own', '"wrong"', '{"k": null}'); END;$b$),
+        (4, 'tool', 'envelope_probe_raw', $b$BEGIN RETURN ROW('{"result": {"content": []}}'::jsonb)::api.mcp_response; END;$b$),
+        (5, 'resource', 'envelope_probe_res_junk', $b$BEGIN RETURN ROW('{"jsonrpc": "2.0"}'::jsonb)::api.mcp_response; END;$b$),
+        (6, 'tool', 'envelope_probe_null', $b$BEGIN RETURN NULL; END;$b$)) v(n, type, name, body);
 
-    v_env := (api.mcp_call_tool('pgmi402_null_id', '{}', NULL, '"r1"')).envelope;
+    v_env := (api.mcp_call_tool('envelope_probe_null_id', '{}', NULL, '"r1"')).envelope;
     IF v_env->'id' IS DISTINCT FROM '"r1"'::jsonb OR v_env->'result'->'content'->0->>'text' IS DISTINCT FROM 'ok' THEN
         RAISE EXCEPTION 'TEST FAILED: a handler''s NULL id must become the request id, got %', v_env;
     END IF;
-    v_env := (api.mcp_call_tool('pgmi402_no_content', '{}', NULL, '2')).envelope;
+    v_env := (api.mcp_call_tool('envelope_probe_no_content', '{}', NULL, '2')).envelope;
     IF v_env->'id' IS DISTINCT FROM '2'::jsonb OR (v_env->'result'->>'isError')::boolean IS DISTINCT FROM true
        OR jsonb_typeof(v_env->'result'->'content') IS DISTINCT FROM 'array' THEN
         RAISE EXCEPTION 'TEST FAILED: a content-less tool result must become an isError result, got %', v_env;
     END IF;
-    v_env := (api.mcp_call_tool('pgmi402_own_error', '{}', NULL, '3')).envelope;
+    v_env := (api.mcp_call_tool('envelope_probe_own_error', '{}', NULL, '3')).envelope;
     IF v_env IS DISTINCT FROM '{"jsonrpc": "2.0", "id": 3, "error": {"code": -32099, "message": "own", "data": {"k": null}}}'::jsonb THEN
         RAISE EXCEPTION 'TEST FAILED: a handler''s own error must keep its error under the request id, got %', v_env;
     END IF;
-    v_env := (api.mcp_call_tool('pgmi402_raw', '{}', NULL, '4')).envelope;
+    v_env := (api.mcp_call_tool('envelope_probe_raw', '{}', NULL, '4')).envelope;
     IF v_env->'id' IS DISTINCT FROM '4'::jsonb OR v_env->>'jsonrpc' IS DISTINCT FROM '2.0'
        OR v_env->'result'->>'resultType' IS DISTINCT FROM 'complete' THEN
         RAISE EXCEPTION 'TEST FAILED: a hand-built result must be completed under the request id, got %', v_env;
     END IF;
-    v_env := (api.mcp_read_resource('pgmi402://pgmi402_res_junk', NULL, '5')).envelope;
+    v_env := (api.mcp_read_resource('envelope-probe://envelope_probe_res_junk', NULL, '5')).envelope;
     IF (v_env->'error'->>'code')::int IS DISTINCT FROM -32603 OR v_env->'id' IS DISTINCT FROM '5'::jsonb THEN
         RAISE EXCEPTION 'TEST FAILED: a resource envelope that is no answer must be -32603, got %', v_env;
     END IF;
-    v_env := (api.mcp_call_tool('pgmi402_null', '{}', NULL, '6')).envelope;
+    v_env := (api.mcp_call_tool('envelope_probe_null', '{}', NULL, '6')).envelope;
     IF v_env->'id' IS DISTINCT FROM '6'::jsonb OR (v_env->'result'->>'isError')::boolean IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'TEST FAILED: a NULL envelope must be an isError result, got %', v_env;
     END IF;
@@ -1021,21 +959,21 @@ DECLARE
     v_ran boolean;
 BEGIN
     PERFORM api.create_or_replace_mcp_handler(jsonb_build_object(
-        'id', 'f6420000-0000-4000-8000-000000000001', 'type', 'prompt', 'name', 'pgmi642_prompt',
+        'id', 'f6420000-0000-4000-8000-000000000001', 'type', 'prompt', 'name', 'argument_probe_prompt',
         'description', 'about a topic', 'access', 'public',
         'arguments', '[{"name":"topic","required":true}]'::jsonb),
         $b$BEGIN
-            PERFORM set_config('test.pgmi642_ran', 'yes', true);
+            PERFORM set_config('test.argument_probe_ran', 'yes', true);
             RETURN api.mcp_prompt_result(jsonb_build_array(jsonb_build_object('role', 'user',
                 'content', api.mcp_text('about ' || ((request).arguments->>'topic')))), (request).request_id);
         END;$b$);
 
-    v_env := (api.mcp_get_prompt('pgmi642_prompt', '{"topic": {"a": 1}}'::jsonb, NULL, '"p1"'::jsonb)).envelope;
-    v_ran := coalesce(current_setting('test.pgmi642_ran', true) = 'yes', false);
+    v_env := (api.mcp_get_prompt('argument_probe_prompt', '{"topic": {"a": 1}}'::jsonb, NULL, '"p1"'::jsonb)).envelope;
+    v_ran := coalesce(current_setting('test.argument_probe_ran', true) = 'yes', false);
     IF (v_env->'error'->>'code')::int IS DISTINCT FROM -32602 OR v_ran IS NOT FALSE THEN
         RAISE EXCEPTION 'TEST FAILED: a non-string prompt argument must be -32602 before the body runs, got %', v_env;
     END IF;
-    v_env := (api.mcp_get_prompt('pgmi642_prompt', '{"topic": "tea"}'::jsonb, NULL, '"p2"'::jsonb)).envelope;
+    v_env := (api.mcp_get_prompt('argument_probe_prompt', '{"topic": "tea"}'::jsonb, NULL, '"p2"'::jsonb)).envelope;
     IF v_env->'error' IS NOT NULL THEN
         RAISE EXCEPTION 'TEST FAILED: a string argument must reach the prompt, got %', v_env;
     END IF;

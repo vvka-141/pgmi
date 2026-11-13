@@ -27,6 +27,7 @@ BEGIN
     END CASE;
 END $$;
 
+-- Handler metadata: unknown keys are refused
 DO $$
 DECLARE
     v_kind text;
@@ -34,8 +35,6 @@ DECLARE
     v_message text;
     v_hint text;
 BEGIN
-    RAISE NOTICE '-> Handler metadata: unknown keys are refused';
-
     FOREACH v_kind IN ARRAY ARRAY['rest', 'rpc', 'mcp'] LOOP
         PERFORM pg_temp.register_with(v_kind, '{}');
 
@@ -72,17 +71,14 @@ BEGIN
     IF coalesce(strpos(v_message, '"version" key is not supported'), 0) IS NOT DISTINCT FROM 0 THEN
         RAISE EXCEPTION 'TEST FAILED: the retired REST key version lost its own message: %', v_message;
     END IF;
-
-    RAISE NOTICE '  + REST, RPC and MCP refuse unknown keys, naming the near match';
 END $$;
 
+-- Handler metadata: a 201 declares locationTemplate or noLocation
 DO $$
 DECLARE
     v_case record;
     v_message text;
 BEGIN
-    RAISE NOTICE '-> Handler metadata: a 201 declares locationTemplate or noLocation';
-
     FOR v_case IN
         SELECT * FROM (VALUES
             ('{"successStatus": [200, 201]}'::jsonb, '%locationTemplate%noLocation%'),
@@ -105,6 +101,4 @@ BEGIN
                 coalesce(v_case.refusal, 'registered');
         END IF;
     END LOOP;
-
-    RAISE NOTICE '  + a 201 without locationTemplate or noLocation is refused at registration';
 END $$;

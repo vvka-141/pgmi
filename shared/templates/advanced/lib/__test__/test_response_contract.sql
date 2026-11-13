@@ -90,12 +90,13 @@ LANGUAGE sql STABLE AS $$
     WHERE coalesce(src, handler_exec_sql, '') !~ '\mpage_response\s*\(';
 $$;
 
+-- ############################################################################
+-- CODED - every problem answer carries a code
+-- ############################################################################
 DO $$
 DECLARE
     v_bad text;
 BEGIN
-    RAISE NOTICE '-> Every problem answer carries a code';
-
     IF (SELECT count(*) FROM pg_temp.uncoded_problem_calls($b$
             RETURN api.problem_response(409, 'Conflict', format('(%s) moved', x));
             RETURN api.problem_response(422, 'Unprocessable Entity', 'bad (value)');
@@ -130,6 +131,9 @@ $body$);
     END IF;
 END $$;
 
+-- ############################################################################
+-- PAGES - every page route keeps the page contract
+-- ############################################################################
 DO $$
 DECLARE
     v_bad      text;
@@ -138,8 +142,6 @@ DECLARE
     v_response api.http_response;
     v_body     jsonb;
 BEGIN
-    RAISE NOTICE '-> Every page route keeps the page contract';
-
     IF NOT EXISTS (SELECT FROM api.handler h WHERE h.deleted_at IS NULL
                    AND h.output_json_schema::jsonb->'required' @> '["items", "total", "limit", "offset", "hasMore"]') THEN
         RAISE EXCEPTION 'TEST FAILED: no route answers a page, so the page contract checked nothing';
@@ -217,12 +219,13 @@ LANGUAGE sql IMMUTABLE AS $$
       AND code !~ '^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$';
 $$;
 
+-- ############################################################################
+-- CODE SHAPE - every problem code is pgmi.<reason> or <schema>.<entity>.<reason>
+-- ############################################################################
 DO $$
 DECLARE
     v_bad text;
 BEGIN
-    RAISE NOTICE '-> Every problem code is pgmi.<reason> or <schema>.<entity>.<reason>';
-
     IF ARRAY(SELECT c FROM pg_temp.unprefixed_codes($b$
             RETURN api.problem_response(409, 'Conflict', code => 'moved');
             RETURN api.problem_response(409, 'Conflict', code => 'task.moved');
@@ -260,16 +263,16 @@ $body$);
     IF v_bad IS DISTINCT FROM 'task_moved' THEN
         RAISE EXCEPTION 'TEST FAILED: a planted handler answering an unprefixed code must fail the guard, got %', v_bad;
     END IF;
-
 END $$;
 
+-- ############################################################################
+-- GATEWAY - the gateway's own refusals (404, 405, 406, 415) carry pgmi.* codes
+-- ############################################################################
 DO $$
 DECLARE
     v_case     record;
     v_response api.http_response;
 BEGIN
-    RAISE NOTICE '-> The gateway''s own 404, 405, 406 and 415 carry pgmi codes';
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object('id', 'ffffffff-e002-4000-8000-000000000004', 'path', '/framework-code-probe',
                            'httpMethod', '^POST$', 'name', 'framework_code_probe', 'access', 'public',

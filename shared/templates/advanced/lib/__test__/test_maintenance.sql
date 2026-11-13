@@ -1,7 +1,11 @@
 -- ============================================================================
--- Test: Exchange retention (the purge_exchanges job + admin endpoint)
+-- Test: the purge job and its admin endpoint delete exchanges older than the
+-- retention window, keep the rest, and refuse bad arguments
 -- ============================================================================
 
+-- ############################################################################
+-- PURGE - the purge job and endpoint delete exchanges older than the window
+-- ############################################################################
 DO $$
 DECLARE
     v_handler_id uuid;
@@ -13,17 +17,12 @@ DECLARE
     v_admin_id uuid;
     v_admin_headers extensions.hstore;
 BEGIN
-    RAISE NOTICE '-> Testing exchange retention';
-
     -- Purge is for platform operators only
     v_admin_id := pg_temp.test_login('test', 'maint-admin', 'maint-admin@example.test', 'Maint Admin', true);
     PERFORM pg_temp.test_operator(v_admin_id);
     v_admin_headers := pg_temp.test_session_headers('test|maint-admin', NULL, ARRAY['mfa']);
 
-    -- ========================================================================
     -- Setup: insert fixture exchanges with old enqueued_at
-    -- ========================================================================
-
     SELECT object_id INTO v_handler_id
     FROM api.handler WHERE handler_function_name = 'hello_world'
     LIMIT 1;
@@ -43,18 +42,11 @@ BEGIN
         RAISE EXCEPTION 'Setup failed: expected >= 10 old exchanges, got %', v_count_before;
     END IF;
 
-    RAISE NOTICE '  + Inserted 10 fixture exchanges older than 30 days';
-
-    -- ========================================================================
-    -- Test: admin purge endpoint deletes old exchanges
-    -- ========================================================================
-
+    -- admin purge endpoint deletes old exchanges
     v_response := api.rest_invoke('POST', '/admin/maintenance/purge-exchanges?retention_days=30&batch_size=100',
         v_admin_headers, null::bytea);
 
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'Purge endpoint returned %, expected 200', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('Purge endpoint', v_response, 200);
 
     v_body := api.content_json((v_response).content);
 
@@ -77,13 +69,7 @@ BEGIN
             v_body->>'totalDeleted', v_count_after;
     END IF;
 
-    RAISE NOTICE '  + Purge endpoint deleted % exchanges (rest=%); none older than 30 days remain',
-        v_body->>'totalDeleted', v_body->'deleted'->>'rest';
-
-    -- ========================================================================
-    -- Test: retention reads enqueued_at through a btree on every exchange table
-    -- ========================================================================
-
+    -- retention reads enqueued_at through a btree on every exchange table
     IF (SELECT count(*)
         FROM pg_index i
         JOIN pg_class c ON c.oid = i.indexrelid
@@ -94,12 +80,7 @@ BEGIN
         RAISE EXCEPTION 'Each exchange table needs a btree index leading on enqueued_at';
     END IF;
 
-    RAISE NOTICE '  + btree indexes on enqueued_at exist for all exchange tables';
-
-    -- ========================================================================
-    -- Test: validation rejects bad params
-    -- ========================================================================
-
+    -- validation rejects bad params
     v_response := api.rest_invoke('POST', '/admin/maintenance/purge-exchanges?retention_days=0',
         v_admin_headers, null::bytea);
 
@@ -108,15 +89,14 @@ BEGIN
         RAISE EXCEPTION 'Expected 400 pgmi.invalid_query for retention_days=0, got % %',
             (v_response).status_code, convert_from((v_response).content, 'UTF8');
     END IF;
-
-    RAISE NOTICE '  + Validation rejects retention_days < 1';
-
-    RAISE NOTICE '+ Exchange retention tests passed';
 END $$;
 
+-- ############################################################################
+-- DEFAULT WINDOW - without retention_days the deploy parameter decides
 -- The default window is the deploy parameter exchange_retention_days (30 in
 -- the test deploy): without retention_days the endpoint keeps a 29-day-old
 -- row and purges a 31-day-old one.
+-- ############################################################################
 DO $$
 DECLARE
     v_handler_id uuid := (SELECT object_id FROM api.handler WHERE handler_function_name = 'hello_world');
@@ -124,8 +104,6 @@ DECLARE
     v_gone uuid := gen_random_uuid();
     v_response api.http_response;
 BEGIN
-    RAISE NOTICE '-> Testing the default retention window';
-
     IF api.exchange_retention() IS DISTINCT FROM interval '30 days' THEN
         RAISE EXCEPTION 'TEST FAILED: api.exchange_retention() should be the deploy default of 30 days, got %', api.exchange_retention();
     END IF;
@@ -141,23 +119,23 @@ BEGIN
     PERFORM pg_temp.test_operator(pg_temp.test_login('test', 'maint-default', 'maint-default@example.test', NULL, true));
     v_response := api.rest_invoke('POST', '/admin/maintenance/purge-exchanges',
         pg_temp.test_session_headers('test|maint-default', NULL, ARRAY['mfa']), null::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'TEST FAILED: default purge answered %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('default purge answered', v_response, 200);
     IF NOT EXISTS (SELECT FROM api.rest_exchange WHERE object_id = v_kept)
        OR EXISTS (SELECT FROM api.rest_exchange WHERE object_id = v_gone) THEN
         RAISE EXCEPTION 'TEST FAILED: the default purge must keep 29 days and drop 31';
     END IF;
 END $$;
 
+-- ############################################################################
+-- ARGUMENTS - the purge refuses bad arguments with asserts off
 -- Argument checks are IF ... RAISE: they hold with plpgsql.check_asserts off,
 -- where an ASSERT would be skipped.
+-- ############################################################################
 DO $$
 DECLARE
     v_case text;
     v_state text;
 BEGIN
-    RAISE NOTICE '-> Testing the purge refuses bad arguments with asserts off';
     SET LOCAL plpgsql.check_asserts = off;
 
     FOREACH v_case IN ARRAY ARRAY[

@@ -48,30 +48,20 @@ BEGIN
     PERFORM pg_temp.route_named('anchor_probe', '/anchor', '^GET$');
 
     v_response := api.rest_invoke('GET', '/anchor', ''::extensions.hstore, NULL::bytea);
-    IF v_response.status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'TEST FAILED: /anchor should route to its handler, got %', v_response.status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('/anchor should route to its handler', v_response, 200);
 
     v_response := api.rest_invoke('GET', '/anchorage', ''::extensions.hstore, NULL::bytea);
-    IF v_response.status_code IS DISTINCT FROM 404 THEN
-        RAISE EXCEPTION 'TEST FAILED: /anchorage must not match the /anchor route, got %', v_response.status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('/anchorage must not match the /anchor route', v_response, 404);
 
     v_response := api.rest_invoke('GET', '/anchor/nested', ''::extensions.hstore, NULL::bytea);
-    IF v_response.status_code IS DISTINCT FROM 404 THEN
-        RAISE EXCEPTION 'TEST FAILED: /anchor/nested must not match the /anchor route, got %', v_response.status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('/anchor/nested must not match the /anchor route', v_response, 404);
 
     v_response := api.rest_invoke('GET', '/anchor?limit=10', ''::extensions.hstore, NULL::bytea);
-    IF v_response.status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'TEST FAILED: /anchor?limit=10 must still route, got %', v_response.status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('/anchor?limit=10 must still route', v_response, 200);
 
     FOREACH v_path IN ARRAY ARRAY['/healthz', '/helloworld', '/othello/'] LOOP
         v_response := api.rest_invoke('GET', v_path, ''::extensions.hstore, NULL::bytea);
-        IF v_response.status_code IS DISTINCT FROM 404 THEN
-            RAISE EXCEPTION 'TEST FAILED: % must not match /health or /hello, got %', v_path, v_response.status_code;
-        END IF;
+        PERFORM pg_temp.expect_status(v_path || ' must not match /health or /hello', v_response, 404);
     END LOOP;
 END $$;
 
@@ -246,16 +236,11 @@ BEGIN
     END IF;
 
     v_response := api.rest_invoke('GET', '/typed-private/not-a-uuid', ''::extensions.hstore, NULL::bytea);
-    IF v_response.status_code IS DISTINCT FROM 401 THEN
-        RAISE EXCEPTION 'TEST FAILED: an anonymous call to an authenticated typed route must be 401 before the parameter check, got %',
-            v_response.status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('an anonymous call to an authenticated typed route must be 401 before the parameter check', v_response, 401);
 
     FOREACH v_body IN ARRAY ARRAY['"+5"', '"%205"', '"5x"', '"1.5"']::jsonb[] LOOP
         v_response := api.rest_invoke('GET', '/typed-counts/' || (v_body #>> '{}'), ''::extensions.hstore, NULL::bytea);
-        IF v_response.status_code IS DISTINCT FROM 400 THEN
-            RAISE EXCEPTION 'TEST FAILED: int parameter % must answer 400, got %', v_body, v_response.status_code;
-        END IF;
+        PERFORM pg_temp.expect_status('int parameter ' || v_body::text, v_response, 400);
     END LOOP;
 
     v_response := api.rest_invoke('GET', '/typed-counts/-12', ''::extensions.hstore, NULL::bytea);

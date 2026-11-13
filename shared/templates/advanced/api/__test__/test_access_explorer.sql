@@ -7,16 +7,6 @@
 -- it answers.
 -- ============================================================================
 
-CREATE FUNCTION pg_temp.expect_status(p_label text, p_response api.http_response, p_status int)
-RETURNS jsonb LANGUAGE plpgsql AS $$
-BEGIN
-    IF (p_response).status_code IS DISTINCT FROM p_status THEN
-        RAISE EXCEPTION 'TEST FAILED: % expected %, got %: %', p_label, p_status, (p_response).status_code,
-            api.content_json((p_response).content);
-    END IF;
-    RETURN api.content_json((p_response).content);
-END $$;
-
 DO $$
 DECLARE
     v_nil      text := '00000000-0000-4000-8000-000000000000';

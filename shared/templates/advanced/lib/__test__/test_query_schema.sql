@@ -51,9 +51,7 @@ BEGIN
         PERFORM set_config('test.query_ran', 'no', true);
         v_response := api.rest_invoke('GET', v_case.url, ''::extensions.hstore, NULL::bytea);
         v_body := api.content_json((v_response).content);
-        IF (v_response).status_code IS DISTINCT FROM v_case.status THEN
-            RAISE EXCEPTION 'TEST FAILED: GET % should answer %, got % %', v_case.url, v_case.status, (v_response).status_code, v_body;
-        END IF;
+        PERFORM pg_temp.expect_status('GET ' || v_case.url, v_response, v_case.status);
         CONTINUE WHEN v_case.status = 200;
         IF v_body->>'code' IS DISTINCT FROM 'pgmi.invalid_query'
            OR v_body->'invalid-params' IS DISTINCT FROM v_case.invalid::jsonb

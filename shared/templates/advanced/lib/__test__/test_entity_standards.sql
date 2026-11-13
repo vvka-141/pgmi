@@ -14,12 +14,7 @@ DECLARE
     v_index_count int;
     v_plain_has_created boolean;
 BEGIN
-    RAISE NOTICE '-> Testing entity standards reconcile';
-
-    -- ========================================================================
     -- Sweep path: object_id core.entity_id triggers column injection
-    -- ========================================================================
-
     CREATE TABLE IF NOT EXISTS core.entity_standards_probe (
         object_id core.entity_id PRIMARY KEY DEFAULT gen_random_uuid(),
         label text NOT NULL
@@ -43,12 +38,7 @@ BEGIN
         RAISE EXCEPTION 'deleted_at not injected by entity standards sweep';
     END IF;
 
-    RAISE NOTICE '  + Sweep: created_at and deleted_at injected on entity table';
-
-    -- ========================================================================
     -- Sweep must NOT create indexes (index strategy stays with the author)
-    -- ========================================================================
-
     SELECT count(*)::int INTO v_index_count
     FROM pg_indexes
     WHERE schemaname = 'core' AND tablename = 'entity_standards_probe';
@@ -57,12 +47,7 @@ BEGIN
         RAISE EXCEPTION 'Sweep created % indexes, expected only the PK', v_index_count;
     END IF;
 
-    RAISE NOTICE '  + Sweep created no indexes beyond the PK (count=%)', v_index_count;
-
-    -- ========================================================================
     -- Opt-out: table without object_id core.entity_id is untouched
-    -- ========================================================================
-
     CREATE TABLE IF NOT EXISTS core.no_standards_probe (
         id serial PRIMARY KEY,
         label text NOT NULL
@@ -80,16 +65,11 @@ BEGIN
         RAISE EXCEPTION 'Sweep wrongly injected created_at on table without core.entity_id marker';
     END IF;
 
-    RAISE NOTICE '  + Tables without core.entity_id marker are untouched';
-
-    -- ========================================================================
     -- Idempotency: repeated calls are a no-op
-    -- ========================================================================
     -- "It did not raise" is not idempotence. The sweep runs on every deploy, so
     -- a re-apply that reset created_at would silently rewrite lifecycle
     -- timestamps on every redeploy of every project built on this template.
     -- Snapshot a real row and the column set, re-apply twice, compare.
-
     DECLARE
         v_probe_id uuid;
         v_created_before timestamptz;
@@ -133,12 +113,7 @@ BEGIN
         DELETE FROM core.entity_standards_probe WHERE object_id = v_probe_id;
     END;
 
-    RAISE NOTICE '  + Repeated apply_entity_table_standards calls leave rows and columns untouched';
-
-    -- ========================================================================
     -- Inline call path: columns exist immediately for index creation
-    -- ========================================================================
-
     CREATE TABLE core.inline_call_probe (
         object_id core.entity_id PRIMARY KEY DEFAULT gen_random_uuid(),
         label text NOT NULL
@@ -150,12 +125,7 @@ BEGIN
         ON core.inline_call_probe(object_id)
         WHERE deleted_at IS NULL;
 
-    RAISE NOTICE '  + Inline call: partial index on deleted_at created in same file';
-
-    -- ========================================================================
     -- Non-superuser: functions live in pg_temp, no event trigger exists
-    -- ========================================================================
-
     IF EXISTS (
         SELECT 1 FROM pg_event_trigger
         WHERE evtname = 'core_entity_table_standards'
@@ -163,11 +133,7 @@ BEGIN
         RAISE EXCEPTION 'core_entity_table_standards event trigger should not exist';
     END IF;
 
-    RAISE NOTICE '  + No event trigger present (non-superuser compatible)';
-
     DROP TABLE core.inline_call_probe;
     DROP TABLE core.entity_standards_probe;
     DROP TABLE core.no_standards_probe;
-
-    RAISE NOTICE '✓ Entity standards reconcile tests passed';
 END $$;

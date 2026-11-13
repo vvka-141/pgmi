@@ -21,12 +21,13 @@
 -- savepoint rollback around each test file reverts it.
 -- ============================================================================
 
+-- ############################################################################
+-- REGISTRATION - readOnly is stored on the handler, false by default
+-- ############################################################################
 DO $$
 DECLARE
     v_read_only boolean;
 BEGIN
-    RAISE NOTICE '→ Testing readOnly registration';
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-8001-4000-8000-000000000001',
@@ -63,16 +64,16 @@ BEGIN
     IF v_read_only IS DISTINCT FROM false THEN
         RAISE EXCEPTION 'TEST FAILED: readOnly should default to false';
     END IF;
-
-    RAISE NOTICE '  ✓ readOnly stored (default false) and surfaced by discovery';
 END $$;
 
+-- ############################################################################
+-- POLICY LOOKUP - each protocol resolves max(floor, requested), read-only and
+-- deferrable before the transaction opens
+-- ############################################################################
 DO $$
 DECLARE
     v_policy record;
 BEGIN
-    RAISE NOTICE '→ Testing resolve-then-open policy lookups';
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-8101-4000-8000-000000000001',
@@ -205,8 +206,6 @@ BEGIN
        OR v_policy.transaction_read_only IS DISTINCT FROM false THEN
         RAISE EXCEPTION 'TEST FAILED: unknown tool should resolve the no-policy row';
     END IF;
-
-    RAISE NOTICE '  ✓ rest/rpc/mcp policy lookups resolve max(floor, requested) + READ ONLY [DEFERRABLE]';
 END $$;
 
 -- The policy names the handler and the x-* annotations of its inputSchema
@@ -258,10 +257,11 @@ BEGIN
     IF v_policy.input_annotations IS NOT NULL OR v_policy.handler_name IS NOT NULL THEN
         RAISE EXCEPTION 'TEST FAILED: a method without a handler must return no handler and no annotations';
     END IF;
-
-    RAISE NOTICE '  ✓ policy lookups name the handler and its inputSchema annotations';
 END $$;
 
+-- ############################################################################
+-- FAIL CLOSED - a read-only route dispatched in a read-write transaction is refused
+-- ############################################################################
 DO $$
 DECLARE
     v_response api.http_response;
@@ -270,8 +270,6 @@ DECLARE
     v_mcp api.mcp_response;
     v_envelope jsonb;
 BEGIN
-    RAISE NOTICE '→ Testing read-only enforcement (fail closed in a read-write transaction)';
-
     -- No isolation floor on these routes, so the read-only check is what fires.
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
@@ -282,10 +280,7 @@ BEGIN
         $body$ BEGIN RETURN api.json_response(200, jsonb_build_object('ok', true)); END; $body$
     );
     v_response := api.rest_invoke('GET', '/ro-rest', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 428 THEN
-        RAISE EXCEPTION 'TEST FAILED: read-only route in a read-write tx should return 428, got %',
-            (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('read-only route in a read-write tx should return 428', v_response, 428);
     v_content := api.content_json((v_response).content);
     IF v_content->>'code' IS DISTINCT FROM 'pgmi.transaction_read_only_required'
        OR v_content->'requiredReadOnly' IS DISTINCT FROM 'true'::jsonb THEN
@@ -302,19 +297,19 @@ BEGIN
     v_route_id := api.rpc_resolve('ro.rpc');
     v_response := api.rpc_invoke(v_route_id, ''::extensions.hstore,
         convert_to('{"jsonrpc":"2.0","method":"ro.rpc","id":"7"}', 'UTF8'));
-    IF (v_response).status_code IS DISTINCT FROM 428 THEN
-        RAISE EXCEPTION 'TEST FAILED: RPC read-only route should return 428, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('RPC read-only route should return 428', v_response, 428);
     v_content := api.content_json((v_response).content);
     IF v_content->'error'->'data'->>'code' IS DISTINCT FROM 'pgmi.transaction_read_only_required'
        OR v_content->'error'->'data'->'requiredReadOnly' IS DISTINCT FROM 'true'::jsonb
        OR v_content->>'id' IS DISTINCT FROM '7' THEN
         RAISE EXCEPTION 'TEST FAILED: RPC rejection must carry the machine code and echo the id';
     END IF;
-
-    RAISE NOTICE '  ✓ REST and RPC reject 428/-32600 with pgmi.transaction_read_only_required';
 END $$;
 
+-- ############################################################################
+-- ADVERTISED - OpenAPI carries x-pgmi-read-only and x-pgmi-replica-safe, and
+-- flipping readOnly changes the catalog version
+-- ############################################################################
 DO $$
 DECLARE
     v_doc jsonb;
@@ -322,8 +317,6 @@ DECLARE
     v_v1 text;
     v_v2 text;
 BEGIN
-    RAISE NOTICE '→ Testing OpenAPI advertisement and catalog version';
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-8301-4000-8000-000000000001',
@@ -388,21 +381,20 @@ BEGIN
     IF (v_v1 = v_v2) IS NOT FALSE THEN
         RAISE EXCEPTION 'TEST FAILED: flipping readOnly must change api.catalog_version()';
     END IF;
-
-    RAISE NOTICE '  ✓ x-pgmi-read-only + x-pgmi-replica-safe advertised; readOnly participates in the ETag';
 END $$;
 
+-- ############################################################################
+-- ACCEPT - a READ ONLY transaction dispatches a read-only route
 -- Keep this block LAST: it turns the transaction read-only, and everything
 -- after it in this file would inherit that until the file's savepoint rolls
 -- back. Turning read-only ON mid-transaction is legal (only the reverse is
 -- restricted), which is exactly what lets the accept path run in the harness.
+-- ############################################################################
 DO $$
 DECLARE
     v_response api.http_response;
     v_logged int;
 BEGIN
-    RAISE NOTICE '→ Testing read-only accept path (READ ONLY transaction dispatches)';
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-8401-4000-8000-000000000001',
@@ -415,10 +407,7 @@ BEGIN
     PERFORM set_config('transaction_read_only', 'on', true);
 
     v_response := api.rest_invoke('GET', '/ro-accept', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'TEST FAILED: read-only route in a READ ONLY tx should dispatch (200), got %',
-            (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('read-only route in a READ ONLY tx should dispatch (200)', v_response, 200);
 
     -- Exchange logging is a write; the gateway must have skipped it.
     SELECT count(*) INTO v_logged
@@ -427,12 +416,8 @@ BEGIN
     IF v_logged IS DISTINCT FROM 0 THEN
         RAISE EXCEPTION 'TEST FAILED: exchange logging must be skipped in a READ ONLY transaction';
     END IF;
-
-    RAISE NOTICE '  ✓ READ ONLY transaction dispatches the route; gateway writes are skipped';
 END $$;
 
 DO $$
 BEGIN
-    RAISE NOTICE '';
-    RAISE NOTICE '✓ ALL TRANSACTION POLICY TESTS PASSED';
 END $$;

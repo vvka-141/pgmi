@@ -29,8 +29,6 @@ DECLARE
     v_logged extensions.hstore;
     v_route_id uuid;
 BEGIN
-    RAISE NOTICE '→ Testing that exchange logs drop credential headers';
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-c001-4000-8000-000000000001',
@@ -118,10 +116,7 @@ $body$
                  AND (response).headers ? 'set-cookie') THEN
         RAISE EXCEPTION 'TEST FAILED: exchange log stored the issued session cookie';
     END IF;
-
-    RAISE NOTICE '  ✓ credentials are dropped from logged requests and responses, other headers kept';
 END $$;
-
 
 DO $$
 DECLARE
@@ -135,8 +130,7 @@ BEGIN
     IF v_context->>'connection' IS NULL THEN
         RAISE EXCEPTION 'TEST FAILED: the fixture connection was not approved';
     END IF;
-    RAISE NOTICE '→ Testing that the MCP exchange log drops credentials from the context';
-
+    -- that the MCP exchange log drops credentials from the context
     PERFORM api.create_or_replace_mcp_handler(jsonb_build_object(
         'id', 'ffffffff-c001-4000-8000-000000000010', 'type', 'tool', 'effect', 'read', 'name', 'redaction_mcp_probe',
         'description', 'redaction probe', 'access', 'public', 'inputSchema', '{"type":"object"}'::jsonb),
@@ -155,6 +149,4 @@ BEGIN
     IF v_logged->>'client' IS DISTINCT FROM 'redaction-probe' THEN
         RAISE EXCEPTION 'TEST FAILED: the MCP exchange log dropped a non-credential key, got %', v_logged;
     END IF;
-
-    RAISE NOTICE '  ✓ MCP exchange log keeps other keys and drops connection and session handles, tokens and keys';
 END $$;

@@ -29,8 +29,6 @@ DECLARE
     v_meta jsonb;
     v_message text;
 BEGIN
-    RAISE NOTICE '-> Declared access: registration refusals';
-
     FOR v_case IN
         SELECT * FROM (VALUES
             ('none',          '{}'::jsonb),
@@ -81,8 +79,6 @@ BEGIN
     IF EXISTS (SELECT FROM api.handler WHERE object_id::text LIKE 'da000000-0000-4000-8000-00000000000_') THEN
         RAISE EXCEPTION 'TEST FAILED: a refused registration left a handler row';
     END IF;
-
-    RAISE NOTICE '  + no declaration, both keys, requiresAuth, malformed, empty and unknown permissions are refused by REST, RPC and MCP';
 END $$;
 
 -- ----------------------------------------------------------------------------
@@ -93,8 +89,6 @@ DECLARE
     v_case record;
     v_reason text;
 BEGIN
-    RAISE NOTICE '-> Declared access: internal.access_denial_reason';
-
     PERFORM api.create_or_replace_rest_handler(jsonb_build_object(
         'id', 'da000000-0000-4000-8000-000000000010', 'path', '/test-da/unit', 'httpMethod', '^GET$',
         'name', 'da_unit', 'permissions', jsonb_build_array('test.task.read')),
@@ -126,8 +120,6 @@ BEGIN
             RAISE EXCEPTION 'TEST FAILED: %: expected %, got %', v_case.label, v_case.expected, v_reason;
         END IF;
     END LOOP;
-
-    RAISE NOTICE '  + every reason, and every allowed path';
 END $$;
 
 -- ----------------------------------------------------------------------------
@@ -146,8 +138,6 @@ DECLARE
     v_attempts  int;
     v_purged    bigint;
 BEGIN
-    RAISE NOTICE '-> Declared access: gateways';
-
     PERFORM pg_temp.test_login('test', 'declared-access', 'declared-access@example.test', NULL, true);
     PERFORM pg_temp.test_act_as('test|declared-access');
     SELECT api.current_principal_id() INTO v_user;
@@ -193,9 +183,7 @@ BEGIN
         v_response := api.rest_invoke('GET', '/test-da/task',
             CASE WHEN v_case.subject IS NULL THEN ''::extensions.hstore
                  ELSE pg_temp.test_session_headers(v_case.subject) END, NULL::bytea);
-        IF (v_response).status_code IS DISTINCT FROM v_case.status THEN
-            RAISE EXCEPTION 'TEST FAILED: REST %: expected %, got %', v_case.label, v_case.status, (v_response).status_code;
-        END IF;
+        PERFORM pg_temp.expect_status('REST ' || v_case.label, v_response, v_case.status);
         IF current_setting('test.body_ran') IS DISTINCT FROM (CASE WHEN v_case.reason IS NULL THEN 'yes' ELSE 'no' END) THEN
             RAISE EXCEPTION 'TEST FAILED: REST %: handler body ran = %', v_case.label, current_setting('test.body_ran');
         END IF;
@@ -213,10 +201,7 @@ BEGIN
             CASE WHEN v_case.subject IS NULL THEN ''::extensions.hstore
                  ELSE pg_temp.test_session_headers(v_case.subject) END,
             convert_to('{"jsonrpc":"2.0","method":"da.task","id":1}', 'UTF8'));
-        IF (v_response).status_code IS DISTINCT FROM v_case.status THEN
-            RAISE EXCEPTION 'TEST FAILED: RPC %: expected %, got %: %', v_case.label, v_case.status,
-                (v_response).status_code, api.content_json((v_response).content);
-        END IF;
+        PERFORM pg_temp.expect_status('RPC ' || v_case.label, v_response, v_case.status);
         IF current_setting('test.body_ran') IS DISTINCT FROM (CASE WHEN v_case.reason IS NULL THEN 'yes' ELSE 'no' END) THEN
             RAISE EXCEPTION 'TEST FAILED: RPC %: handler body ran = %', v_case.label, current_setting('test.body_ran');
         END IF;
@@ -266,8 +251,6 @@ BEGIN
     IF NOT EXISTS (SELECT FROM api.access_denial WHERE handler_object_id = 'da000000-0000-4000-8000-000000000021') THEN
         RAISE EXCEPTION 'TEST FAILED: purge removed recent refusals';
     END IF;
-
-    RAISE NOTICE '  + REST, RPC and MCP refuse with 401/403, log once per refusal, collapse repeats, and never run the body';
 END $$;
 
 -- ----------------------------------------------------------------------------
@@ -284,8 +267,6 @@ DECLARE
     v_envelope jsonb;
     v_case     record;
 BEGIN
-    RAISE NOTICE '-> Declared access: organization';
-
     PERFORM pg_temp.test_login('test', 'declared-org', 'declared-org@example.test', NULL, true);
     PERFORM pg_temp.test_act_as('test|declared-org');
     SELECT api.current_principal_id() INTO v_user;
@@ -337,10 +318,7 @@ BEGIN
             CASE WHEN v_case.subject IS NULL THEN ''::extensions.hstore
                  ELSE pg_temp.test_session_headers(v_case.subject) END, NULL::bytea);
         v_body := api.content_json((v_response).content);
-        IF (v_response).status_code IS DISTINCT FROM v_case.status THEN
-            RAISE EXCEPTION 'TEST FAILED: REST organization %: expected %, got % %', v_case.label, v_case.status,
-                (v_response).status_code, v_body;
-        END IF;
+        PERFORM pg_temp.expect_status('REST organization ' || v_case.label, v_response, v_case.status);
         IF v_case.status IS NOT DISTINCT FROM 403 AND v_body->>'code' IS DISTINCT FROM 'pgmi.organization_required' THEN
             RAISE EXCEPTION 'TEST FAILED: REST organization %: 403 body code %', v_case.label, v_body;
         END IF;
@@ -354,10 +332,7 @@ BEGIN
                  ELSE pg_temp.test_session_headers(v_case.subject) END,
             convert_to('{"jsonrpc":"2.0","method":"da.org","id":1}', 'UTF8'));
         v_body := api.content_json((v_response).content);
-        IF (v_response).status_code IS DISTINCT FROM v_case.status THEN
-            RAISE EXCEPTION 'TEST FAILED: RPC organization %: expected %, got % %', v_case.label, v_case.status,
-                (v_response).status_code, v_body;
-        END IF;
+        PERFORM pg_temp.expect_status('RPC organization ' || v_case.label, v_response, v_case.status);
         IF v_case.status IS NOT DISTINCT FROM 403 AND v_body->'error'->'data'->>'code' IS DISTINCT FROM 'pgmi.organization_required' THEN
             RAISE EXCEPTION 'TEST FAILED: RPC organization %: 403 error code %', v_case.label, v_body;
         END IF;
@@ -394,7 +369,6 @@ BEGIN
     END LOOP;
 
     PERFORM set_config('test.organization_id', '', true);
-    RAISE NOTICE '  + REST, RPC and MCP admit organization access only in an organization session: 401, 403 pgmi.organization_required, 200';
 END $$;
 
 -- ----------------------------------------------------------------------------
@@ -404,8 +378,6 @@ DO $$
 DECLARE
     v_operation jsonb;
 BEGIN
-    RAISE NOTICE '-> Declared access: OpenAPI';
-
     PERFORM pg_temp.test_login('test', 'declared-access-doc', 'declared-access-doc@example.test', NULL, true);
     PERFORM api.create_or_replace_rest_handler(jsonb_build_object(
         'id', 'da000000-0000-4000-8000-000000000030', 'path', '/test-da/doc', 'httpMethod', '^GET$',
@@ -442,6 +414,4 @@ BEGIN
     IF (api.openapi_document()->'paths') ? '/test-da/doc' THEN
         RAISE EXCEPTION 'TEST FAILED: an anonymous caller sees a non-public operation';
     END IF;
-
-    RAISE NOTICE '  + x-pgmi-permissions, 401 and 403 published; hidden from anonymous callers';
 END $$;

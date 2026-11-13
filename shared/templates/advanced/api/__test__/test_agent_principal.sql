@@ -176,10 +176,7 @@ BEGIN
         RAISE EXCEPTION 'TEST FAILED: Alice could not revoke her connection';
     END IF;
     v_response := api.replay_exchange(v_exchange);
-    IF (v_response).status_code IS DISTINCT FROM 401 THEN
-        RAISE EXCEPTION 'TEST FAILED: a revoked agent''s exchange must replay as no one (401), got % %',
-            (v_response).status_code, api.content_json((v_response).content);
-    END IF;
+    PERFORM pg_temp.expect_status('a revoked agent''s exchange must replay as no one (401)', v_response, 401);
 
     -- An agent id names no one on its own, and no one else's agent counts.
     PERFORM set_config('auth.principal_id', v_agent::text, true),

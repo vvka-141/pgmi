@@ -9,13 +9,12 @@
 --   3. A re-run file dropped its types with CASCADE on every deploy.
 -- ============================================================================
 
+-- autoLog=false on the error path
 DO $$
 DECLARE
     v_response api.http_response;
     v_logged bigint;
 BEGIN
-    RAISE NOTICE '→ Testing autoLog=false on the error path';
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-3001-4000-8000-000000000001',
@@ -51,17 +50,13 @@ $body$
             'TEST FAILED: autoLog=false route logged % exchange(s) on the error path; '
             'the request body (credentials included) was persisted', v_logged;
     END IF;
-
-    RAISE NOTICE '  ✓ autoLog=false suppresses logging on failure as well as success';
 END $$;
 
-
+-- soft-deleted handlers are undispatchable
 DO $$
 DECLARE
     v_response api.http_response;
 BEGIN
-    RAISE NOTICE '→ Testing soft-deleted handlers are undispatchable';
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-3002-4000-8000-000000000001',
@@ -78,10 +73,7 @@ $body$
     );
 
     v_response := api.rest_invoke('GET', '/retired', ''::extensions.hstore, NULL::bytea);
-    IF v_response.status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'TEST FAILED: the probe route should serve before deletion, got %',
-            v_response.status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('the probe route should serve before deletion', v_response, 200);
 
     UPDATE api.handler SET deleted_at = now()
     WHERE object_id = 'ffffffff-3002-4000-8000-000000000001'::uuid;
@@ -89,22 +81,15 @@ $body$
     -- Before the fix this still returned 200 while the route was already gone
     -- from the OpenAPI document: invisible in the contract, still serving.
     v_response := api.rest_invoke('GET', '/retired', ''::extensions.hstore, NULL::bytea);
-    IF v_response.status_code IS DISTINCT FROM 404 THEN
-        RAISE EXCEPTION
-            'TEST FAILED: a soft-deleted handler is still dispatchable (got %); it is absent '
-            'from OpenAPI, so the contract and the runtime disagree', v_response.status_code;
-    END IF;
-
-    RAISE NOTICE '  ✓ soft-deleted handlers leave dispatch and the contract together';
+    PERFORM pg_temp.expect_status('a soft-deleted handler is absent from OpenAPI, so it must not dispatch',
+        v_response, 404);
 END $$;
 
-
+-- user objects survive an encoding-types redeploy
 DO $$
 DECLARE
     v_survived boolean;
 BEGIN
-    RAISE NOTICE '→ Testing user objects survive an encoding-types redeploy';
-
     CREATE TEMP TABLE encoding_dependent (payload common.utf8);
 
     -- Re-run the shipped casts exactly as a redeploy would. The types are
@@ -130,10 +115,9 @@ BEGIN
     END IF;
 
     DROP TABLE encoding_dependent;
-
-    RAISE NOTICE '  ✓ encoding types survive redeploy and keep their casts';
 END $$;
 
+-- view convergence
 -- core.ensure_view skips an unchanged view, so a redeploy does not take
 -- ACCESS EXCLUSIVE on it. Skipping must not hide a change: a new statement,
 -- or a view someone replaced by hand, is replaced again.
@@ -141,8 +125,6 @@ DO $$
 DECLARE
     v_stmt text := 'CREATE OR REPLACE VIEW core.ensure_view_probe AS SELECT 1 AS n';
 BEGIN
-    RAISE NOTICE '→ Testing view convergence';
-
     IF (core.ensure_view('core.ensure_view_probe', v_stmt)) IS NOT TRUE THEN
         RAISE EXCEPTION 'TEST FAILED: a missing view must be created';
     END IF;
@@ -175,5 +157,4 @@ BEGIN
     END IF;
 
     DROP VIEW core.ensure_view_probe;
-    RAISE NOTICE '  ✓ unchanged views are skipped; changed or hand-edited ones (options too) are replaced';
 END $$;

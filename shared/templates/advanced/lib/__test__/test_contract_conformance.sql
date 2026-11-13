@@ -2,11 +2,10 @@
 -- Test: every declared contract element is enforced (direction A), and the
 -- MCP gateway serves exactly what it advertises (direction B)
 -- ============================================================================
--- Declared-but-unenforced contracts were found one at a time by unrelated
--- reviews: an advertised auth scheme the gateway never read, declared access
--- satisfied by any well-formed header, an outputSchema nothing obliged the
--- handler to meet, query parameters enforced but never published. Each
--- assertion here is driven by the registry, so a route or tool added later is
+-- A contract can be declared and not enforced: an advertised auth scheme the
+-- gateway never reads, declared access satisfied by any well-formed header, an
+-- outputSchema nothing obliges the handler to meet, query parameters enforced
+-- but never published. Each assertion here is driven by the registry, so a route or tool added later is
 -- covered without editing this file. The fixtures only guarantee that every
 -- kind of declaration occurs at least once, so no arm can pass vacuously.
 --
@@ -181,8 +180,6 @@ DECLARE
     v_rest   int := 0;
     v_mcp    int := 0;
 BEGIN
-    RAISE NOTICE '-> Contract conformance: declared access';
-
     FOR v_route IN
         SELECT r.route_name, r.probe_path, r.query_schema::jsonb AS query_schema,
                upper((api.openapi_methods(r.method_regexp))[1]) AS method
@@ -225,7 +222,6 @@ BEGIN
     IF (v_rest = 0) IS NOT FALSE OR (v_mcp = 0) IS NOT FALSE THEN
         RAISE EXCEPTION 'CONFORMANCE: declared-access arm exercised % REST route(s) and % MCP tool(s)', v_rest, v_mcp;
     END IF;
-    RAISE NOTICE '  + % REST route(s) and % MCP tool(s) refuse unresolved callers', v_rest, v_mcp;
 END $$;
 
 -- ----------------------------------------------------------------------------
@@ -240,8 +236,6 @@ DECLARE
     v_org uuid;
     v_headers extensions.hstore;
 BEGIN
-    RAISE NOTICE '-> Contract conformance: advertised security schemes';
-
     SELECT r.route_name, r.probe_path, r.query_schema::jsonb AS query_schema INTO v_route
     FROM api.rest_route r
     JOIN api.handler h ON h.object_id = r.handler_object_id AND h.deleted_at IS NULL
@@ -281,7 +275,6 @@ BEGIN
     IF (v_checked = 0) IS NOT FALSE THEN
         RAISE EXCEPTION 'CONFORMANCE: the spec advertises no session security scheme to check';
     END IF;
-    RAISE NOTICE '  + % advertised session scheme(s) are read by the gateway', v_checked;
 END $$;
 
 -- ----------------------------------------------------------------------------
@@ -299,8 +292,6 @@ DECLARE
     v_declared  text[];
     v_undeclared text;
 BEGIN
-    RAISE NOTICE '-> Contract conformance: headers read by the gateway';
-
     SELECT array_agg(DISTINCT m[1]) INTO v_read
     FROM regexp_matches(pg_get_functiondef('api.set_auth_context(extensions.hstore)'::regprocedure),
                         'p_headers->''([a-z0-9-]+)''', 'g') AS m;
@@ -320,7 +311,6 @@ BEGIN
         RAISE EXCEPTION 'CONFORMANCE: the gateway reads header(s) % that are neither advertised nor listed as trust-boundary headers',
             v_undeclared;
     END IF;
-    RAISE NOTICE '  + % header(s) read by the gateway are all declared or trust-boundary', cardinality(v_read);
 END $$;
 
 -- ----------------------------------------------------------------------------
@@ -337,8 +327,6 @@ DECLARE
     v_rest     int := 0;
     v_mcp      int := 0;
 BEGIN
-    RAISE NOTICE '-> Contract conformance: produces and outputSchema';
-
     PERFORM pg_temp.test_act_as('test|contract-conformance');
     FOR v_route IN
         SELECT r.route_name, r.probe_path, r.query_schema::jsonb AS query_schema, h.produces, h.output_json_schema::jsonb AS schema,
@@ -393,7 +381,6 @@ BEGIN
     IF (v_rest = 0) IS NOT FALSE OR (v_mcp = 0) IS NOT FALSE THEN
         RAISE EXCEPTION 'CONFORMANCE: response-shape arm checked % REST response(s) and % MCP result(s)', v_rest, v_mcp;
     END IF;
-    RAISE NOTICE '  + % REST response(s) and % MCP result(s) match their declared shape', v_rest, v_mcp;
 END $$;
 
 -- ----------------------------------------------------------------------------
@@ -406,8 +393,6 @@ DECLARE
     v_checked int := 0;
     v_headers extensions.hstore;
 BEGIN
-    RAISE NOTICE '-> Contract conformance: declared query parameters';
-
     -- The query is checked only after access.
     v_headers := pg_temp.conformance_caller();
     PERFORM pg_temp.test_act_as('test|contract-conformance');
@@ -430,7 +415,6 @@ BEGIN
     IF (v_checked = 0) IS NOT FALSE THEN
         RAISE EXCEPTION 'CONFORMANCE: no route declares a required query parameter';
     END IF;
-    RAISE NOTICE '  + % route(s) refuse a request missing a required query parameter', v_checked;
 END $$;
 
 -- ----------------------------------------------------------------------------
@@ -447,8 +431,6 @@ DECLARE
                         WHEN 'serializable' THEN 3 WHEN 'repeatable read' THEN 2 ELSE 1 END;
     v_checked int := 0;
 BEGIN
-    RAISE NOTICE '-> Contract conformance: transaction policy';
-
     IF (v_rank = 3) IS NOT FALSE OR (current_setting('transaction_read_only') = 'on') IS NOT FALSE THEN
         RAISE EXCEPTION 'CONFORMANCE: this arm needs a read-write transaction below serializable';
     END IF;
@@ -501,7 +483,6 @@ BEGIN
     IF (v_checked = 0) IS NOT FALSE THEN
         RAISE EXCEPTION 'CONFORMANCE: no route or tool declares a transaction policy to check';
     END IF;
-    RAISE NOTICE '  + % route(s) and tool(s) refuse a transaction weaker than they declare', v_checked;
 END $$;
 
 -- ----------------------------------------------------------------------------
@@ -517,8 +498,6 @@ DECLARE
     v_checked  int := 0;
     v_headers  extensions.hstore;
 BEGIN
-    RAISE NOTICE '-> Contract conformance: declared request bodies';
-
     -- The body is checked only after access.
     v_headers := pg_temp.conformance_caller() || extensions.hstore('content-type', 'application/json');
 
@@ -559,22 +538,14 @@ BEGIN
 
     v_response := api.rest_invoke('POST', '/conformance/write',
         extensions.hstore('content-type', 'application/json'), convert_to('{"qty": "many"}', 'UTF8'));
-    IF (v_response).status_code IS DISTINCT FROM 400 THEN
-        RAISE EXCEPTION 'CONFORMANCE: a body property of the wrong type must be a 400, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('CONFORMANCE: a body property of the wrong type must be a 400', v_response, 400);
     v_response := api.rest_invoke('POST', '/conformance/write',
         extensions.hstore('content-type', 'application/json'), convert_to('not json', 'UTF8'));
-    IF (v_response).status_code IS DISTINCT FROM 400 THEN
-        RAISE EXCEPTION 'CONFORMANCE: a body that is not JSON must be a 400, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('CONFORMANCE: a body that is not JSON must be a 400', v_response, 400);
     v_response := api.rest_invoke('POST', '/conformance/write',
         extensions.hstore('content-type', 'application/json'), convert_to('{"qty": 3}', 'UTF8'));
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'CONFORMANCE: a conforming body must reach the handler, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('CONFORMANCE: a conforming body must reach the handler', v_response, 200);
     PERFORM pg_temp.test_act_as(NULL);
-
-    RAISE NOTICE '  + % route(s) refuse a body missing a required key; types and non-JSON refused too', v_checked;
 END $$;
 
 -- ----------------------------------------------------------------------------
@@ -590,8 +561,6 @@ DECLARE
     v_checked  int := 0;
     v_base     text := rtrim(api.openapi_server_url(), '/');
 BEGIN
-    RAISE NOTICE '-> Contract conformance: declared Location';
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object('id', 'ffffffff-0486-4000-8000-000000000001', 'path', '/conformance/things',
             'httpMethod', '^POST$', 'name', 'conformance_create_thing', 'access', 'public',
@@ -666,8 +635,6 @@ BEGIN
             RAISE EXCEPTION 'CONFORMANCE: registration must refuse %, got %', v_case, coalesce(v_message, 'no error');
         END IF;
     END LOOP;
-
-    RAISE NOTICE '  + % declared Location(s) route to a GET and are published; unfillable templates are refused', v_checked;
 END $$;
 
 -- ----------------------------------------------------------------------------
@@ -681,8 +648,6 @@ DECLARE
     v_checked int := 0;
     v_headers extensions.hstore;
 BEGIN
-    RAISE NOTICE '-> Contract conformance: declared accepts';
-
     v_headers := pg_temp.conformance_caller() || extensions.hstore('content-type', 'text/plain');
     PERFORM pg_temp.test_act_as('test|contract-conformance');
     FOR v_route IN
@@ -708,7 +673,6 @@ BEGIN
     IF (v_checked = 0) IS NOT FALSE THEN
         RAISE EXCEPTION 'CONFORMANCE: no body route narrows accepts';
     END IF;
-    RAISE NOTICE '  + % body route(s) refuse a media type they do not accept', v_checked;
 END $$;
 
 -- ----------------------------------------------------------------------------
@@ -719,8 +683,6 @@ DECLARE
     v_case record;
     v_status int;
 BEGIN
-    RAISE NOTICE '-> Contract conformance: declared query value shapes';
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object('id', 'ffffffff-0388-4000-8000-000000000002', 'path', '/conformance/list',
             'httpMethod', '^GET$', 'name', 'conformance_list', 'access', 'public',
@@ -744,8 +706,6 @@ BEGIN
             RAISE EXCEPTION 'CONFORMANCE: GET /conformance/list% answered %, want %', v_case.query, v_status, v_case.want;
         END IF;
     END LOOP;
-
-    RAISE NOTICE '  + integer, number, boolean and enum query values are checked';
 END $$;
 
 -- ----------------------------------------------------------------------------
@@ -755,8 +715,6 @@ DO $$
 DECLARE
     v_response api.http_response;
 BEGIN
-    RAISE NOTICE '-> Contract conformance: cross-overlapping routes';
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object('id', 'ffffffff-0388-4000-8000-000000000003', 'path', '/conformance/shops/{shop}/orders',
             'httpMethod', '^GET$', 'name', 'conformance_shop_orders', 'access', 'public',
@@ -778,8 +736,6 @@ BEGIN
         RAISE EXCEPTION 'CONFORMANCE: /conformance/shops/north/orders must reach the shop route, got %',
             convert_from(v_response.content, 'UTF8');
     END IF;
-
-    RAISE NOTICE '  + cross-overlapping routes are ranked by their first literal segment';
 END $$;
 
 -- ----------------------------------------------------------------------------
@@ -794,8 +750,6 @@ DECLARE
     v_env       jsonb;
     v_name      text;
 BEGIN
-    RAISE NOTICE '-> Contract conformance: MCP listings agree with the registry';
-
     PERFORM pg_temp.conformance_caller();
     PERFORM pg_temp.test_act_as('test|contract-conformance', pg_temp.test_organization('conformance-org'), true);
 
@@ -849,8 +803,6 @@ BEGIN
     END LOOP;
 
     PERFORM pg_temp.test_act_as(NULL);
-    RAISE NOTICE '  + % advertised MCP entr(ies) match the registry, and every tool dispatches', v_listed;
-    RAISE NOTICE '✓ Contract conformance tests passed';
 END $$;
 
 -- ----------------------------------------------------------------------------

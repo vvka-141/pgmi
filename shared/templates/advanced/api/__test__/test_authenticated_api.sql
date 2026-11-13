@@ -29,9 +29,7 @@ BEGIN
     -- GET /me — Alice sees her own profile
     v_response := api.rest_invoke('GET', '/me', v_headers, NULL::bytea);
 
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'TEST FAILED: Alice GET /me expected 200, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('Alice GET /me', v_response, 200);
 
     v_body := api.content_json((v_response).content);
 
@@ -85,17 +83,11 @@ BEGIN
 
     v_response := api.rest_invoke('GET', '/me', ''::extensions.hstore, NULL::bytea);
 
-    IF (v_response).status_code IS DISTINCT FROM 401 THEN
-        RAISE EXCEPTION 'TEST FAILED: unauthenticated GET /me expected 401, got %',
-            (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('unauthenticated GET /me', v_response, 401);
 
     v_response := api.rest_invoke('GET', '/organizations', ''::extensions.hstore, NULL::bytea);
 
-    IF (v_response).status_code IS DISTINCT FROM 401 THEN
-        RAISE EXCEPTION 'TEST FAILED: unauthenticated GET /organizations expected 401, got %',
-            (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('unauthenticated GET /organizations', v_response, 401);
 
     RAISE DEBUG '  ✓ Unauthenticated requests → 401';
 

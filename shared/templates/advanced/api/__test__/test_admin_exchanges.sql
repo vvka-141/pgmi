@@ -87,9 +87,7 @@ BEGIN
     END IF;
 
     v_response := api.rest_invoke('GET', '/admin/exchanges?actualPrincipalId=not-a-uuid', v_headers, NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 400 THEN
-        RAISE EXCEPTION 'TEST FAILED: a malformed actualPrincipalId must be the gateway''s 400, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('a malformed actualPrincipalId must be the gateway''s 400', v_response, 400);
 
     v_total := (SELECT count(*) FROM api.vw_exchange);
     v_response := api.rest_invoke('GET', '/admin/exchanges?limit=4&actualPrincipalId=', v_headers, NULL::bytea);

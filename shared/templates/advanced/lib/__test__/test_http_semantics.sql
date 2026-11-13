@@ -1,17 +1,18 @@
 -- ============================================================================
--- Test: HTTP semantics
+-- Test: the gateway answers with the status classes, mandatory headers and
+-- negotiation HTTP requires
 -- ============================================================================
--- Status-code classes, mandatory headers, and negotiation. Each assertion here
--- corresponds to a normative requirement the gateway used to miss; the RFC
--- section is named so a future reader can check the claim rather than trust it.
+-- Each assertion pins a normative requirement; the RFC section is named so a
+-- reader can check the claim rather than trust it.
 -- ============================================================================
 
+-- ############################################################################
+-- CLIENT ERRORS - a malformed request is 4xx, never 5xx
+-- ############################################################################
 DO $$
 DECLARE
     v_response api.http_response;
 BEGIN
-    RAISE NOTICE '→ Testing client errors are not 5xx';
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-5001-4000-8000-000000000001',
@@ -34,21 +35,17 @@ $body$
     -- Class 22 is a data exception: the client sent something unparseable.
     -- As a 500 it fired 5xx alerting on a typo and told retry middleware that a
     -- permanently-bad request was worth retrying.
-    IF (v_response).status_code IS DISTINCT FROM 400 THEN
-        RAISE EXCEPTION 'TEST FAILED: a malformed request body must be 4xx, got %',
-            (v_response).status_code;
-    END IF;
-
-    RAISE NOTICE '  ✓ 22xxx data exceptions map to 4xx, not 500';
+    PERFORM pg_temp.expect_status('a malformed request body must be 4xx', v_response, 400);
 END $$;
 
-
+-- ############################################################################
+-- METHODS - a wrong method is 405 with Allow; HEAD is served wherever GET is,
+-- without a body
+-- ############################################################################
 DO $$
 DECLARE
     v_response api.http_response;
 BEGIN
-    RAISE NOTICE '→ Testing 405, Allow, and HEAD';
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-5002-4000-8000-000000000001',
@@ -65,13 +62,10 @@ $body$
     );
 
     -- RFC 9110 §15.5.6: the resource exists, the method does not apply. Path and
-    -- method used to be matched in one predicate, so this was an indistinguishable
-    -- 404 and the proxy in front could not synthesize the difference.
+    -- method are matched apart, so this is a 405, never a 404 the proxy in front
+    -- cannot tell from a missing resource.
     v_response := api.rest_invoke('GET', '/method-probe', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 405 THEN
-        RAISE EXCEPTION 'TEST FAILED: wrong method on an existing resource must be 405, got %',
-            (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('wrong method on an existing resource must be 405', v_response, 405);
     IF ((v_response).headers->'allow') IS NULL THEN
         RAISE EXCEPTION 'TEST FAILED: RFC 9110 15.5.6 makes Allow mandatory on a 405';
     END IF;
@@ -82,10 +76,7 @@ $body$
 
     -- A path that matches nothing is still 404.
     v_response := api.rest_invoke('GET', '/no-such-resource', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 404 THEN
-        RAISE EXCEPTION 'TEST FAILED: an unmatched path must stay 404, got %',
-            (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('an unmatched path must stay 404', v_response, 404);
 
     -- RFC 9110 §9.3.2: HEAD is GET without a body. The default method_regexp
     -- omits HEAD, so routing it literally 404d every route that took the default.
@@ -105,10 +96,7 @@ $body$
     );
 
     v_response := api.rest_invoke('HEAD', '/head-probe', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'TEST FAILED: HEAD must be served wherever GET is, got %',
-            (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('HEAD must be served wherever GET is', v_response, 200);
     IF (v_response).content IS NOT NULL THEN
         RAISE EXCEPTION 'TEST FAILED: HEAD must omit the response body';
     END IF;
@@ -118,17 +106,16 @@ $body$
         RAISE EXCEPTION 'TEST FAILED: HEAD must report the content-length GET would send, got %',
             COALESCE((v_response).headers->'content-length', '<none>');
     END IF;
-
-    RAISE NOTICE '  ✓ 405 carries Allow, 404 stays 404, HEAD mirrors GET';
 END $$;
 
-
+-- ############################################################################
+-- ERROR HEADERS - a 401 carries WWW-Authenticate, every answer the catalog
+-- version and Vary on cookie, none the internal SQLSTATE
+-- ############################################################################
 DO $$
 DECLARE
     v_response api.http_response;
 BEGIN
-    RAISE NOTICE '→ Testing mandatory and cache-correctness headers on errors';
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-5004-4000-8000-000000000001',
@@ -145,10 +132,7 @@ $body$
     );
 
     v_response := api.rest_invoke('GET', '/guarded', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 401 THEN
-        RAISE EXCEPTION 'TEST FAILED: an unauthenticated request to a guarded route must be 401, got %',
-            (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('an unauthenticated request to a guarded route must be 401', v_response, 401);
 
     -- RFC 9110 §15.5.2: a 401 MUST carry at least one challenge.
     IF ((v_response).headers->'www-authenticate') IS NULL THEN
@@ -176,17 +160,15 @@ $body$
     IF ((v_response).headers->'x-error-sqlstate') IS NOT NULL THEN
         RAISE EXCEPTION 'TEST FAILED: x-error-sqlstate is an internal diagnostic and must not reach the client';
     END IF;
-
-    RAISE NOTICE '  ✓ errors carry the challenge, staleness and negotiation headers';
 END $$;
 
-
+-- ############################################################################
+-- BODILESS - a 304 carries no content-length; a 200 does
+-- ############################################################################
 DO $$
 DECLARE
     v_headers extensions.hstore;
 BEGIN
-    RAISE NOTICE '→ Testing bodiless responses omit body framing';
-
     -- RFC 9110 §15.4.5: a 304 carries the representation metadata a 200 would
     -- have sent. content-length: 0 contradicts the 200 the client cached.
     v_headers := internal.finalize_response_headers(
@@ -210,36 +192,25 @@ BEGIN
         RAISE EXCEPTION 'TEST FAILED: a 200 must carry its content-length, got %',
             COALESCE(v_headers->'content-length', '<none>');
     END IF;
-
-    RAISE NOTICE '  ✓ 204/304 omit content-length; 200 keeps it';
 END $$;
 
-
+-- ############################################################################
+-- ACCEPT - q=0 refuses a media type (406); a positive q-value accepts it
+-- ############################################################################
 DO $$
 DECLARE
     v_response api.http_response;
 BEGIN
-    RAISE NOTICE '→ Testing Accept q-values';
-
     -- RFC 9110 §12.5.1: q=0 means "not acceptable". Ignoring the qvalue turned
     -- an explicit refusal into a 200 of exactly the type the client rejected.
     v_response := api.rest_invoke(
         'GET', '/head-probe', 'accept=>"application/json;q=0"'::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 406 THEN
-        RAISE EXCEPTION 'TEST FAILED: accept with q=0 is a refusal and must be 406, got %',
-            (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('accept with q=0 is a refusal and must be 406', v_response, 406);
 
     v_response := api.rest_invoke(
         'GET', '/head-probe', 'accept=>"application/json;q=0.9"'::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'TEST FAILED: a positive q-value must still be accepted, got %',
-            (v_response).status_code;
-    END IF;
-
-    RAISE NOTICE '  ✓ q=0 refuses, q>0 accepts';
+    PERFORM pg_temp.expect_status('a positive q-value must still be accepted', v_response, 200);
 END $$;
-
 
 -- SQLSTATE 25006 has two causes and the gateway tells them apart: a route that
 -- declared read_only and wrote anyway is a handler bug (500), while an
@@ -249,13 +220,14 @@ END $$;
 -- change mid-run -- so both live in the Go suite, in
 -- internal/scaffold/transaction_policy_test.go.
 
+-- ############################################################################
+-- RPC PARSE - an unparseable RPC body is -32700
+-- ############################################################################
 DO $$
 DECLARE
     v_response api.http_response;
     v_route_id uuid;
 BEGIN
-    RAISE NOTICE '→ Testing RPC parse errors';
-
     PERFORM api.create_or_replace_rpc_handler(
         jsonb_build_object(
             'id', 'ffffffff-5005-4000-8000-000000000001',
@@ -273,25 +245,23 @@ $body$
     v_route_id := api.rpc_resolve('probe.echo');
 
     -- JSON-RPC 2.0: an unparseable body is -32700 and the handler must not run.
-    -- The parse failure used to be swallowed and the handler dispatched anyway.
     v_response := api.rpc_invoke(v_route_id, ''::extensions.hstore, convert_to('not json', 'UTF8'));
 
     IF (convert_from((v_response).content, 'UTF8')::jsonb #>> '{error,code}') IS DISTINCT FROM '-32700' THEN
         RAISE EXCEPTION 'TEST FAILED: an unparseable RPC body must return -32700, got %',
             convert_from((v_response).content, 'UTF8');
     END IF;
-
-    RAISE NOTICE '  ✓ unparseable RPC bodies return -32700 without dispatching';
 END $$;
 
-
+-- ############################################################################
+-- GATEWAY INPUT - malformed headers and percent-encoding are answered, never
+-- a 5xx; header case does not matter
+-- ############################################################################
 DO $$
 DECLARE
     v_response api.http_response;
     v_vary text;
 BEGIN
-    RAISE NOTICE '→ Testing malformed input and header handling at the gateway';
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-5379-4000-8000-000000000001',
@@ -326,23 +296,17 @@ $body$
     -- not a reason to abort the transaction without any HTTP response.
     v_response := api.rest_invoke('GET', '/gateway-probe',
         extensions.hstore('accept', 'application/json;q=.'), NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'TEST FAILED: a malformed Accept q-value must still be answered, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('a malformed Accept q-value must still be answered', v_response, 200);
 
     -- Invalid percent-encoding (22021) is a data exception like any other in class 22.
     v_response := api.rest_invoke('GET', '/decode-probe', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 400 THEN
-        RAISE EXCEPTION 'TEST FAILED: invalid percent-encoding must be 400, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('invalid percent-encoding must be 400', v_response, 400);
 
-    -- RFC 9110 5.1: field names are case-insensitive. A canonical-case Accept
-    -- used to be ignored, so an unacceptable type was served anyway.
+    -- RFC 9110 5.1: field names are case-insensitive, so a canonical-case Accept
+    -- is honoured.
     v_response := api.rest_invoke('GET', '/gateway-probe',
         extensions.hstore('Accept', 'text/html'), NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 406 THEN
-        RAISE EXCEPTION 'TEST FAILED: a canonical-case Accept header must be honoured (406), got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('a canonical-case Accept header must be honoured (406)', v_response, 406);
 
     -- RFC 9111 4.1: the handler's own Vary members must survive the gateway's.
     v_response := api.rest_invoke('GET', '/gateway-probe', ''::extensions.hstore, NULL::bytea);
@@ -350,21 +314,21 @@ $body$
     IF COALESCE(v_vary, '') NOT LIKE '%accept-language%' OR COALESCE(v_vary, '') NOT LIKE '%cookie%' THEN
         RAISE EXCEPTION 'TEST FAILED: Vary must union handler and gateway members, got %', v_vary;
     END IF;
-
-    RAISE NOTICE '  ✓ bad q-values answered, class 22 is 400, header names case-insensitive, Vary unioned';
 END $$;
 
+-- ############################################################################
+-- OPTIONS - a preflight is 204 with Allow before identity; an anonymous 405
+-- names the same methods as OPTIONS
 -- A CORS preflight carries no credentials and needs a 2xx, so OPTIONS on a
 -- matched path answers 204 with Allow before identity is resolved. Every other
 -- method answers only from the routes its caller may call: an anonymous
 -- caller must not learn the methods of an authenticated resource from a 405.
+-- ############################################################################
 DO $$
 DECLARE
     v_response api.http_response;
     v_headers  extensions.hstore;
 BEGIN
-    RAISE NOTICE '→ Testing OPTIONS preflight and the public method set';
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-5004-4000-8000-000000000001',
@@ -387,19 +351,14 @@ BEGIN
     );
 
     v_response := api.rest_invoke('OPTIONS', '/private-probe', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 204 THEN
-        RAISE EXCEPTION 'TEST FAILED: OPTIONS on a matched path must be 204 without credentials, got %',
-            (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('OPTIONS on a matched path must be 204 without credentials', v_response, 204);
     IF (v_response).headers->'allow' IS DISTINCT FROM 'DELETE, GET, HEAD, OPTIONS' THEN
         RAISE EXCEPTION 'TEST FAILED: anonymous OPTIONS must list every method of the path, got %',
             coalesce((v_response).headers->'allow', '<none>');
     END IF;
 
     v_response := api.rest_invoke('OPTIONS', '/no-such-resource', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 404 THEN
-        RAISE EXCEPTION 'TEST FAILED: OPTIONS on an unmatched path must stay 404, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('OPTIONS on an unmatched path must stay 404', v_response, 404);
 
     v_response := api.rest_invoke('PUT', '/private-probe', ''::extensions.hstore, NULL::bytea);
     IF (v_response).status_code IS DISTINCT FROM 405
@@ -409,10 +368,7 @@ BEGIN
     END IF;
 
     v_response := api.rest_invoke('DELETE', '/private-probe', ''::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 401 THEN
-        RAISE EXCEPTION 'TEST FAILED: an anonymous call to the protected method must be 401, got %',
-            (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('an anonymous call to the protected method must be 401', v_response, 401);
 
     PERFORM pg_temp.test_login('test', 'http-semantics-options', 'http-semantics-options@example.test', NULL, true);
     v_headers := pg_temp.test_session_headers('test|http-semantics-options');
@@ -422,8 +378,6 @@ BEGIN
         RAISE EXCEPTION 'TEST FAILED: an authenticated 405 must list the same method set, got % Allow: %',
             (v_response).status_code, coalesce((v_response).headers->'allow', '<none>');
     END IF;
-
-    RAISE NOTICE '  ✓ OPTIONS answers pre-auth; 405 and OPTIONS list the full method set';
 END $$;
 
 -- Client mistakes in the URL are 4xx, never a 500 or another code: invalid
@@ -480,5 +434,4 @@ BEGIN
             RAISE EXCEPTION 'TEST FAILED: under ICU, non-ASCII digits are not an integer for try_cast';
         END IF;
     END IF;
-    RAISE NOTICE '  ✓ URL mistakes are 400s: invalid UTF-8, an overflowing int, non-ASCII digits';
 END $$;

@@ -28,12 +28,7 @@ DECLARE
     v_route_id uuid;
     v_headers extensions.hstore;
 BEGIN
-    RAISE NOTICE '→ Testing Authentication Enforcement';
-
-    -- ========================================================================
     -- Register protected handlers (access: authenticated)
-    -- ========================================================================
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-a001-4000-8000-000000000001',
@@ -88,10 +83,7 @@ END;
         $body$
     );
 
-    -- ========================================================================
     -- Register public handlers (access: public)
-    -- ========================================================================
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', 'ffffffff-a004-4000-8000-000000000001',
@@ -144,37 +136,24 @@ END;
         $body$
     );
 
-    -- ========================================================================
-    -- Test: REST protected handler rejects unauthenticated requests
-    -- ========================================================================
-
+    -- REST protected handler rejects unauthenticated requests
     v_response := api.rest_invoke('GET', '/test-protected-rest', ''::extensions.hstore, NULL::bytea);
 
-    IF (v_response).status_code IS DISTINCT FROM 401 THEN
-        RAISE EXCEPTION 'TEST FAILED: Protected REST without auth should return 401, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('Protected REST without auth should return 401', v_response, 401);
 
     v_content := api.content_json((v_response).content);
     IF v_content->>'title' IS DISTINCT FROM 'Unauthorized' THEN
         RAISE EXCEPTION 'TEST FAILED: 401 response should have title "Unauthorized"';
     END IF;
 
-    RAISE NOTICE '  ✓ REST: Protected handler returns 401 without a session';
-
-    -- ========================================================================
     -- "access": "authenticated" gates on a live login session of an enabled
     -- person, so every positive case below needs a real person and session.
-    -- ========================================================================
-
     PERFORM pg_temp.test_login('test', 'user123', 'authtest-user123@example.test', NULL, true);
     PERFORM pg_temp.test_login('test', 'user456', 'authtest-user456@example.test', NULL, true);
     PERFORM pg_temp.test_login('test', 'user789', 'authtest-user789@example.test', NULL, true);
     PERFORM pg_temp.test_login('test', 'alice', 'authtest-alice@example.test', NULL, true);
 
-    -- ========================================================================
-    -- Test: REST protected handler accepts authenticated requests
-    -- ========================================================================
-
+    -- REST protected handler accepts authenticated requests
     v_response := api.rest_invoke(
         'GET',
         '/test-protected-rest',
@@ -182,21 +161,14 @@ END;
         NULL::bytea
     );
 
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'TEST FAILED: Protected REST with auth should return 200, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('Protected REST with auth should return 200', v_response, 200);
 
     v_content := api.content_json((v_response).content);
     IF v_content->>'principalId' IS DISTINCT FROM pg_temp.auth_test_principal('user123')::text THEN
         RAISE EXCEPTION 'TEST FAILED: the handler should see user123 as its principal, got "%"', v_content->>'principalId';
     END IF;
 
-    RAISE NOTICE '  ✓ REST: Protected handler returns 200 with a login session and sees its principal';
-
-    -- ========================================================================
-    -- Test: an identity header is not a way in: only a session handle is
-    -- ========================================================================
-
+    -- an identity header is not a way in: only a session handle is
     v_response := api.rest_invoke(
         'GET',
         '/test-protected-rest',
@@ -204,28 +176,14 @@ END;
         NULL::bytea
     );
 
-    IF (v_response).status_code IS DISTINCT FROM 401 THEN
-        RAISE EXCEPTION 'TEST FAILED: identity headers must NOT satisfy the auth gate, expected 401 got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('identity headers must NOT satisfy the auth gate', v_response, 401);
 
-    RAISE NOTICE '  ✓ REST: x-user-id / x-user-email / x-tenant-id are ignored';
-
-    -- ========================================================================
-    -- Test: REST public handler accepts unauthenticated requests
-    -- ========================================================================
-
+    -- REST public handler accepts unauthenticated requests
     v_response := api.rest_invoke('GET', '/test-public-rest', ''::extensions.hstore, NULL::bytea);
 
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'TEST FAILED: Public REST should return 200, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('Public REST should return 200', v_response, 200);
 
-    RAISE NOTICE '  ✓ REST: Public handler returns 200 without auth';
-
-    -- ========================================================================
-    -- Test: RPC protected handler rejects unauthenticated requests
-    -- ========================================================================
-
+    -- RPC protected handler rejects unauthenticated requests
     v_route_id := api.rpc_resolve('test.protected');
     v_response := api.rpc_invoke(
         v_route_id,
@@ -233,21 +191,14 @@ END;
         convert_to('{"jsonrpc": "2.0", "method": "test.protected", "id": "1"}', 'UTF8')
     );
 
-    IF (v_response).status_code IS DISTINCT FROM 401 THEN
-        RAISE EXCEPTION 'TEST FAILED: Protected RPC without auth should return HTTP 401, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('Protected RPC without auth should return HTTP 401', v_response, 401);
 
     v_content := api.content_json((v_response).content);
     IF (v_content->'error'->>'code')::int IS DISTINCT FROM -32001 THEN
         RAISE EXCEPTION 'TEST FAILED: Protected RPC without auth should return JSON-RPC error -32001, got %', v_content->'error'->>'code';
     END IF;
 
-    RAISE NOTICE '  ✓ RPC: Protected handler returns HTTP 401 with JSON-RPC error -32001';
-
-    -- ========================================================================
-    -- Test: RPC protected handler accepts authenticated requests
-    -- ========================================================================
-
+    -- RPC protected handler accepts authenticated requests
     v_response := api.rpc_invoke(
         v_route_id,
         pg_temp.test_session_headers('test|user456'),
@@ -263,12 +214,7 @@ END;
         RAISE EXCEPTION 'TEST FAILED: the RPC handler should see user456 as its principal';
     END IF;
 
-    RAISE NOTICE '  ✓ RPC: Protected handler succeeds with a login session and sees its principal';
-
-    -- ========================================================================
-    -- Test: RPC public handler accepts unauthenticated requests
-    -- ========================================================================
-
+    -- RPC public handler accepts unauthenticated requests
     v_route_id := api.rpc_resolve('test.public');
     v_response := api.rpc_invoke(
         v_route_id,
@@ -281,12 +227,7 @@ END;
         RAISE EXCEPTION 'TEST FAILED: Public RPC should succeed, got error: %', v_content->'error';
     END IF;
 
-    RAISE NOTICE '  ✓ RPC: Public handler succeeds without auth';
-
-    -- ========================================================================
-    -- Test: MCP protected tool rejects unauthenticated requests
-    -- ========================================================================
-
+    -- MCP protected tool rejects unauthenticated requests
     v_mcp_response := api.mcp_call_tool('test_protected_tool', '{}'::jsonb, NULL, '"req-1"'::jsonb);
 
     IF (v_mcp_response).envelope->'error' IS NULL THEN
@@ -304,12 +245,7 @@ END;
             (v_mcp_response).envelope->'error';
     END IF;
 
-    RAISE NOTICE '  ✓ MCP: a protected tool is indistinguishable from an unknown one without a session';
-
-    -- ========================================================================
-    -- Test: MCP protected tool accepts authenticated requests
-    -- ========================================================================
-
+    -- MCP protected tool accepts authenticated requests
     v_mcp_response := api.mcp_call_tool(
         'test_protected_tool',
         '{}'::jsonb,
@@ -328,33 +264,20 @@ END;
         RAISE EXCEPTION 'TEST FAILED: the MCP handler should see user789 as its principal';
     END IF;
 
-    RAISE NOTICE '  ✓ MCP: Protected tool succeeds with context.connection and sees its principal';
-
-    -- ========================================================================
-    -- Test: MCP public tool accepts unauthenticated requests
-    -- ========================================================================
-
+    -- MCP public tool accepts unauthenticated requests
     v_mcp_response := api.mcp_call_tool('test_public_tool', '{}'::jsonb, NULL, '"req-3"'::jsonb);
 
     IF (v_mcp_response).envelope->'error' IS NOT NULL THEN
         RAISE EXCEPTION 'TEST FAILED: Public MCP tool should succeed without context, got error: %', (v_mcp_response).envelope->'error';
     END IF;
 
-    RAISE NOTICE '  ✓ MCP: Public tool succeeds without auth';
-
-    -- ========================================================================
     -- Hardening: a handle that names no session is rejected across REST,
     -- RPC, and MCP; identity must not leak across successive calls.
-    -- ========================================================================
-
     v_response := api.rest_invoke(
         'GET', '/test-protected-rest',
         'x-login-session=>ls_not-a-session'::extensions.hstore, NULL::bytea
     );
-    IF (v_response).status_code IS DISTINCT FROM 401 THEN
-        RAISE EXCEPTION 'TEST FAILED: an unknown session handle must return 401, got %', (v_response).status_code;
-    END IF;
-    RAISE NOTICE '  ✓ REST: unknown session handle rejected with 401';
+    PERFORM pg_temp.expect_status('an unknown session handle must return 401', v_response, 401);
 
     v_route_id := api.rpc_resolve('test.protected');
     v_response := api.rpc_invoke(
@@ -366,7 +289,6 @@ END;
     IF (v_content->'error'->>'code')::int IS DISTINCT FROM -32001 THEN
         RAISE EXCEPTION 'TEST FAILED: an unknown RPC session handle should return -32001, got %', v_content->'error';
     END IF;
-    RAISE NOTICE '  ✓ RPC: unknown session handle rejected with -32001';
 
     v_mcp_response := api.mcp_call_tool(
         'test_protected_tool', '{}'::jsonb, '{"user_id": "test|user789", "connection": "cn_nope"}'::jsonb, '"req-malformed"'::jsonb
@@ -375,7 +297,6 @@ END;
        OR (v_mcp_response).envelope->'error'->'data'->>'code' IS DISTINCT FROM 'pgmi.connection_unknown' THEN
         RAISE EXCEPTION 'TEST FAILED: an MCP context with a user_id and an unknown connection should answer -31001 pgmi.connection_unknown, got %', (v_mcp_response).envelope->'error';
     END IF;
-    RAISE NOTICE '  ✓ MCP: user_id is ignored and an unknown connection is rejected (-31001 pgmi.connection_unknown)';
 
     -- MCP: identity must not leak across calls. Call 1 authenticates; call 2
     -- omits context and must NOT inherit call 1's identity (proves GUC reset).
@@ -392,13 +313,10 @@ END;
     IF ((v_mcp_response).envelope->'error'->>'code')::int IS DISTINCT FROM -32602 THEN
         RAISE EXCEPTION 'TEST FAILED: identity leaked into a no-context MCP call (expected -32602), got %', (v_mcp_response).envelope->'error';
     END IF;
-    RAISE NOTICE '  ✓ MCP: identity does not leak across calls (GUC reset verified)';
 
-    -- ========================================================================
     -- The MCP dispatcher (mcp_handle_request) must apply the same
     -- validated, reset-first auth context to the discovery path (tools/list),
     -- and must not leak raw SQLERRM to the client.
-    -- ========================================================================
 
     -- Discovery with a forged context must NOT reveal auth-gated tools, but
     -- must still list public ones.
@@ -418,7 +336,6 @@ END;
     ) THEN
         RAISE EXCEPTION 'TEST FAILED: dispatcher tools/list hid a public tool';
     END IF;
-    RAISE NOTICE '  ✓ MCP dispatcher: forged context does not expose auth-gated tools in tools/list';
 
     -- Identity must not bleed into a later context-less discovery request.
     v_mcp_response := api.mcp_handle_request(
@@ -435,7 +352,6 @@ END;
     ) THEN
         RAISE EXCEPTION 'TEST FAILED: identity bled into a context-less dispatcher tools/list';
     END IF;
-    RAISE NOTICE '  ✓ MCP dispatcher: identity does not bleed into context-less discovery';
 
     -- A failing handler invoked through the dispatcher must not surface raw
     -- error detail (table/column names, SQLERRM) to the client.
@@ -462,23 +378,12 @@ END;
     IF (v_mcp_response).envelope::text LIKE '%pgmi_secret_detail_marker%' THEN
         RAISE EXCEPTION 'TEST FAILED: raw handler error detail leaked to MCP client: %', (v_mcp_response).envelope;
     END IF;
-    RAISE NOTICE '  ✓ MCP dispatcher: failing handler does not leak raw SQLERRM to client';
 
-    -- ========================================================================
     -- Disabling a person closes their open sessions at once.
-    -- ========================================================================
-
     v_headers := pg_temp.test_session_headers('test|user123');
     v_response := api.rest_invoke('GET', '/test-protected-rest', v_headers, NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'TEST FAILED: setup: user123 should be served, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('setup: user123 should be served', v_response, 200);
     PERFORM membership.fn_disable_principal(pg_temp.auth_test_principal('user123'), 'test lockout');
     v_response := api.rest_invoke('GET', '/test-protected-rest', v_headers, NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 401 THEN
-        RAISE EXCEPTION 'TEST FAILED: a disabled person''s session must return 401, got %', (v_response).status_code;
-    END IF;
-    RAISE NOTICE '  ✓ REST: a disabled person''s open session is refused with 401';
-
-    RAISE NOTICE '✓ Authentication Enforcement tests passed';
+    PERFORM pg_temp.expect_status('a disabled person''s session must return 401', v_response, 401);
 END $$;

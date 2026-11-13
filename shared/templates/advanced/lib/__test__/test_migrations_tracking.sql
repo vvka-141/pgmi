@@ -58,7 +58,6 @@ END $$;
 -- The idempotent -> non-idempotent flip is covered by
 -- TestAdvancedTemplate_IdempotentToNonIdempotentFlip. It needs three deploys
 -- against one database, so it cannot live here: a __test__ file gets one.
--- The block that used to sit here built a temp table, re-implemented
--- deploy.sql's skip predicate against it, and asserted its own
--- re-implementation behaved as written -- deleting the real predicate left it
--- green.
+-- Re-implementing deploy.sql's skip predicate over a temp table here would
+-- only prove the copy behaves as written: deleting the real predicate leaves
+-- it green.

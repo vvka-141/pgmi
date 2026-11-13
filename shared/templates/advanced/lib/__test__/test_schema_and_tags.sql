@@ -1,7 +1,7 @@
 -- ============================================================================
--- Test: JSON Schema persistence, $schema injection, and MCP tags
+-- Test: handler schemas persist and are injected or listed as declared, and
+-- discovery hides what the caller may not call
 -- ============================================================================
--- Validates Wave 2 library primitives:
 --   • api.json_schema domain stores valid schemas, rejects malformed ones
 --   • output_json_schema persists on handler registration
 --   • x-include-schema response header triggers $schema merge on REST/RPC
@@ -9,6 +9,10 @@
 --   • mcp_list_tools(p_tags) filters by tag overlap
 -- ============================================================================
 
+-- ############################################################################
+-- SCHEMAS AND TAGS - schemas persist, x-include-schema injects $schema, and
+-- tools/list returns outputSchema and filters by tag
+-- ############################################################################
 DO $$
 DECLARE
     v_rest_handler_id uuid := 'ffffffff-0002-4000-8000-000000000001';
@@ -21,12 +25,7 @@ DECLARE
     v_stored_schema   jsonb;
     v_malformed_ok    boolean;
 BEGIN
-    RAISE NOTICE '-> Testing JSON Schema persistence, injection, and tags';
-
-    -- ========================================================================
     -- json_schema domain rejects malformed schemas at DDL time
-    -- ========================================================================
-
     BEGIN
         PERFORM '{"type": 42}'::jsonb::api.json_schema;
         v_malformed_ok := true;
@@ -38,12 +37,7 @@ BEGIN
         RAISE EXCEPTION 'api.json_schema accepted malformed type keyword (expected check_violation)';
     END IF;
 
-    RAISE NOTICE '  + api.json_schema rejects malformed top-level keywords';
-
-    -- ========================================================================
     -- REST: output_json_schema persists + x-include-schema merges $schema
-    -- ========================================================================
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', v_rest_handler_id,
@@ -73,8 +67,6 @@ END;
         RAISE EXCEPTION 'REST output_json_schema not persisted: %', v_stored_schema;
     END IF;
 
-    RAISE NOTICE '  + REST handler output_json_schema persisted';
-
     v_http_response := api.rest_invoke('GET', '/schema-rest', ''::extensions.hstore, NULL::bytea);
     v_response_body := api.content_json((v_http_response).content);
 
@@ -86,12 +78,7 @@ END;
         RAISE EXCEPTION 'REST $schema merge corrupted: %', v_response_body;
     END IF;
 
-    RAISE NOTICE '  + REST response body contains $schema merged from output_json_schema';
-
-    -- ========================================================================
     -- RPC: same flow, x-include-schema triggers injection
-    -- ========================================================================
-
     PERFORM api.create_or_replace_rpc_handler(
         jsonb_build_object(
             'id', v_rpc_handler_id,
@@ -132,12 +119,7 @@ END;
         RAISE EXCEPTION 'RPC response.result missing $schema key (x-include-schema=true): %', v_response_body;
     END IF;
 
-    RAISE NOTICE '  + RPC response.result contains $schema merged from output_json_schema';
-
-    -- ========================================================================
     -- MCP: outputSchema appears in mcp_list_tools; tags filter works
-    -- ========================================================================
-
     PERFORM api.create_or_replace_mcp_handler(
         jsonb_build_object(
             'id', v_mcp_handler_a,
@@ -210,8 +192,6 @@ END;
         RAISE EXCEPTION 'mcp_list_tools missing _meta.tags for schema_tool_alpha: %', v_list;
     END IF;
 
-    RAISE NOTICE '  + mcp_list_tools includes outputSchema and _meta.tags';
-
     -- Tag filter: specific tag returns one tool
     v_list := api.mcp_list_tools(ARRAY['alpha']);
     IF jsonb_array_length(v_list->'tools') IS DISTINCT FROM 1
@@ -239,27 +219,20 @@ END;
                 v_empty_count, v_all_count;
         END IF;
     END;
-
-    RAISE NOTICE '  + mcp_list_tools(p_tags) filters by tag overlap; empty array = no filter';
-
-    RAISE NOTICE '✓ Schema and tags tests passed';
 END $$;
 
--- ============================================================================
--- Test: x-include-schema directive is matched case-insensitively
+-- ############################################################################
+-- DIRECTIVE CASE - x-include-schema is matched case-insensitively
 -- A handler registering a mixed-case key (X-Include-Schema) or value (TRUE)
 -- must still trigger $schema injection — the directive lookup must not depend
 -- on the exact case stored in response_headers.
--- ============================================================================
-
+-- ############################################################################
 DO $$
 DECLARE
     v_handler_id uuid := 'ffffffff-0002-4000-8000-00000000000a';
     v_response   api.http_response;
     v_body       jsonb;
 BEGIN
-    RAISE NOTICE '-> Testing x-include-schema case-insensitivity';
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', v_handler_id,
@@ -291,16 +264,12 @@ END;
     IF (v_response).headers ? 'x-include-schema' THEN
         RAISE EXCEPTION 'x-include-schema directive must not leak to the wire: %', (v_response).headers;
     END IF;
-
-    RAISE NOTICE '  + x-include-schema matched case-insensitively (key + value)';
-    RAISE NOTICE '✓ x-include-schema case-insensitivity test passed';
 END $$;
 
--- ============================================================================
--- Test: auth-required tools are hidden from mcp_list_tools without a principal;
--- static resources emit `uri`, templated ones emit `uriTemplate`
--- ============================================================================
-
+-- ############################################################################
+-- TOOL DISCOVERY - auth-required tools are hidden without a principal; static
+-- resources emit `uri`, templated ones `uriTemplate`
+-- ############################################################################
 DO $$
 DECLARE
     v_auth_tool_id uuid := 'e3000010-0001-4000-8000-000000000001';
@@ -308,8 +277,6 @@ DECLARE
     v_template_res_id uuid := 'e3000010-0003-4000-8000-000000000001';
     v_list jsonb;
 BEGIN
-    RAISE NOTICE '-> Testing tools/list auth filter + resources/list uri vs uriTemplate';
-
     PERFORM api.create_or_replace_mcp_handler(
         jsonb_build_object(
             'id', v_auth_tool_id,
@@ -361,8 +328,6 @@ END;
     END IF;
 
     PERFORM pg_temp.test_act_as(NULL);
-
-    RAISE NOTICE '  + mcp_list_tools hides auth-required tools when unauthenticated';
 
     PERFORM api.create_or_replace_mcp_handler(
         jsonb_build_object(
@@ -451,15 +416,11 @@ END;
     ) THEN
         RAISE EXCEPTION 'Static resource must not appear in resources/templates/list: %', v_list;
     END IF;
-
-    RAISE NOTICE '  + resources/list and resources/templates/list split static uri from uriTemplate';
-
-    RAISE NOTICE '✓ MCP list auth/uri tests passed';
 END $$;
 
--- ============================================================================
--- Test: the same discovery auth filter on resources, templates, prompts, and OpenAPI
--- ============================================================================
+-- ############################################################################
+-- DISCOVERY FILTER - resources, templates, prompts and OpenAPI hide what the
+-- caller may not call, as tools/list does
 -- api.mcp_list_{tools,resources,resource_templates,prompts} all carry the same
 -- predicate — internal.current_access_denial(...) IS NULL — but only tools
 -- was covered. The two resource assertions above register their fixtures with
@@ -468,14 +429,13 @@ END $$;
 -- Unfiltered, MCP discovery hands an unauthenticated caller the names,
 -- descriptions, resource URIs and prompt argument lists of everything it is not
 -- allowed to invoke.
+-- ############################################################################
 DO $$
 DECLARE
     v_state   record;
     v_surface record;
     v_expect  boolean;
 BEGIN
-    RAISE NOTICE '-> Testing resources/templates/prompts discovery auth filter';
-
     PERFORM api.create_or_replace_mcp_handler(
         jsonb_build_object(
             'id', 'e3000011-0001-4000-8000-000000000001',
@@ -571,23 +531,17 @@ END;
     END LOOP;
 
     PERFORM pg_temp.test_act_as(NULL);
-
-    RAISE NOTICE '  + resources, resource templates, prompts and the OpenAPI document all hide auth-required entries';
-    RAISE NOTICE '✓ MCP discovery auth filter tests passed';
 END $$;
 
--- ============================================================================
--- Test: registered response_headers propagate to REST responses
--- (except the x-include-schema directive, which stays internal).
--- ============================================================================
-
+-- ############################################################################
+-- RESPONSE HEADERS - registered response_headers reach REST responses, except
+-- the x-include-schema directive, which stays internal
+-- ############################################################################
 DO $$
 DECLARE
     v_handler_id uuid := 'e3000012-0001-4000-8000-000000000001';
     v_response api.http_response;
 BEGIN
-    RAISE NOTICE '-> Testing REST registered response_headers propagation';
-
     PERFORM api.create_or_replace_rest_handler(
         jsonb_build_object(
             'id', v_handler_id,
@@ -621,8 +575,6 @@ END;
     IF (v_response).headers ? 'x-include-schema' THEN
         RAISE EXCEPTION 'x-include-schema directive must not appear on the wire: %', (v_response).headers;
     END IF;
-
-    RAISE NOTICE '  + registered response_headers propagate (case-insensitive) and x-include-schema is stripped';
 
     -- A handler that hand-builds its response and sets 'Content-Type' (mixed
     -- case, as an author naturally would) must not end up with TWO content-types:
@@ -663,9 +615,5 @@ END;
         IF v_ct_value IS DISTINCT FROM 'text/csv' THEN
             RAISE EXCEPTION 'the handler''s own content-type must win, got %', v_ct_value;
         END IF;
-
-        RAISE NOTICE '  + a mixed-case handler Content-Type does not produce a duplicate';
     END;
-
-    RAISE NOTICE '✓ response_headers propagation tests passed';
 END $$;

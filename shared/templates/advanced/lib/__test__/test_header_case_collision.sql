@@ -22,9 +22,7 @@ BEGIN
     FOREACH v_header IN ARRAY ARRAY['x-login-session', 'x-organization-session'] LOOP
         v_response := api.rest_invoke('GET', '/health',
             extensions.hstore(ARRAY[v_header, 'transport-value', initcap(v_header), 'client-value']), NULL::bytea);
-        IF (v_response).status_code IS DISTINCT FROM 400 THEN
-            RAISE EXCEPTION 'TEST FAILED: REST with % in two casings answered %, want 400', v_header, (v_response).status_code;
-        END IF;
+        PERFORM pg_temp.expect_status(format('REST with %s in two casings', v_header), v_response, 400);
 
         v_response := api.rpc_invoke(v_route_id,
             extensions.hstore(ARRAY[v_header, 'transport-value', upper(v_header), 'client-value']),
@@ -37,9 +35,7 @@ BEGIN
     END LOOP;
 
     v_response := api.rest_invoke('GET', '/health', 'X-Trace-Id=>a, Accept=>application/json'::extensions.hstore, NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'TEST FAILED: mixed-case names that do not collide must pass, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('mixed-case names that do not collide must pass', v_response, 200);
 
     RAISE DEBUG '  + REST and RPC answer 400 to case-colliding headers, the session headers included';
 END $$;

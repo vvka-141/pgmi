@@ -67,8 +67,6 @@ BEGIN
     END IF;
 
     PERFORM pg_temp.test_act_as(NULL);
-
-    RAISE NOTICE '  + every registered route is published, and every published path is registered';
 END $$;
 
 -- Arm 3: every status the gateway derives from a route's metadata is published
@@ -254,7 +252,4 @@ BEGIN
             RAISE EXCEPTION 'OpenAPI publishes % but OPTIONS on it answers %', v_path, v_status;
         END IF;
     END LOOP;
-
-    RAISE NOTICE '  + all % published operation(s) resolve to a handler, and every path answers OPTIONS', v_checked;
-    RAISE NOTICE '✓ OpenAPI-to-router agreement tests passed';
 END $$;

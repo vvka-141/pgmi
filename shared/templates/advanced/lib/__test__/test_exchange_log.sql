@@ -8,6 +8,10 @@
 -- the request through the same dispatch and rolls back everything it did.
 -- ============================================================================
 
+-- ############################################################################
+-- REPLAY - a request is found by its id, keeps its context, and replays as its
+-- caller with nothing kept
+-- ############################################################################
 DO $$
 DECLARE
     v_owner     uuid;
@@ -20,8 +24,6 @@ DECLARE
     v_rows      bigint;
     v_before    text;
 BEGIN
-    RAISE NOTICE '-> Testing the exchange log: request id, context, replay';
-
     v_owner := pg_temp.test_login('test', 'replay-owner', 'replay-owner@example.test', NULL, true);
     v_org := (membership.fn_create_organization_with_owner('Replay', 'replay-org', v_owner)).object_id;
 
@@ -61,9 +63,7 @@ $body$
     v_response := api.rest_invoke('POST', '/replay-probe',
         v_headers || extensions.hstore(ARRAY['x-request-id', v_rid, 'referer', 'https://app.test/invite?code=SECRET']),
         NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 200 THEN
-        RAISE EXCEPTION 'TEST FAILED: the probe answered %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('the probe answered', v_response, 200);
 
     SELECT * INTO v_exchange FROM api.vw_exchange WHERE request_id = v_rid;
     IF NOT FOUND OR v_exchange.protocol IS DISTINCT FROM 'rest' OR v_exchange.response_status IS DISTINCT FROM 200
@@ -126,9 +126,7 @@ $body$
     END IF;
     v_response := api.rest_invoke('POST', '/admin/exchanges/' || gen_random_uuid() || '/replay',
         pg_temp.test_session_headers('test|replay-operator', NULL, ARRAY['mfa']), NULL::bytea);
-    IF (v_response).status_code IS DISTINCT FROM 404 THEN
-        RAISE EXCEPTION 'TEST FAILED: replaying an unknown exchange must answer 404, got %', (v_response).status_code;
-    END IF;
+    PERFORM pg_temp.expect_status('replaying an unknown exchange must answer 404', v_response, 404);
     IF has_function_privilege(pg_temp.deployment_setting('database_api_role'), 'api.replay_exchange(uuid)', 'EXECUTE') THEN
         RAISE EXCEPTION 'TEST FAILED: the gateway role must not execute api.replay_exchange';
     END IF;
@@ -204,17 +202,17 @@ $body$);
        OR (SELECT count(*) FROM api.mcp_exchange) IS DISTINCT FROM v_logged THEN
         RAISE EXCEPTION 'TEST FAILED: MCP replay must roll back its writes and its own exchange row';
     END IF;
-    RAISE NOTICE '  ✓ MCP: tool errors count as errors; replay runs as the caller and keeps nothing';
 END $$;
 
+-- ############################################################################
+-- CONTEXT - an overridden internal.request_log_context() is what is stored
 -- An application that keeps more context replaces internal.request_log_context;
 -- the gateway stores whatever it returns.
+-- ############################################################################
 DO $$
 DECLARE
     v_context jsonb;
 BEGIN
-    RAISE NOTICE '-> Testing an overridden internal.request_log_context() is stored';
-
     CREATE OR REPLACE FUNCTION internal.request_log_context()
     RETURNS jsonb LANGUAGE sql STABLE AS $f$ SELECT '{"principalId": null, "tenantHint": "replay-override"}'::jsonb $f$;
 
@@ -227,14 +225,15 @@ BEGIN
     END IF;
 END $$;
 
+-- ############################################################################
+-- REDACTION - an application header can join the redacted ones
 -- The redacted-header list is extendable: an application header named by
 -- internal.application_unloggable_headers() is dropped like a credential.
+-- ############################################################################
 DO $$
 DECLARE
     v_rid text := md5(random()::text);
 BEGIN
-    RAISE NOTICE '-> Testing the application can extend the redacted headers';
-
     CREATE OR REPLACE FUNCTION internal.application_unloggable_headers()
     RETURNS text[] LANGUAGE sql STABLE AS $f$ SELECT '{x-device-secret}'::text[] $f$;
 
