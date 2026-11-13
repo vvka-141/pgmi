@@ -228,8 +228,10 @@ fn deploy_skill_blocks(
     let password = std::str::FromStr::from_str(pg.conn())
         .ok()
         .and_then(|c: tokio_postgres::Config| {
+            let names = [c.get_user(), c.get_dbname(), Some(db)];
             c.get_password()
                 .map(|p| String::from_utf8_lossy(p).into_owned())
+                .filter(|p| !names.contains(&Some(p.as_str())))
         })
         .filter(|p| p.len() >= 3);
     let shown = |m: &str| {
