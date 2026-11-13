@@ -1,4 +1,4 @@
-description: Rust only (contract "Whole-deployment retry"). 25006 (read-only transaction) from a server that reports in_hot_standby = on, reached with the default target_session_attrs, is retried until the time box would end inside the next wait, then is exit 13 counting the attempts; asked for a standby (read-only) it is final at once, and so is 25006 from a primary (the proxy answers it)
+description: Rust only (contract "Whole-deployment retry"). 25006 (read-only transaction) from a server that reports in_hot_standby = on, reached with the default target_session_attrs, is retried until the time box would end inside the next wait, then is exit 13 counting the attempts (with a 2s box that is always the second wait, whatever the jitter, since the first wait of at most 1.2s fits and the second of at least 1.6s does not); asked for a standby (read-only) it is final at once, and so is 25006 from a primary (the proxy answers it)
 impl: rust
 servers: [replica]
 proxy:
@@ -11,12 +11,12 @@ project:
 steps:
   - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{primary_port}/postgres", -d, "{db}"]
     expect: {exit: 0}
-  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{standby_port}/postgres", -d, "{db}", --timeout, 3s]
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{standby_port}/postgres", -d, "{db}", --timeout, 2s]
     delay: 2
     timeout: 30
     expect:
       exit: 13
-      stderr: ["^pgmi: attempt 1 failed \\(25006 read-only transaction on a hot standby\\); retrying in", "(time box of 3s used up after [23] attempts|stopped after [23] attempts: the next retry would pass the 3s time box); last error: .*read-only"]
+      stderr: ["^pgmi: attempt 1 failed \\(25006 read-only transaction on a hot standby\\); retrying in", "stopped after 2 attempts: the next retry would pass the 2s time box; last error: .*read-only"]
   - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{standby_port}/postgres?target_session_attrs=read-only", -d, "{db}", --timeout, 30s]
     timeout: 30
     expect:
