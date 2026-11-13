@@ -186,6 +186,7 @@ pub(crate) mod tests {
 
     /// Answers one connection per status in `script`, then stops listening.
     pub(crate) async fn scripted(script: Vec<(u16, &'static str)>) -> (String, Arc<AtomicUsize>) {
+        crate::conn::tls::install();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let served = Arc::new(AtomicUsize::new(0));
