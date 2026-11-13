@@ -101,7 +101,7 @@ myproject/
 `deploy.sql` reads as the deployment, top to bottom, in five banners:
 PREFLIGHT, BOOTSTRAP, DEPLOY, VERIFY and TAIL. Its setup code lives in
 `deploy/`, a fixed set of files `deploy.sql` runs by name through
-`pg_temp.run_file`. They are not in the plan and carry no `<pgmi-meta>` block.
+`pg_temp.pgmi_run_file`, which pgmi provides. They are not in the plan and carry no `<pgmi-meta>` block.
 
 - `deploy/settings.sql` holds the lists a project edits: required extensions,
   database settings, schema grants, tenant columns and the optional guards.

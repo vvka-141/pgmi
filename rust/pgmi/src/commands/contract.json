@@ -161,6 +161,15 @@
       "returns": [
         "void"
       ]
+    },
+    {
+      "name": "pgmi_run_file",
+      "args": [
+        "p_path text"
+      ],
+      "returns": [
+        "void"
+      ]
     }
   ],
   "types": [

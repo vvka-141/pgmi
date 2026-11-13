@@ -334,7 +334,7 @@ The first SIGINT or SIGTERM during the load is exit 130 and a
 `--timeout` that runs out there is exit 16, as in Go, which loads after
 connecting.
 
-Cases: `dialect/pgmiignore`, `dialect/pgmiignore-characters`, `dialect/root-deploy-file-any-case`, `dialect/pgmiignore-hides-deploy`, `execution/loader-at-scale`, `dialect/project-walk`, `commands/metadata-refusals`, `errors/special-file`, `dialect/nested-deploy-sql-loaded`, `dialect/pgmiignore-broken-patterns`, `formats/binary-file-in-test-directory`. The load racing a signal and the timeout: Rust unit tests `blocking_work_gives_way_to_the_first_signal`, `blocking_work_gives_way_to_the_timeout`, `formats/deploy-sql-not-capped`, `errors/deploy-sql-directory`.
+Cases: `dialect/pgmiignore`, `dialect/pgmiignore-characters`, `dialect/root-deploy-file-any-case`, `dialect/pgmiignore-hides-deploy`, `execution/loader-at-scale`, `dialect/project-walk`, `commands/metadata-refusals`, `errors/special-file`, `dialect/nested-deploy-sql-loaded`, `dialect/pgmiignore-broken-patterns`, `formats/binary-file-in-test-directory`., `formats/deploy-sql-not-capped`, `errors/deploy-sql-directory`. The load racing a signal and the timeout: Rust unit tests `blocking_work_gives_way_to_the_first_signal`, `blocking_work_gives_way_to_the_timeout`.
 
 ### Session API
 
@@ -349,6 +349,38 @@ project are resolved and before connecting, so the summary line and the
 without metadata sorts by its path; a missing `<description>` is an empty
 string. The session tables are analysed after loading, so deploy.sql and
 pgmi's own plan queries see statistics (case `deploy/session-tables-analyzed`). `pgmi_test_directory_view` lists every directory that holds a test-path file, SQL or not (case `execution/test-directory-without-sql`). A `<pgmi-meta>` block without `<description>` gives `''` in `pgmi_source_metadata_view.description`, never NULL (case `deploy/metadata-description-default`). Full reference: `docs/session-api.md`.
+
+#### `pg_temp.pgmi_run_file` (owner 2026-11-13, PGMI-974)
+
+Both binaries create it with the rest of the session API
+(`shared/contract/api-v1.sql`) before deploy.sql runs:
+
+```sql
+pg_temp.pgmi_run_file(p_path text) RETURNS void
+```
+
+- **What it runs.** The `content` of the row in `pgmi_source_view` whose
+  `path` is `p_path` (`./dir/file.sql` form), with `EXECUTE`, as the calling
+  role (security invoker), inside the caller's transaction. It reads no
+  metadata, ledger or checksum: deploy.sql decides what runs and when.
+- **Errors.** It has no exception handler: an error in the file reaches pgmi
+  as PostgreSQL raised it (its SQLSTATE, message, detail and hint), and pgmi
+  names the file and line as for any file deploy.sql runs with `EXECUTE`. A
+  path that is not in `pgmi_source_view` (none, a test file, deploy.sql, NULL)
+  raises `deploy.sql runs <path>, which is not in the project` (P0001).
+- **Before the first COMMIT** a call runs inside the head's transaction, all
+  or nothing with the rest of it. **After it** each top-level
+  `SELECT pg_temp.pgmi_run_file(...)` is one autocommit statement: the file
+  commits or rolls back as a whole. As from any function, a file that holds
+  `COMMIT`/`ROLLBACK`, `CREATE INDEX CONCURRENTLY` or `VACUUM` fails.
+- **Who may call it.** EXECUTE is granted to PUBLIC, so it still works after
+  `SET ROLE`, whatever default privileges the login has.
+- **Names.** pgmi reserves the `pgmi_` prefix in `pg_temp`. A deploy.sql that
+  defines its own helper under another name, such as the templates' former
+  `pg_temp.run_file`, works unchanged (case `deploy/own-run-file-helper`).
+
+Both templates run their files through it. `pgmi ai contract` lists it.
+Case: `deploy/pgmi-run-file`.
 
 The session speaks the target database's own encoding (`client_encoding` is set
 to `server_encoding`), as Go's driver does by never sending one: on a LATIN1

@@ -78,6 +78,11 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   `SSL_CERT_FILE`, `HTTPS_PROXY` and the rest listed in the behaviour
   contract) are refused when a checked-out project sets them; the
   `.env applied:` line names them. Set them in the environment pgmi runs in.
+- **`pg_temp.pgmi_run_file(path)` in every deploy session.** deploy.sql can
+  run one project file by its path, with errors named by file and line as
+  before; both templates use it, and a helper of your own keeps working. See
+  [Session API](../../docs/session-api.md#running-one-file-pg_temppgmi_run_file)
+  and `pgmi ai contract`.
 - **Whole-deployment retry inside `--timeout`.** A transient failure (a lost
   connection, a server restart, too many connections, a deadlock or
   serialization failure, a lock timeout, a failover to a standby, a sign-in

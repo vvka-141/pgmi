@@ -426,6 +426,34 @@ BEGIN
 END $$;
 ```
 
+### Running one file: `pg_temp.pgmi_run_file`
+
+```sql
+pg_temp.pgmi_run_file(p_path text) RETURNS void
+```
+
+Runs the project file whose `pgmi_source_view.path` is `p_path` with
+`EXECUTE`, as the calling role, inside the caller's transaction. It reads no
+metadata, ledger or checksum: deploy.sql decides what runs and when.
+
+```sql
+BEGIN;
+SELECT pg_temp.pgmi_run_file('./setup/roles.sql');
+SELECT pg_temp.pgmi_run_file('./setup/schemas.sql');
+COMMIT;
+```
+
+- An error in the file reaches pgmi as PostgreSQL raised it; pgmi names the
+  file and line. A path that is not in the project raises
+  `deploy.sql runs <path>, which is not in the project`.
+- Before the first top-level `COMMIT` a call is part of the head's
+  transaction. After it, each top-level call is one autocommit statement. A
+  file holding `COMMIT`, `CREATE INDEX CONCURRENTLY` or `VACUUM` fails, as it
+  would from any function.
+- EXECUTE is granted to PUBLIC, so it works after `SET ROLE`.
+- Names starting with `pgmi_` in `pg_temp` are pgmi's. A helper of your own
+  under another name keeps working.
+
 ### Metadata
 
 #### pgmi_source_metadata_view

@@ -13,6 +13,12 @@ def test_server_numbers_are_normalised():
     )
 
 
+def test_session_temp_schema_numbers_are_normalised():
+    ws = SimpleNamespace(**{**vars(WS), "project": Path("/proj"), "home": Path("/home-dir"), "root": Path("/root-dir")})
+    text = "WHERE: PL/pgSQL function pg_temp_96.pgmi_run_file(text) line 9 at EXECUTE"
+    assert normalise(text, ws) == "WHERE: PL/pgSQL function pg_temp_<n>.pgmi_run_file(text) line 9 at EXECUTE"
+
+
 def test_json_lines_compare_as_data():
     go = '{"b":1,"a":{"y":"\\u003e","x":2},"durationMs":5}\n'
     rust = '{"a":{"x":2,"y":">"},"b":1,"durationMs":9}\n'

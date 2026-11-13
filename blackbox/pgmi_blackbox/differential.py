@@ -37,6 +37,7 @@ _BUILD = re.compile(r"^Commit: .*, Built: .*$", re.MULTILINE)
 _UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
 _JSON_VOLATILE = {"durationMs", "startedAt", "finishedAt"}
 _PER_MINUTE = {"api.access_denial"}
+_TEMP_SCHEMA = re.compile(r"\bpg_temp_\d+\b")
 _SERVER_NUMBER = re.compile(r"\b((?:[Pp]rocess|PID|pid|relation|database|transaction|OID|oid) )\d+\b")
 
 _USER = r"n.nspname !~ '^(pg_|information_schema$)'"
@@ -110,7 +111,7 @@ def normalise(text: str, ws: Workspace) -> str:
         (ws.database, "{db}"),
     ):
         text = text.replace(value, name)
-    text = _SERVER_NUMBER.sub(r"\1<n>", text)
+    text = _TEMP_SCHEMA.sub("pg_temp_<n>", _SERVER_NUMBER.sub(r"\1<n>", text))
     return _DURATION.sub("<duration>", _UUID.sub("<uuid>", _BUILD.sub("<build>", text)))
 
 

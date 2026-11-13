@@ -286,12 +286,12 @@ fn advanced_deploy_sql_wires_the_entity_standards_sweep() {
     let raw = embedded("templates/advanced/deploy.sql");
     let sql = code_only(&raw);
     let finalize_at = raw
-        .find("pg_temp.run_file('./deploy/finalize.sql')")
-        .filter(|&at| sql[at..].starts_with("pg_temp.run_file("))
+        .find("pg_temp.pgmi_run_file('./deploy/finalize.sql')")
+        .filter(|&at| sql[at..].starts_with("pg_temp.pgmi_run_file("))
         .expect("deploy.sql never runs deploy/finalize.sql");
     let loop_at = raw
-        .find("EXECUTE f.content")
-        .expect("deploy.sql has no plan loop executing f.content");
+        .find("pg_temp.pgmi_run_file(f.path)")
+        .expect("deploy.sql has no plan loop running f.path");
     assert!(
         finalize_at > loop_at,
         "finalize.sql runs before the plan loop, so the sweep cannot see tables the deployment just created"

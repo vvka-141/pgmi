@@ -1,0 +1,50 @@
+description: contract "pg_temp.pgmi_run_file" (PGMI-974). pgmi creates pg_temp.pgmi_run_file(path) in every deploy session - it EXECUTEs that project file inside the head's transaction before the first COMMIT and as one autocommit statement after it, an error in the file is attributed to the file and its line with the SQLSTATE PostgreSQL raised, a path that is not in the project is refused by name, and it still runs, as the role set, after SET ROLE when the login's default privileges revoke EXECUTE from PUBLIC
+project:
+  files:
+    deploy.sql: |
+      BEGIN;
+      SELECT pg_temp.pgmi_run_file('./schema.sql') WHERE current_setting('pgmi.mode') = 'run';
+      COMMIT;
+      SELECT pg_temp.pgmi_run_file('./more.sql') WHERE current_setting('pgmi.mode') = 'run';
+      SELECT pg_temp.pgmi_run_file('./bad.sql') WHERE current_setting('pgmi.mode') = 'bad';
+      SELECT pg_temp.pgmi_run_file('./nope.sql') WHERE current_setting('pgmi.mode') = 'missing';
+      ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON ROUTINES FROM PUBLIC;
+      SELECT set_config('role', current_setting('pgmi.role'), false) WHERE current_setting('pgmi.mode') = 'role';
+      SELECT pg_temp.pgmi_run_file('./whoami.sql') WHERE current_setting('pgmi.mode') = 'role';
+    schema.sql: |
+      CREATE TABLE IF NOT EXISTS t (n int);
+      INSERT INTO t VALUES (1);
+    more.sql: INSERT INTO t VALUES (2);
+    bad.sql: |
+      INSERT INTO t VALUES (3);
+      SELECT * FROM no_such_table;
+    whoami.sql: |
+      DO $$ BEGIN
+        IF current_user <> current_setting('pgmi.role') THEN
+          RAISE EXCEPTION 'ran as %', current_user;
+        END IF;
+      END $$;
+steps:
+  - sql: CREATE ROLE "{db}_r" NOLOGIN
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, mode=run, --param, "role={db}_r"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT string_agg(n::text, ',' ORDER BY n) FROM t
+          rows: [["1,2"]]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, mode=bad, --param, "role={db}_r", --json]
+    expect:
+      exit: 13
+      json: {failedFile: ./bad.sql, line: 2, sqlstate: "42P01"}
+      sql:
+        - query: SELECT string_agg(n::text, ',' ORDER BY n) FROM t
+          rows: [["1,2"]]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, mode=missing, --param, "role={db}_r"]
+    expect:
+      exit: 13
+      stderr: ["deploy\\.sql runs \\./nope\\.sql, which is not in the project"]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, mode=role, --param, "role={db}_r"]
+    expect: {exit: 0}
+  - sql: DROP ROLE "{db}_r"
+    database: maintenance

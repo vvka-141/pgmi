@@ -30,37 +30,23 @@ BEGIN;
 -- queueing every application query behind it for the rest of the deploy.
 SET LOCAL lock_timeout = '5s';
 
--- Runs one deploy/ file. No exception handler: an error reaches pgmi as
--- PostgreSQL raised it, and pgmi names the file by its content.
-CREATE FUNCTION pg_temp.run_file(p_path text)
-RETURNS void LANGUAGE plpgsql AS $$
-DECLARE
-    v_sql text;
-BEGIN
-    SELECT content INTO v_sql FROM pg_temp.pgmi_source_view WHERE path = p_path;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'deploy.sql runs %, which is not in the project', p_path;
-    END IF;
-    EXECUTE v_sql;
-END $$;
-
 
 -- ############################################################################
 -- PREFLIGHT - stop before any change when the server, the parameters or the
 -- project's files are wrong
 -- ############################################################################
-SELECT pg_temp.run_file('./deploy/preflight.sql');
-SELECT pg_temp.run_file('./deploy/settings.sql');
-SELECT pg_temp.run_file('./deploy/providers.sql');
-SELECT pg_temp.run_file('./deploy/parameters.sql');
-SELECT pg_temp.run_file('./deploy/project_rules.sql');
+SELECT pg_temp.pgmi_run_file('./deploy/preflight.sql');
+SELECT pg_temp.pgmi_run_file('./deploy/settings.sql');
+SELECT pg_temp.pgmi_run_file('./deploy/providers.sql');
+SELECT pg_temp.pgmi_run_file('./deploy/parameters.sql');
+SELECT pg_temp.pgmi_run_file('./deploy/project_rules.sql');
 
 
 -- ############################################################################
 -- BOOTSTRAP - roles, extensions and schemas the project files build on; from
 -- the owner switch on, everything is created and owned by the owner role
 -- ############################################################################
-SELECT pg_temp.run_file('./deploy/bootstrap.sql');
+SELECT pg_temp.pgmi_run_file('./deploy/bootstrap.sql');
 
 DO $$
 BEGIN
@@ -68,9 +54,9 @@ BEGIN
     RAISE NOTICE '[pgmi] Switched to owner role: %', pg_temp.deployment_setting('database_owner_role');
 END $$;
 
-SELECT pg_temp.run_file('./deploy/schemas.sql');
-SELECT pg_temp.run_file('./deploy/file_api.sql');
-SELECT pg_temp.run_file('./deploy/ledger.sql');
+SELECT pg_temp.pgmi_run_file('./deploy/schemas.sql');
+SELECT pg_temp.pgmi_run_file('./deploy/file_api.sql');
+SELECT pg_temp.pgmi_run_file('./deploy/ledger.sql');
 
 
 -- ############################################################################
@@ -101,9 +87,7 @@ BEGIN
 
         RAISE NOTICE '[pgmi] Executing: %', f.path;
         v_policies := pg_temp.before_file(f);
-        -- No exception handler: the error reaches pgmi untouched, which names
-        -- the file and line and keeps the SQLSTATE the retry contract reads.
-        EXECUTE f.content;
+        PERFORM pg_temp.pgmi_run_file(f.path);
         PERFORM pg_temp.after_file(f, v_policies);
         v_executed := v_executed + 1;
     END LOOP;
@@ -116,7 +100,7 @@ END $deploy$;
 -- VERIFY - converge privileges, refuse lost access, run every test. A failure
 -- here rolls back everything above.
 -- ############################################################################
-SELECT pg_temp.run_file('./deploy/finalize.sql');
+SELECT pg_temp.pgmi_run_file('./deploy/finalize.sql');
 
 SAVEPOINT _tests;
 CALL pgmi_test(NULL, 'pg_temp.test_observer');

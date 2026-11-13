@@ -42,14 +42,14 @@ func TestAdvancedDeploySQLWiresTheEntityStandardsSweep(t *testing.T) {
 	// Ordering is load-bearing in both directions: deploy.sql runs finalize.sql
 	// after the plan loop and before the test gate.
 	raw, code := read("deploy.sql")
-	const runFinalize = "pg_temp.run_file('./deploy/finalize.sql')"
+	const runFinalize = "pg_temp.pgmi_run_file('./deploy/finalize.sql')"
 	finalizeAt := strings.Index(raw, runFinalize)
-	if finalizeAt == -1 || !strings.HasPrefix(code[finalizeAt:], "pg_temp.run_file(") {
+	if finalizeAt == -1 || !strings.HasPrefix(code[finalizeAt:], "pg_temp.pgmi_run_file(") {
 		t.Fatal("deploy.sql never runs deploy/finalize.sql")
 	}
-	loopAt := strings.Index(raw, "EXECUTE f.content")
+	loopAt := strings.Index(raw, "pg_temp.pgmi_run_file(f.path)")
 	if loopAt == -1 {
-		t.Fatal("deploy.sql has no plan loop executing f.content")
+		t.Fatal("deploy.sql has no plan loop running f.path")
 	}
 	if finalizeAt < loopAt {
 		t.Error("finalize.sql runs before the plan loop, so the sweep cannot see tables the " +

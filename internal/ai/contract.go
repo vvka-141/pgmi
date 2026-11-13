@@ -146,6 +146,11 @@ func GetContract() Contract {
 				Args:    []string{"target_schema text", "p_pattern text DEFAULT NULL"},
 				Returns: []string{"void"},
 			},
+			{
+				Name:    "pgmi_run_file",
+				Args:    []string{"p_path text"},
+				Returns: []string{"void"},
+			},
 		},
 		Types: []ContractType{
 			{

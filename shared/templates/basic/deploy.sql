@@ -140,7 +140,7 @@ BEGIN
     RAISE NOTICE '[%] Deploying % v%', v_env, v_config ->> 'app_name', v_config ->> 'version';
 
     FOR v_file IN
-        SELECT p.path, p.id, p.idempotent, p.content, p.pgmi_checksum
+        SELECT p.path, p.id, p.idempotent, p.pgmi_checksum
         FROM pg_temp.pgmi_plan_view p
         JOIN pg_temp.pgmi_source_view s ON s.path = p.path
         WHERE s.is_sql_file
@@ -149,9 +149,7 @@ BEGIN
         ORDER BY p.execution_order
     LOOP
         RAISE NOTICE '[pgmi] Executing: %', v_file.path;
-        -- No exception handler: an error reaches pgmi untouched, which names the
-        -- failing file and line and keeps the original SQLSTATE.
-        EXECUTE v_file.content;
+        PERFORM pg_temp.pgmi_run_file(v_file.path);
         IF NOT v_file.idempotent THEN
             INSERT INTO deployment.run_once (id, path, checksum)
             VALUES (v_file.id, v_file.path, v_file.pgmi_checksum)

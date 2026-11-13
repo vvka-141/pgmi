@@ -319,3 +319,24 @@ Returns: SQL string ready for EXECUTE that runs the test suite.
          When the plan contains no test, the returned SQL raises no_data_found
          instead: a test-gated deploy that gated on nothing must not report success.
 Used by: Go preprocessor to expand pgmi_test() macro calls.';
+
+-- ============================================================================
+-- pgmi_run_file: run one project file by its path
+-- ============================================================================
+-- No exception handler: an error reaches pgmi as PostgreSQL raised it, and
+-- pgmi names the file by its content. EXECUTE goes to PUBLIC so the function
+-- still works after SET ROLE, whatever the login's default privileges are.
+
+CREATE OR REPLACE FUNCTION pg_temp.pgmi_run_file(p_path text)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+    v_sql text;
+BEGIN
+    SELECT content INTO v_sql FROM pg_temp.pgmi_source_view WHERE path = p_path;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'deploy.sql runs %, which is not in the project', p_path;
+    END IF;
+    EXECUTE v_sql;
+END $$;
+
+GRANT EXECUTE ON FUNCTION pg_temp.pgmi_run_file(text) TO PUBLIC;

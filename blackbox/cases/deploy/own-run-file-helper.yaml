@@ -1,0 +1,32 @@
+description: a deploy.sql that defines its own pg_temp.run_file with a plain CREATE FUNCTION, as the templates do, works unchanged next to pgmi's own pg_temp.pgmi_run_file (contract "pg_temp.pgmi_run_file", PGMI-974); its errors still name the file
+project:
+  files:
+    deploy.sql: |
+      BEGIN;
+      CREATE FUNCTION pg_temp.run_file(p_path text)
+      RETURNS void LANGUAGE plpgsql AS $$
+      DECLARE
+          v_sql text;
+      BEGIN
+          SELECT content INTO v_sql FROM pg_temp.pgmi_source_view WHERE path = p_path;
+          IF NOT FOUND THEN
+              RAISE EXCEPTION 'deploy.sql runs %, which is not in the project', p_path;
+          END IF;
+          EXECUTE v_sql;
+      END $$;
+      SELECT pg_temp.run_file('./a.sql');
+      SELECT pg_temp.run_file('./b.sql') WHERE current_setting('pgmi.mode', true) = 'bad';
+      COMMIT;
+    a.sql: CREATE TABLE IF NOT EXISTS t (n int);
+    b.sql: |
+      INSERT INTO t VALUES (1);
+      SELECT * FROM no_such_table;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT to_regclass('t') IS NOT NULL
+          rows: [[true]]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, mode=bad, --json]
+    expect: {exit: 13, json: {failedFile: ./b.sql, line: 2, sqlstate: "42P01"}}
