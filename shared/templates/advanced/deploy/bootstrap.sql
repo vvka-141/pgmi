@@ -79,29 +79,27 @@ $$;
 -- ############################################################################
 -- ROLES - owner, kernel, api and admin, and the database handed to the owner
 -- ############################################################################
-DO $roles$
+-- Role names follow from the database name, so any CREATEROLE login can
+-- create them first. A role is adopted only when nobody but the deploy login
+-- holds ADMIN on it (a non-superuser creator keeps an ADMIN grant it cannot
+-- drop) and the owner, admin and kernel roles have no unexpected member. The
+-- api and jobs roles' plain members are the operator's to grant.
+DO $$
 DECLARE
-    v_owner_role TEXT := pg_temp.deployment_setting('database_owner_role');
-    v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
-    v_admin_password TEXT := pg_temp.deployment_setting('database_admin_password');
-    v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
+    v_owner_role  TEXT := pg_temp.deployment_setting('database_owner_role');
+    v_admin_role  TEXT := pg_temp.deployment_setting('database_admin_role');
     v_kernel_role TEXT := pg_temp.deployment_setting('database_kernel_role');
-    v_jobs_role TEXT := pg_temp.deployment_setting('database_jobs_role');
-    v_messages TEXT := current_setting('client_min_messages');
-    v_role TEXT;
+    v_role    TEXT;
     v_foreign TEXT;
 BEGIN
-    -- Role names follow from the database name, so any CREATEROLE login can
-    -- create them first. A role is adopted only when nobody but the deploy
-    -- login holds ADMIN on it (a non-superuser creator keeps an ADMIN grant it
-    -- cannot drop) and the owner, admin and kernel roles have no unexpected
-    -- member. The api and jobs roles' plain members are the operator's to grant.
     SELECT r.rolname, string_agg(DISTINCT format('%I%s', m.rolname, CASE WHEN a.admin_option THEN ' (ADMIN)' END), ', ')
     INTO v_role, v_foreign
     FROM pg_auth_members a
     JOIN pg_roles r ON r.oid = a.roleid
     JOIN pg_roles m ON m.oid = a.member
-    WHERE r.rolname IN (v_owner_role, v_admin_role, v_kernel_role, v_api_role, v_jobs_role)
+    WHERE r.rolname IN (v_owner_role, v_admin_role, v_kernel_role,
+                        pg_temp.deployment_setting('database_api_role'),
+                        pg_temp.deployment_setting('database_jobs_role'))
       AND m.rolname <> CURRENT_USER
       AND (a.admin_option
            OR r.rolname = v_admin_role
@@ -115,33 +113,41 @@ BEGIN
             USING ERRCODE = 'invalid_parameter_value',
                   HINT = 'A deploy adopts no role another login controls. Drop the role, or have a superuser revoke those memberships. After rotating the deploy login, revoke the old login''s ADMIN or drop that login.';
     END IF;
+END $$;
 
-    -- Owner role (NOLOGIN) - owns all database objects
+-- The NOLOGIN roles. The owner owns every database object. The kernel owns
+-- the SECURITY DEFINER routines that work across organizations or before one
+-- exists (pg_temp.kernel_owns); forced RLS lets it pass by its own policies
+-- (pg_temp.kernel_passes). The api role is the gateway's permission bundle:
+-- the entry points deploy/finalize.sql grants it, nothing else.
+DO $$
+DECLARE
+    v_owner_role  TEXT := pg_temp.deployment_setting('database_owner_role');
+    v_kernel_role TEXT := pg_temp.deployment_setting('database_kernel_role');
+    v_api_role    TEXT := pg_temp.deployment_setting('database_api_role');
+BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_owner_role) THEN
         EXECUTE format('CREATE ROLE %I NOLOGIN', v_owner_role);
         RAISE NOTICE '[pgmi] Created owner role: %', v_owner_role;
     END IF;
-
-    -- Kernel role (NOLOGIN) - owns the SECURITY DEFINER routines that work
-    -- across organizations or before one exists (pg_temp.kernel_owns). Forced
-    -- RLS lets it pass by its own policies (pg_temp.kernel_passes). The owner
-    -- holds it WITH INHERIT FALSE: handlers run as the owner and must never
-    -- match a kernel policy; SET TRUE lets the deploy hand routines over.
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_kernel_role) THEN
         EXECUTE format('CREATE ROLE %I NOLOGIN', v_kernel_role);
         RAISE NOTICE '[pgmi] Created kernel role: %', v_kernel_role;
     END IF;
-
-    -- API role (NOLOGIN group) - the gateway's permission bundle: the entry
-    -- points deploy/finalize.sql grants it, nothing else
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_api_role) THEN
         EXECUTE format('CREATE ROLE %I NOLOGIN', v_api_role);
         RAISE NOTICE '[pgmi] Created API role: %', v_api_role;
     END IF;
+END $$;
 
-    -- Admin role (LOGIN) - inherits owner + api. Roles belong to the cluster:
-    -- an existing admin role that is not yet a member of this database's
-    -- owner role belongs to something else, and its password stays its own.
+-- Roles belong to the cluster: an existing admin role that is not yet a
+-- member of this database's owner role belongs to something else, and its
+-- password stays its own.
+DO $$
+DECLARE
+    v_owner_role TEXT := pg_temp.deployment_setting('database_owner_role');
+    v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
+BEGIN
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_admin_role)
        AND NOT EXISTS (SELECT 1 FROM pg_auth_members m
                        WHERE m.roleid = to_regrole(quote_ident(v_owner_role))
@@ -150,58 +156,88 @@ BEGIN
             USING ERRCODE = 'invalid_parameter_value',
                   HINT = 'A deploy adopts no login it did not create. Choose another database_admin_role, or grant the owner role to this one on purpose first.';
     END IF;
+END $$;
 
-    -- The handler keeps the expanded statement, password included, out of the
-    -- error's CONTEXT, which reaches stderr, --json and the server log.
-    BEGIN
-        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_admin_role) THEN
-            EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L CONNECTION LIMIT 10', v_admin_role, v_admin_password);
-            RAISE NOTICE '[pgmi] Created admin role: %', v_admin_role;
-        ELSE
-            EXECUTE format('ALTER ROLE %I WITH PASSWORD %L CONNECTION LIMIT 10', v_admin_role, v_admin_password);
-        END IF;
-    EXCEPTION WHEN OTHERS THEN
-        RAISE EXCEPTION USING
-            ERRCODE = SQLSTATE,
-            MESSAGE = format('setting the password of role %I failed: %s', v_admin_role, SQLERRM);
-    END;
+-- The admin login, with this deploy's password. The handler keeps the
+-- expanded statement, password included, out of the error's CONTEXT, which
+-- reaches stderr, --json and the server log.
+DO $$
+DECLARE
+    v_admin_role     TEXT := pg_temp.deployment_setting('database_admin_role');
+    v_admin_password TEXT := pg_temp.deployment_setting('database_admin_password');
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_admin_role) THEN
+        EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L CONNECTION LIMIT 10', v_admin_role, v_admin_password);
+        RAISE NOTICE '[pgmi] Created admin role: %', v_admin_role;
+    ELSE
+        EXECUTE format('ALTER ROLE %I WITH PASSWORD %L CONNECTION LIMIT 10', v_admin_role, v_admin_password);
+    END IF;
+EXCEPTION WHEN OTHERS THEN
+    RAISE EXCEPTION USING
+        ERRCODE = SQLSTATE,
+        MESSAGE = format('setting the password of role %I failed: %s', v_admin_role, SQLERRM);
+END $$;
 
-    -- Role hierarchy. Membership in the api role is the trust gate: only its
-    -- members' auth.* settings count (membership.fn_is_trusted_context), and
-    -- its gateway entry points open sessions and act for whoever a session
-    -- names. Re-granting converges the options; its "already granted" notice
-    -- on every redeploy is not news.
+-- Membership in the api role is the trust gate: only its members' auth.*
+-- settings count (membership.fn_is_trusted_context), and its gateway entry
+-- points open sessions and act for whoever a session names. The owner holds
+-- the kernel WITH INHERIT FALSE: handlers run as the owner and must never
+-- match a kernel policy; SET TRUE lets the deploy hand routines over. The
+-- deploy login sets role to the owner and is trusted like a gateway, so tests
+-- and seeds can state a request context. Re-granting converges the options;
+-- its "already granted" notice on every redeploy is not news.
+DO $$
+DECLARE
+    v_owner_role TEXT := pg_temp.deployment_setting('database_owner_role');
+    v_api_role   TEXT := pg_temp.deployment_setting('database_api_role');
+    v_messages   TEXT := current_setting('client_min_messages');
+BEGIN
     PERFORM set_config('client_min_messages', 'warning', true)
     WHERE v_messages = 'notice';
-    EXECUTE format('GRANT %I TO %I WITH INHERIT FALSE, SET TRUE', v_kernel_role, v_owner_role);
-    EXECUTE format('GRANT %I, %I TO %I', v_owner_role, v_api_role, v_admin_role);
-
-    -- The deploy login: SET ROLE to the owner, and trusted like a gateway, so
-    -- tests and seeds can state a request context.
+    EXECUTE format('GRANT %I TO %I WITH INHERIT FALSE, SET TRUE', pg_temp.deployment_setting('database_kernel_role'), v_owner_role);
+    EXECUTE format('GRANT %I, %I TO %I', v_owner_role, v_api_role, pg_temp.deployment_setting('database_admin_role'));
     EXECUTE format('GRANT %I, %I TO CURRENT_USER', v_owner_role, v_api_role);
     PERFORM set_config('client_min_messages', v_messages, true);
+END $$;
 
-    -- Every login takes the database's search_path; a role setting would
-    -- override it, and roles outlive the database.
-    EXECUTE format('ALTER ROLE %I RESET search_path', v_owner_role);
-    EXECUTE format('ALTER ROLE %I RESET search_path', v_admin_role);
-    EXECUTE format('ALTER ROLE %I RESET search_path', v_api_role);
+-- Every login takes the database's search_path; a role setting would override
+-- it, and roles outlive the database.
+DO $$
+BEGIN
+    EXECUTE format('ALTER ROLE %I RESET search_path', pg_temp.deployment_setting('database_owner_role'));
+    EXECUTE format('ALTER ROLE %I RESET search_path', pg_temp.deployment_setting('database_admin_role'));
+    EXECUTE format('ALTER ROLE %I RESET search_path', pg_temp.deployment_setting('database_api_role'));
+END $$;
 
+-- The owner role owns the database, so the deploy login needs no ownership.
+DO $$
+DECLARE
+    v_owner_role TEXT := pg_temp.deployment_setting('database_owner_role');
+BEGIN
     EXECUTE format('ALTER DATABASE %I OWNER TO %I', current_database(), v_owner_role);
     RAISE NOTICE '[pgmi] Database % owned by %', current_database(), v_owner_role;
+END $$;
 
-    -- Every role in the cluster may connect to a new database and create
-    -- temporary objects in it, through PUBLIC. Only the template's roles may.
+-- Every role in the cluster may connect to a new database and create temporary
+-- objects in it, through PUBLIC. Only the template's roles may.
+DO $$
+BEGIN
     EXECUTE format('REVOKE CONNECT, TEMPORARY ON DATABASE %I FROM PUBLIC', current_database());
     EXECUTE format('GRANT CONNECT, TEMPORARY ON DATABASE %I TO %I, %I',
-                   current_database(), v_admin_role, v_api_role);
+                   current_database(),
+                   pg_temp.deployment_setting('database_admin_role'),
+                   pg_temp.deployment_setting('database_api_role'));
+END $$;
 
-    -- PostgreSQL grants EXECUTE to PUBLIC on every routine it creates. Every
-    -- project file runs as the owner, so from here on a routine is callable
-    -- only by a role it was granted to. Extensions are created by the session
-    -- user and keep their PUBLIC grants.
-    EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I REVOKE EXECUTE ON ROUTINES FROM PUBLIC', v_owner_role);
-END $roles$;
+-- PostgreSQL grants EXECUTE to PUBLIC on every routine it creates. Every
+-- project file runs as the owner, so from here on a routine is callable only
+-- by a role it was granted to. Extensions are created by the session user and
+-- keep their PUBLIC grants.
+DO $$
+BEGIN
+    EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I REVOKE EXECUTE ON ROUTINES FROM PUBLIC',
+                   pg_temp.deployment_setting('database_owner_role'));
+END $$;
 
 
 -- ############################################################################
