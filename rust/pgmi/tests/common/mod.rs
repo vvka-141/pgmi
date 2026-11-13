@@ -44,6 +44,10 @@ impl Pg {
         Client::connect(&self.conn, None)
     }
 
+    pub fn client_for(&self, database: &str) -> Client {
+        Client::connect(&self.conn, Some(database))
+    }
+
     pub fn database(&self, name: &str) -> Db {
         let db = Db {
             conn: self.conn.clone(),

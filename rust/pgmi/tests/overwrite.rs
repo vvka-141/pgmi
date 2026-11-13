@@ -4,6 +4,8 @@ mod common;
 
 use common::{Project, ident, pg};
 
+static TEMPLATE1: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn a_held_overwrite_lock_refuses_a_second_overwrite_with_exit_15() {
     let Some(pg) = pg() else { return };
@@ -43,6 +45,9 @@ fn a_signal_after_the_drop_still_recreates_and_restores_the_database() {
     use std::time::{Duration, Instant};
 
     let Some(pg) = pg() else { return };
+    let _template1 = TEMPLATE1
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let db = pg.database("pgmi_rs_overwrite_window");
     let owner = "pgmi_rs_overwrite_window_owner";
     let name = ident(db.name());
@@ -122,4 +127,36 @@ fn a_signal_after_the_drop_still_recreates_and_restores_the_database() {
     );
     drop(db);
     admin.exec(&format!("DROP ROLE IF EXISTS {owner}"));
+}
+
+#[test]
+fn a_failed_create_after_the_drop_says_the_database_is_gone() {
+    let Some(pg) = pg() else { return };
+    let _template1 = TEMPLATE1
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let db = pg.database("pgmi_rs_overwrite_dropped");
+    let project = Project::empty();
+    project.write("deploy.sql", "SELECT 1;\n");
+    pg.deploy(&project, &db).run().ok();
+    let holder = pg.client_for("template1");
+    let out = pg
+        .deploy(&project, &db)
+        .overwrite()
+        .arg("--json")
+        .run()
+        .fails(13);
+    let sentence = format!(
+        "database \"{}\" was dropped and not recreated; run the deploy again",
+        db.name()
+    );
+    out.says(&sentence);
+    assert!(
+        out.record()["error"]
+            .as_str()
+            .is_some_and(|m| m.contains(&sentence)),
+        "{}",
+        out.record()
+    );
+    drop(holder);
 }

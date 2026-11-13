@@ -1,4 +1,5 @@
 use std::fmt::Write as _;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use tokio_postgres::Row;
@@ -409,10 +410,11 @@ pub(crate) async fn unlock(maintenance: &Session, db: &str) {
 const RECREATE: Duration = Duration::from_secs(60);
 
 /// Drops `db` when there is a snapshot, creates it and puts the snapshot
-/// back. Nothing cancels it once it has begun, so a database is never left
-/// dropped or half restored; it has its own bound instead, and cancels the
-/// statement on the server when that runs out. `provision` records the
-/// create as soon as it has happened.
+/// back. A signal does not cancel it once it has begun; it has its own
+/// bound instead, and cancels the statement on the server when that runs
+/// out. A failure after the drop (the create refused, or the bound reached)
+/// leaves the database dropped, and the error says so. `provision` records
+/// the create as soon as it has happened.
 pub(crate) async fn recreate(
     maintenance: &Session,
     db: &str,
@@ -420,6 +422,7 @@ pub(crate) async fn recreate(
     reporter: &Reporter,
     provision: &mut Provision,
 ) -> Result<()> {
+    let dropped = AtomicBool::new(false);
     let work = async {
         let c = &maintenance.client;
         if snapshot.is_some() {
@@ -427,6 +430,7 @@ pub(crate) async fn recreate(
             c.batch_execute(&format!("DROP DATABASE {} WITH (FORCE)", quote_ident(db)))
                 .await
                 .map_err(|e| sql_error("drop the target database", e))?;
+            dropped.store(true, Ordering::Relaxed);
         }
         if snapshot.is_some() {
             reporter.verbose(&format!("CREATE DATABASE \"{db}\""));
@@ -440,6 +444,7 @@ pub(crate) async fn recreate(
                     Some(Needs::CreateDb),
                 ))
             })?;
+        dropped.store(false, Ordering::Relaxed);
         *provision = if snapshot.is_some() {
             Provision::Recreated
         } else {
@@ -466,7 +471,7 @@ pub(crate) async fn recreate(
         });
         Ok(())
     };
-    if let Ok(r) = tokio::time::timeout(RECREATE, work).await {
+    let result = if let Ok(r) = tokio::time::timeout(RECREATE, work).await {
         r
     } else {
         maintenance.cancel().await;
@@ -474,7 +479,19 @@ pub(crate) async fn recreate(
             Kind::Timeout,
             format!("--overwrite of \"{db}\" did not finish within 60s"),
         ))
-    }
+    };
+    result.map_err(|e| {
+        if dropped.load(Ordering::Relaxed) {
+            let text = format!(
+                "database \"{db}\" was dropped and not recreated; run the deploy again: {}",
+                e.text()
+            );
+            let kind = e.kind();
+            e.reworded(kind, text)
+        } else {
+            e
+        }
+    })
 }
 
 #[cfg(test)]
