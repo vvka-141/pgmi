@@ -2160,7 +2160,7 @@ COMMENT ON FUNCTION api.rpc_route_policy(text, text) IS
 -- ============================================================================
 -- Replay
 -- ============================================================================
--- Re-runs a logged REST or RPC exchange as its original caller: the logged
+-- Re-runs a logged REST, RPC or MCP exchange as its original caller: the logged
 -- context is applied (no credential is re-presented), the request goes through
 -- the same dispatch, access decision and transaction policy as a live one, and
 -- everything it did, its own exchange row and the applied context included, is

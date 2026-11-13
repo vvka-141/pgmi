@@ -4,9 +4,6 @@
 -- they ran, which files already ran, and what each run records.
 -- ============================================================================
 
--- ============================================================================
--- DEPLOY FUNCTION
--- ============================================================================
 -- A run-once file is skipped once it has run, so a later edit would reach only
 -- fresh databases: the databases that ran it keep the old structure, and a
 -- fresh deploy no longer builds what they have. One row per run-once file that
@@ -81,6 +78,13 @@ BEGIN
     END IF;
 END $fn$;
 
+-- The checksum internal.deployment_script_content keys a file's text by; its
+-- CHECK constraint states the same expression.
+CREATE FUNCTION pg_temp.content_checksum(p_content text)
+RETURNS text LANGUAGE sql IMMUTABLE AS $$
+    SELECT encode(extensions.digest(convert_to(p_content, 'UTF8'), 'sha256'), 'hex')
+$$;
+
 -- Skip a run-once file only after it ran as run-once: a re-run file flipped to
 -- idempotent="false" must still run once, not be skipped for its earlier
 -- re-run log rows.
@@ -102,7 +106,7 @@ BEGIN
     VALUES (p_file.object_id) ON CONFLICT DO NOTHING;
 
     INSERT INTO internal.deployment_script_content(checksum, value)
-    VALUES (encode(extensions.digest(convert_to(p_file.content, 'UTF8'), 'sha256'), 'hex'), p_file.content)
+    VALUES (pg_temp.content_checksum(p_file.content), p_file.content)
     ON CONFLICT DO NOTHING;
 
     SELECT jsonb_object_agg(policy, definition) INTO v_policies FROM pg_temp.policy_definition();
@@ -122,7 +126,7 @@ BEGIN
         deployment_script_object_id, deployment_script_content_checksum, pgmi_checksum,
         xact_id, file_path, idempotent, sort_key
     ) VALUES (
-        p_file.object_id, encode(extensions.digest(convert_to(p_file.content, 'UTF8'), 'sha256'), 'hex'),
+        p_file.object_id, pg_temp.content_checksum(p_file.content),
         p_file.pgmi_checksum, pg_current_xact_id(), p_file.path, p_file.idempotent, p_file.sort_key
     );
 END $$;

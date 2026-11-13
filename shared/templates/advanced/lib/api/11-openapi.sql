@@ -135,10 +135,6 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     ) AS e(status, description, applies);
 $$;
 
--- The document is filtered by caller for readability: an anonymous caller
--- sees the public operations. It is not a security boundary: method sets are
--- public (OPTIONS and 405 list every method of a path), and the access
--- decision in the gateway is what protects an operation.
 -- The database does not see the gateway's mount, so the deploy names it.
 DO $$
 BEGIN
@@ -235,6 +231,10 @@ BEGIN
                         ELSE '[]' END AS parameters
         ) prm
         WHERE h.deleted_at IS NULL
+          -- Filtered by caller for readability: an anonymous caller sees the public
+          -- operations. Not a security boundary: method sets are public (OPTIONS
+          -- and 405 list every method), and the gateway's access decision
+          -- protects an operation.
           AND (h.access = 'public' OR (SELECT api.current_principal_id()) IS NOT NULL)
     )
     SELECT jsonb_build_object(

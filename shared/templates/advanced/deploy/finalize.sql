@@ -173,6 +173,8 @@ END $access$;
 SELECT pg_temp.revoke_provider_table_privileges();
 
 
+-- The callback deploy.sql passes to pgmi_test: names each fixture and test,
+-- and quiets lib/ tests the way the loop quiets lib/ files.
 CREATE OR REPLACE FUNCTION pg_temp.test_observer(e pg_temp.pgmi_test_event)
 RETURNS void LANGUAGE plpgsql AS $$
 BEGIN

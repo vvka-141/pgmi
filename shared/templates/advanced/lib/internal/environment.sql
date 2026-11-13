@@ -3,7 +3,7 @@
     id="ac23b704-b4a1-4d61-8c34-45b9fd946f76"
     idempotent="false">
   <description>
-    The environment this database was deployed as. deploy.sql refuses a
+    The environment this database was deployed as. deploy/parameters.sql refuses a
     redeploy whose env differs, unless relabel_environment names the new label.
   </description>
   <sortKeys>

@@ -85,6 +85,9 @@ UPDATE pg_temp.deployment_parameter
 SET value = default_value
 WHERE value IS NULL;
 
+-- One block, in order: refuse unknown parameters, check each value, check the
+-- environment label, default dev passwords, refuse missing ones, publish every
+-- value as deployment.<key> and pgmi.<key>.
 -- The database keeps the environment it was deployed as (internal.environment),
 -- and a redeploy must name the same one. This runs before any role is touched:
 -- env=dev against a prod database would otherwise reset its role passwords to

@@ -2,7 +2,9 @@
 -- deploy/schemas.sql
 -- Runs as the owner: the application schemas and their grants, and the
 -- deploy's own tables in internal: the run ledger, the RLS and foreign-key
--- exemptions, and the policy fingerprints.
+-- exemptions, and the policy fingerprints, with the two helpers project files
+-- call to fill the exemptions: pg_temp.exempt_from_rls and
+-- pg_temp.exempt_from_fk_index.
 -- ============================================================================
 
 DO $schemas$
@@ -25,6 +27,7 @@ BEGIN
     COMMENT ON SCHEMA common IS 'Cross-cutting primitives (casting, encoding, text) shared across all schemas and roles.';
     COMMENT ON SCHEMA membership IS 'User identity, organizations, invitations, and access control.';
 
+    -- The owner role's half of closing public (deploy/bootstrap.sql explains).
     IF has_schema_privilege('public', 'USAGE WITH GRANT OPTION') THEN
         REVOKE ALL ON SCHEMA public FROM PUBLIC;
     END IF;
@@ -131,7 +134,7 @@ BEGIN
 END $permissions$;
 
 -- ============================================================================
--- ROW-LEVEL SECURITY AND THE KERNEL ROLE
+-- RLS AND FOREIGN-KEY INDEX EXEMPTIONS, THE POLICY RECORD
 -- ============================================================================
 -- Every table the owner creates in an application schema is forced
 -- (ENABLE + FORCE ROW LEVEL SECURITY, so the owner that runs every handler is

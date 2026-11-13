@@ -1,7 +1,8 @@
 -- ============================================================================
 -- deploy/settings.sql
 -- The lists a project edits: required extensions, database settings,
--- schema grants, tenant columns and the optional deploy guards. Pure
+-- schema grants, tenant columns and the optional deploy guards, with
+-- enforce_guard, which holds a switched-on guard to its exemptions. Pure
 -- definitions; nothing here changes the database.
 -- ============================================================================
 

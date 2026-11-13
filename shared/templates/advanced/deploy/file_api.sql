@@ -58,7 +58,8 @@ END $$;
 
 -- Takes every kernel routine back to the owner before the first file, so the
 -- files' CREATE OR REPLACE works; their kernel_owns calls hand each one back.
--- Run as the deploy login: the owner holds the kernel WITH INHERIT FALSE.
+-- Switches back to the deploy login itself: the owner holds the kernel WITH
+-- INHERIT FALSE.
 CREATE FUNCTION pg_temp.kernel_reclaim()
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
@@ -114,7 +115,7 @@ $$;
 -- each user trigger, one row each; plus one row with a NULL entry per object,
 -- which tells "the object is gone" from "the object lost an entry". The owner
 -- role's privileges are not listed (a kernel routine moves to the owner and
--- back every deploy), nor EXECUTE to PUBLIC, which the end-of-deploy sweep
+-- back every deploy), nor EXECUTE to PUBLIC, which deploy/finalize.sql
 -- revokes on purpose.
 CREATE FUNCTION pg_temp.access_entry()
 RETURNS TABLE (object text, entry text) LANGUAGE sql STABLE AS $$

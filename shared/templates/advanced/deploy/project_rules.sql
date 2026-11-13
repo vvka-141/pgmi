@@ -5,6 +5,9 @@
 -- versus re-run code. Defines pg_temp.deploy_plan, the files the deploy runs.
 -- ============================================================================
 
+-- ############################################################################
+-- DEV FOLDERS - dev/ files deploy only to dev; tests never live there
+-- ############################################################################
 -- A file under a dev/ folder, at any depth, deploys only with env=dev. The plan
 -- loop, the file-contract check and the run-once drift check all ask this.
 CREATE FUNCTION pg_temp.deploys_file(p_path text, p_env text DEFAULT current_setting('deployment.env'))
@@ -12,15 +15,19 @@ RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT p_path !~ '/dev/' OR p_env = 'dev'
 $$;
 
--- The project files the deploy loop runs, in plan order: SQL files this
--- environment deploys, without the deploy/ files deploy.sql runs by name.
-CREATE TEMPORARY VIEW deploy_plan AS
+-- The project's SQL files in plan order, without the deploy/ files deploy.sql
+-- runs by name.
+CREATE TEMPORARY VIEW project_plan AS
 SELECT COALESCE(p.id, p.generic_id) AS object_id, p.*
 FROM pg_temp.pgmi_plan_view p
 JOIN pg_temp.pgmi_source_view s ON s.path = p.path
-WHERE s.is_sql_file AND p.path NOT LIKE './deploy/%' AND pg_temp.deploys_file(p.path);
+WHERE s.is_sql_file AND p.path NOT LIKE './deploy/%';
 
-GRANT SELECT ON pg_temp.deploy_plan TO PUBLIC;
+-- What the deploy loop runs: the project files this environment deploys.
+CREATE TEMPORARY VIEW deploy_plan AS
+SELECT * FROM pg_temp.project_plan p WHERE pg_temp.deploys_file(p.path);
+
+GRANT SELECT ON pg_temp.project_plan, pg_temp.deploy_plan TO PUBLIC;
 
 -- Tests run in every environment, so a test under a dev/ folder would pass on
 -- dev and fail on test and prod, where its objects do not exist.
@@ -38,10 +45,13 @@ BEGIN
     END IF;
 END $$;
 
+-- ############################################################################
+-- PLACE IN THE PLAN - every SQL file names its sort key
+-- ############################################################################
 -- Every SQL file states its own place in the plan. Without sortKeys pgmi
 -- orders a file by its path, and './' sorts before the framework's '003/'
--- and '004/' keys, so a forgotten header ran the file before the tables and
--- types it uses existed. Stop before anything runs and name the files.
+-- and '004/' keys, so a forgotten header runs the file before the tables and
+-- types it uses exist. Stop before anything runs and name the files.
 DO $$
 DECLARE
     v_untagged text;
@@ -61,9 +71,8 @@ BEGIN
 
     SELECT string_agg(DISTINCT p.path, ', ' ORDER BY p.path)
     INTO v_untagged
-    FROM pg_temp.pgmi_plan_view p
-    JOIN pg_temp.pgmi_source_view s ON s.path = p.path
-    WHERE s.is_sql_file AND p.sort_key = p.path AND p.path NOT LIKE './deploy/%';
+    FROM pg_temp.project_plan p
+    WHERE p.sort_key = p.path;
 
     IF v_untagged IS NOT NULL THEN
         RAISE EXCEPTION 'SQL file(s) without a place in the plan: %', v_untagged
@@ -75,16 +84,17 @@ END $$;
 -- string literals '', and the body of a CREATE FUNCTION or PROCEDURE is
 -- dropped, because its DDL runs only when the routine is called. Other
 -- dollar-quoted text (a DO block, SQL passed to EXECUTE) is read like the file.
--- It walks the text in chunks that each start at - / * ' " $ or ;.
+-- It walks the text in chunks that each start at - / * ' " $ or ;. One state
+-- machine: the states share v_skip, v_depth and v_tag, so it stays whole.
 CREATE FUNCTION pg_temp.deploy_time_sql(p_sql text)
 RETURNS text LANGUAGE plpgsql IMMUTABLE STRICT AS $fn$
 DECLARE
     r record;
     v_out text[] := '{}';
-    v_head text := '';
+    v_head text := '';  -- the current statement's first 200 characters, read for CREATE FUNCTION
     v_emit text;
     v_state text := 'code';
-    v_skip bool := false;
+    v_skip bool := false;  -- this chunk's first character ends the previous token
     v_depth int;
     v_escapes bool;
     v_tag text;
@@ -192,6 +202,9 @@ BEGIN
 END
 $fn$;
 
+-- ############################################################################
+-- RUN-ONCE VS RE-RUN - structure runs once, code re-runs
+-- ############################################################################
 -- Structure lives in run-once files (idempotent="false"), code in re-run files
 -- (idempotent="true"). A table in a re-run file is silently skipped when its
 -- definition changes, and its index DDL locks writers on every deploy; a

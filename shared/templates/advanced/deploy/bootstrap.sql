@@ -5,6 +5,9 @@
 -- Every statement converges, so a redeploy changes nothing that is in place.
 -- ============================================================================
 
+-- ############################################################################
+-- HOST - what the host must allow, before anything changes
+-- ############################################################################
 -- What the host must allow, checked before anything changes, so a managed
 -- host's missing grant is one clear error instead of a failure halfway. The
 -- role attributes matter on a first deploy only; a redeploy finds its roles
@@ -37,6 +40,10 @@ BEGIN
                                 upper(concat_ws(',', NULLIF(regexp_replace(v_allowed, '\s', '', 'g'), ''), v_missing)));
     END IF;
 END $$;
+
+-- The quieting helpers below are called by deploy/ledger.sql and the test
+-- reporter in deploy/finalize.sql as well. They are defined here, by the
+-- deploy login, so every role a test switches to can still execute them.
 
 -- The framework under ./lib/ narrates every object it installs and every
 -- assertion it checks: several hundred NOTICE lines, 'already exists, skipping'
@@ -71,9 +78,9 @@ RETURNS void LANGUAGE sql AS $$
     WHERE current_setting('deploy.bootstrap_quieted', true) = 'on'
 $$;
 
--- ============================================================================
--- ROLE SETUP: roles, extensions, ownership (CREATEROLE + CREATEDB, no superuser)
--- ============================================================================
+-- ############################################################################
+-- ROLES - owner, kernel, api and admin, and the database handed to the owner
+-- ############################################################################
 DO $roles$
 DECLARE
     v_owner_role TEXT := pg_temp.deployment_setting('database_owner_role');
@@ -128,7 +135,7 @@ BEGIN
     END IF;
 
     -- API role (NOLOGIN group) - the gateway's permission bundle: the entry
-    -- points listed at the end of the deploy, nothing else
+    -- points deploy/finalize.sql grants it, nothing else
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_api_role) THEN
         EXECUTE format('CREATE ROLE %I NOLOGIN', v_api_role);
         RAISE NOTICE '[pgmi] Created API role: %', v_api_role;
@@ -199,6 +206,9 @@ BEGIN
 END $roles$;
 
 
+-- ############################################################################
+-- DATABASE SETTINGS - pg_temp.database_setting() in deploy/settings.sql
+-- ############################################################################
 DO $database_setting$
 DECLARE
     v_setting record;
@@ -210,13 +220,12 @@ BEGIN
 END $database_setting$;
 
 
--- Extensions live in schema extensions, and lib/ calls them by that name. An
--- image or provider that pre-installs one in public would turn CREATE EXTENSION
--- IF NOT EXISTS into a silent no-op, so a pre-installed one is moved instead.
--- No plv8: unblocks managed cloud PostgreSQL (RDS, Azure Flexible Server,
--- Google Cloud SQL). Handlers ship as plpgsql / sql; add plv8 yourself via
--- a sortKeys-005+ file if you need JavaScript handlers AND your provider
--- supports the extension.
+-- ############################################################################
+-- EXTENSIONS - in schema extensions, where lib/ calls them
+-- ############################################################################
+-- An image or provider that pre-installs an extension in public would turn
+-- CREATE EXTENSION IF NOT EXISTS into a silent no-op, so a pre-installed one
+-- is moved instead.
 SELECT pg_temp.quiet_bootstrap();
 CREATE SCHEMA IF NOT EXISTS extensions;
 SELECT pg_temp.unquiet_bootstrap();
@@ -249,7 +258,8 @@ SELECT pg_temp.revoke_provider_create('{extensions}');
 
 -- The same trigger grants TRUNCATE, REFERENCES, TRIGGER and MAINTAIN on every
 -- new table (Lakebase: databricks_superuser). They act on the whole table,
--- past row-level security, so they are revoked before the test gate.
+-- past row-level security, so deploy/finalize.sql revokes them before the
+-- test gate.
 CREATE FUNCTION pg_temp.revoke_provider_table_privileges()
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
@@ -296,9 +306,12 @@ BEGIN
 END $extensions$;
 
 
+-- ############################################################################
+-- PUBLIC - PostgreSQL's own schema stays closed
+-- ############################################################################
 -- public stays closed. Who may close it depends on the host: on Azure
 -- azure_pg_admin owns it, and only the deploy login belongs to that group; on
 -- Lakebase the login's revoke acts for databricks_superuser and removes
 -- nothing, while the owner role's does. So both revoke: the login here, the
--- owner role in the owner phase.
+-- owner role in deploy/schemas.sql.
 REVOKE ALL ON SCHEMA public FROM PUBLIC;

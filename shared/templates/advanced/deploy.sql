@@ -75,6 +75,8 @@ SELECT pg_temp.run_file('./deploy/ledger.sql');
 -- DEPLOY - every project file in plan order; a run-once file that already ran
 -- here is skipped, everything else runs and is logged
 -- ############################################################################
+-- Before the first file: the access baseline finalize.sql compares against,
+-- and every kernel routine back to the owner so CREATE OR REPLACE works.
 INSERT INTO pg_temp.access_baseline SELECT * FROM pg_temp.access_entry();
 SELECT pg_temp.kernel_reclaim();
 INSERT INTO internal.deployment (xact_id, environment)

@@ -994,15 +994,6 @@ COMMENT ON FUNCTION api.create_or_replace_rpc_handler(jsonb, text) IS
 -- MCP Handler Registration
 -- ============================================================================
 
--- What calling a tool does, declared once so an agent knows it before the
--- call: "effect" is read (changes nothing), write (makes a change) or proposal
--- (records a change for a person to confirm); a write also declares
--- "reversible", whether the change can be undone afterwards, and a proposal
--- "proposes", the registered write tool a confirm runs.
--- "openWorldHint" (default false) says the tool reaches outside this
--- database. A resource or a prompt declares none of them. Returns the effect
--- block tools/list publishes under _meta["pgmi/effect"]; NULL for a resource
--- or prompt.
 CREATE OR REPLACE FUNCTION internal.mcp_write_tool_exists(p_name text)
 RETURNS boolean
 LANGUAGE sql STABLE
@@ -1025,6 +1016,15 @@ BEGIN
     EXECUTE format('GRANT SELECT (object_id, deleted_at) ON api.handler TO %I', v_kernel);
 END $$;
 
+-- What calling a tool does, declared once so an agent knows it before the
+-- call: "effect" is read (changes nothing), write (makes a change) or proposal
+-- (records a change for a person to confirm); a write also declares
+-- "reversible", whether the change can be undone afterwards, and a proposal
+-- "proposes", the registered write tool a confirm runs.
+-- "openWorldHint" (default false) says the tool reaches outside this
+-- database. A resource or a prompt declares none of them. Returns the effect
+-- block tools/list publishes under _meta["pgmi/effect"]; NULL for a resource
+-- or prompt.
 CREATE OR REPLACE FUNCTION internal.mcp_tool_effect(p_metadata jsonb, p_type text, p_label text)
 RETURNS jsonb
 LANGUAGE plpgsql STABLE AS $$
