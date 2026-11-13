@@ -1469,6 +1469,26 @@ CREATE OR REPLACE TRIGGER tr_schema_component_catalog_generation
     AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON api.schema_component
     FOR EACH STATEMENT EXECUTE FUNCTION internal.bump_catalog_generation();
 
+-- Every MCP exchange is logged, and a READ ONLY transaction cannot write the
+-- log, so an MCP handler is never read_only. Registration refuses the readOnly
+-- key; this refuses the state itself, whoever writes the row.
+CREATE OR REPLACE FUNCTION internal.refuse_read_only_mcp_handler()
+RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'MCP handler "%" cannot be read_only: every MCP exchange is logged, and a READ ONLY transaction cannot write the log',
+        NEW.handler_function_name
+        USING ERRCODE = 'check_violation',
+              HINT = 'Leave read_only false on mcp_tool, mcp_resource and mcp_prompt handlers; only REST and RPC routes can be read-only.';
+END;
+$$;
+
+CREATE OR REPLACE TRIGGER tr_handler_mcp_never_read_only
+    BEFORE INSERT OR UPDATE OF read_only, handler_type ON api.handler
+    FOR EACH ROW
+    WHEN (NEW.read_only AND NEW.handler_type IN ('mcp_tool', 'mcp_resource', 'mcp_prompt'))
+    EXECUTE FUNCTION internal.refuse_read_only_mcp_handler();
+
 -- ============================================================================
 -- REGISTRY COLUMN NOTES: what the run-once table files say wrong
 -- ============================================================================
@@ -1483,3 +1503,6 @@ COMMENT ON COLUMN api.handler.handler_function_name IS
 
 COMMENT ON COLUMN api.mcp_route.effect IS
     'A tool''s effect block {effect read}, {effect write, reversible} or {effect proposal, proposes}, from its metadata (internal.mcp_tool_effect); tools/list publishes it as _meta["pgmi/effect"]. NULL for a resource or prompt.';
+
+COMMENT ON COLUMN api.handler.read_only IS
+    'Route declares it only reads (REST and RPC). The client gateway opens the transaction READ ONLY (an accidental write becomes a hard error) and may route the request to a read replica when the isolation floor permits (see internal.transaction_policy_replica_safe). The DB gateway rejects dispatch in a read-write transaction (pgmi.transaction_read_only_required). Set from the readOnly handler-metadata key. Never true for an MCP handler: every MCP exchange is logged (tr_handler_mcp_never_read_only).';

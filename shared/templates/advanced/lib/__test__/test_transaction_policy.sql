@@ -307,6 +307,34 @@ BEGIN
 END $$;
 
 -- ############################################################################
+-- MCP NEVER READ ONLY - every MCP exchange is logged, so the table refuses the flag
+-- ############################################################################
+DO $$
+DECLARE
+    v_state   text;
+    v_message text;
+BEGIN
+    PERFORM api.create_or_replace_mcp_handler(
+        jsonb_build_object(
+            'id', 'ffffffff-8203-4000-8000-000000000001',
+            'type', 'tool', 'effect', 'read', 'name', 'ro_mcp_probe', 'access', 'public',
+            'inputSchema', jsonb_build_object('type', 'object', 'properties', jsonb_build_object())
+        ),
+        $body$ BEGIN RETURN api.mcp_tool_result(jsonb_build_array(), (request).request_id); END; $body$
+    );
+    BEGIN
+        UPDATE api.handler SET read_only = true WHERE object_id = 'ffffffff-8203-4000-8000-000000000001';
+    EXCEPTION WHEN OTHERS THEN
+        v_state := SQLSTATE;
+        v_message := SQLERRM;
+    END;
+    IF v_state IS DISTINCT FROM '23514' OR coalesce(v_message, '') NOT LIKE '%logged%' THEN
+        RAISE EXCEPTION 'TEST FAILED: setting read_only on an MCP handler by hand must be refused (23514, saying why), got % %',
+            coalesce(v_state, 'success'), v_message;
+    END IF;
+END $$;
+
+-- ############################################################################
 -- ADVERTISED - OpenAPI carries x-pgmi-read-only and x-pgmi-replica-safe, and
 -- flipping readOnly changes the catalog version
 -- ############################################################################
