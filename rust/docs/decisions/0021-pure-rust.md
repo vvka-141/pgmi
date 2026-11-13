@@ -55,9 +55,12 @@ cc and ld removed.
   1. `cargo deny check bans` denies `cc`, `cmake`, `bindgen`, `pkg-config`,
      `vcpkg`, `openssl-sys`, `openssl`, `native-tls`, `aws-lc-sys`,
      `aws-lc-rs`, `ring` and `libz-sys`;
-  2. `cargo check` for every release target with `CC`, `CXX` and `AR` set to
+  2. `rust/check-no-c.sh`, for every target in `rust/release/targets.txt`
+     with all features: `cargo tree` of the normal and build graph fails on
+     a banned crate, then `cargo check` runs with `CC`, `CXX`, `AR`, their
+     `TARGET_`, `HOST_` and per-target (`CC_<target>`) forms set to
      `/bin/false`, so a build script that compiles C fails even if its crate
-     is not on the list;
+     is not on the list (PGMI-939);
   3. the Linux musl release builds link with `rust-lld`, in a job without a
      C compiler.
 - **Allowed:** crates that only declare bindings to the operating system and
