@@ -106,7 +106,7 @@ pub(crate) fn load(fs: &impl Vfs, max_size: u64) -> Result<Project> {
         ));
     }
     let mut project = Project {
-        deploy_sql: read_text(fs, "deploy.sql", max_size)?,
+        deploy_sql: read_text(fs, "deploy.sql", u64::MAX)?,
         ..Project::default()
     };
     walk(fs, "", false, &rules, max_size, &mut project).map_err(scanning)?;
@@ -291,6 +291,21 @@ mod tests {
         let e = load(fs, MAX).unwrap_err();
         assert_eq!(e.exit_code(), 10, "{}", e.text());
         e.text()
+    }
+
+    #[test]
+    fn deploy_sql_is_not_capped_as_project_files_are() {
+        let big = "SELECT 1;".repeat(4);
+        let fs = MemFs::default().file("deploy.sql", &big);
+        assert_eq!(load(&fs, 8).unwrap().deploy_sql, big);
+        let e = load(&fs.file("a.sql", &big), 8).unwrap_err();
+        assert_eq!(e.exit_code(), 10);
+        assert!(
+            e.text()
+                .contains("file a.sql is 36 bytes, exceeds 8-byte limit"),
+            "{}",
+            e.text()
+        );
     }
 
     #[test]

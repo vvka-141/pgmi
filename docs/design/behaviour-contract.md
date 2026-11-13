@@ -309,7 +309,7 @@ globs, classes, `**`, directory patterns, `!`, escapes). A pattern set that
 would hide `deploy.sql` is exit 10, and so is a bracket class that is empty
 (`[]`, `[!]`, or `]` right after the opening bracket) or holds a reversed
 range (`[z-a]`); an unclosed `[` is a literal bracket. A leading UTF-8 BOM is stripped from every
-file before anything else sees it. Each file is capped at 10 MiB
+file before anything else sees it. Each project file is capped at 10 MiB, deploy.sql never
 (`PGMI_MAX_FILE_SIZE` overrides; it must be a positive whole number of bytes,
 else exit 10). Full reference: `docs/DEPLOY-GUIDE.md` "What gets loaded".
 

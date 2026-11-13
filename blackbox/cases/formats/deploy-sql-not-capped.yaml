@@ -1,0 +1,16 @@
+description: PGMI_MAX_FILE_SIZE caps project files, never deploy.sql itself - a deploy.sql over the cap deploys, as Go reads it whole (PGMI-971), while a project file over it is exit 10
+project:
+  files:
+    deploy.sql: "CREATE TABLE marker (note text); INSERT INTO marker VALUES ('a deploy.sql well over the sixty-four byte cap');"
+    a.sql: "SELECT 'a project file over the sixty-four byte cap, which stays capped';"
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env: {PGMI_MAX_FILE_SIZE: "100"}
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[1]]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env: {PGMI_MAX_FILE_SIZE: "64"}
+    expect: {exit: 10, stderr: ["a\\.sql is \\d+ bytes, exceeds 64-byte limit"]}
