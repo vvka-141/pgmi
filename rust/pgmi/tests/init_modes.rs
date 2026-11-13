@@ -1,22 +1,8 @@
 #![cfg(all(test, unix))]
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
-
-fn modes(root: &Path, out: &mut Vec<(String, u32)>) {
-    for entry in std::fs::read_dir(root).unwrap() {
-        let path = entry.unwrap().path();
-        let meta = std::fs::symlink_metadata(&path).unwrap();
-        out.push((
-            path.display().to_string(),
-            meta.permissions().mode() & 0o777,
-        ));
-        if meta.is_dir() {
-            modes(&path, out);
-        }
-    }
-}
 
 #[test]
 fn a_scaffold_under_umask_zero_is_0644_and_0755() {
@@ -34,16 +20,21 @@ fn a_scaffold_under_umask_zero_is_0644_and_0755() {
         .status()
         .expect("run pgmi init");
     assert!(status.success());
-    let mut found = Vec::new();
-    modes(&dir, &mut found);
-    assert!(found.len() > 10, "{found:?}");
-    for (path, mode) in found {
-        let want = if Path::new(&path).is_dir() {
-            0o755
-        } else {
-            0o644
-        };
-        assert_eq!(mode, want, "{path}: {mode:o}");
+    let mut pending: Vec<PathBuf> = vec![dir.clone()];
+    let mut checked = 0;
+    while let Some(next) = pending.pop() {
+        for entry in std::fs::read_dir(&next).unwrap() {
+            let path = entry.unwrap().path();
+            let meta = std::fs::symlink_metadata(&path).unwrap();
+            let want = if meta.is_dir() { 0o755 } else { 0o644 };
+            let mode = meta.permissions().mode() & 0o777;
+            assert_eq!(mode, want, "{}: {mode:o}", path.display());
+            checked += 1;
+            if meta.is_dir() {
+                pending.push(path);
+            }
+        }
     }
+    assert!(checked > 10, "{checked} entries under {}", dir.display());
     let _ = std::fs::remove_dir_all(&dir);
 }
