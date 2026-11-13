@@ -163,12 +163,12 @@ fn switch_on(src: &str, name: &str) -> Option<String> {
 }
 
 fn enable_guard_options(project: &Project, names: &[&str]) {
-    let mut src = project.read("deploy.sql");
+    let mut src = project.read("deploy/settings.sql");
     for name in names {
         src = switch_on(&src, name)
-            .unwrap_or_else(|| panic!("deploy.sql has no switch for guard option {name}"));
+            .unwrap_or_else(|| panic!("deploy/settings.sql has no switch for guard option {name}"));
     }
-    project.write("deploy.sql", &src);
+    project.write("deploy/settings.sql", &src);
 }
 
 #[test]

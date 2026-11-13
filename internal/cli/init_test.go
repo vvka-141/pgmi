@@ -267,13 +267,13 @@ func TestInit_DefaultsToTheMinimalTemplate(t *testing.T) {
 }
 
 func TestManagedCloudCaveat_NamesEveryExtensionTheAdvancedDeployCreates(t *testing.T) {
-	deploy, err := fs.ReadFile(scaffold.GetTemplatesFS(), "templates/advanced/deploy.sql")
+	deploy, err := fs.ReadFile(scaffold.GetTemplatesFS(), "templates/advanced/deploy/settings.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	list := regexp.MustCompile(`\(VALUES (.*?)\) AS r\(name\)`).FindSubmatch(deploy)
 	if list == nil {
-		t.Fatal("the extension list moved in the advanced deploy.sql")
+		t.Fatal("the extension list moved in the advanced deploy/settings.sql")
 	}
 	caveat := strings.Join(strings.Fields(managedCloudCaveat("advanced")), " ")
 	for _, m := range regexp.MustCompile(`'([^']+)'`).FindAllSubmatch(list[1], -1) {

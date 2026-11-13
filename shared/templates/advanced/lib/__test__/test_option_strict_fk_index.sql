@@ -1,7 +1,7 @@
 -- ============================================================================
 -- Option strict_fk_index: a key with a referential action has an exact index
 -- ============================================================================
--- Off by default; switched on in pg_temp.guard_enabled() in deploy.sql.
+-- Off by default; switched on in pg_temp.guard_enabled() in deploy/settings.sql.
 -- ON DELETE / ON UPDATE CASCADE, SET NULL and SET DEFAULT look up the child
 -- rows by the key's columns alone, bypassing row-level security. An index led
 -- by the organization and continuing elsewhere, or one partial on deleted_at,

@@ -238,14 +238,14 @@ func TestAdvancedTemplate_AccessBaseline(t *testing.T) {
 // pg_temp.approved_schema_grant(), as a project that creates one does.
 func approveSchema(t *testing.T, projectPath, schema string) {
 	t.Helper()
-	path := filepath.Join(projectPath, "deploy.sql")
+	path := filepath.Join(projectPath, "deploy", "settings.sql")
 	src, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	const public = "           ('public',     NULL,                   NULL)"
 	if !strings.Contains(string(src), public) {
-		t.Fatal("deploy.sql has no public row in pg_temp.approved_schema_grant()")
+		t.Fatal("deploy/settings.sql has no public row in pg_temp.approved_schema_grant()")
 	}
 	patched := strings.Replace(string(src), public, fmt.Sprintf("           ('%s', NULL, NULL),\n%s", schema, public), 1)
 	if err := os.WriteFile(path, []byte(patched), 0o644); err != nil {

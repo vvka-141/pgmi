@@ -1,7 +1,7 @@
 -- ============================================================================
 -- Option naming: views, constraints and indexes follow one naming rule set
 -- ============================================================================
--- Off by default; switched on in pg_temp.guard_enabled() in deploy.sql.
+-- Off by default; switched on in pg_temp.guard_enabled() in deploy/settings.sql.
 -- A name that says what an object is reads in an error, a plan and a catalog
 -- query without a lookup. pg_temp.naming_rule() is the rule set, one regular
 -- expression per kind of object; change it to the project's own. An object

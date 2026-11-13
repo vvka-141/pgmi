@@ -1,7 +1,7 @@
 -- ============================================================================
 -- Option rls_index_method: no lookup index but btree on a forced table
 -- ============================================================================
--- Off by default; switched on in pg_temp.guard_enabled() in deploy.sql.
+-- Off by default; switched on in pg_temp.guard_enabled() in deploy/settings.sql.
 -- Under row-level security PostgreSQL runs a query's own conditions after the
 -- policy unless their operators are leakproof, and the GIN, GiST and trigram
 -- operators are not: such an index cannot serve the query on a forced table,

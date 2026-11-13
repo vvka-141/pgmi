@@ -194,7 +194,7 @@ Tests for the framework itself (not your application).
 | `test_schema_and_tags.sql` | `api.json_schema` domain, `$schema` injection, `_meta.tags`, auth hiding |
 | `test_transaction_isolation.sql` | Per-route isolation floor enforcement |
 | `test_transaction_policy.sql` | Read-only routes and resolve-then-open |
-| `test_approved_schemas.sql` | The application schemas and their grants are exactly `pg_temp.approved_schema_grant()` in deploy.sql |
+| `test_approved_schemas.sql` | The application schemas and their grants are exactly `pg_temp.approved_schema_grant()` in deploy/settings.sql |
 | `test_change_tracking.sql` | Every table `core.apply_change_tracking` lists keeps its trigger, and records each change once with person and agent |
 | `test_dev_entry_points.sql` | `api.open_dev_login_session` exists only while the database is dev |
 | `test_entity_registry.sql` | The entity registry lists registered rows under their own row-level security |

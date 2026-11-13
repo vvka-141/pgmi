@@ -10,8 +10,8 @@ import (
 
 // The advanced template promises that declaring `object_id core.entity_id`
 // gets created_at and deleted_at injected "by the deploy-end sweep"
-// (lib/core/foundation.sql). That promise rests on one line in deploy.sql
-// calling apply_entity_standards_all(), and nothing else in the suite would
+// (lib/core/foundation.sql). That promise rests on one line in
+// deploy/finalize.sql calling apply_entity_standards_all(), and nothing else in the suite would
 // notice its absence:
 //
 //   - the shipped entity table (api.handler) calls
@@ -23,37 +23,44 @@ import (
 // deploy time, then loudly at runtime when the soft-delete views query
 // deleted_at.
 func TestAdvancedDeploySQLWiresTheEntityStandardsSweep(t *testing.T) {
-	body, err := os.ReadFile("../../shared/templates/advanced/deploy.sql")
-	if err != nil {
-		t.Fatalf("read advanced deploy.sql: %v", err)
+	read := func(name string) (raw, code string) {
+		body, err := os.ReadFile("../../shared/templates/advanced/" + name)
+		if err != nil {
+			t.Fatalf("read advanced %s: %v", name, err)
+		}
+		// Comments and literals masked: deploy.sql's header names files and
+		// calls that are not statements.
+		return string(body), preprocessor.NewCommentStripper().RedactForMacros(string(body))
 	}
-	// Comments and literals masked first: deploy.sql's header documents "CALL pgmi_test()" dozens
-	// of lines above the real call, and matching that instead of the statement
-	// made this test report an ordering violation that does not exist.
-	deploySQL := preprocessor.NewCommentStripper().RedactForMacros(string(body))
 
 	const sweep = "pg_temp.apply_entity_standards_all()"
-	sweepAt := strings.Index(deploySQL, sweep)
-	if sweepAt == -1 {
-		t.Fatalf("deploy.sql never calls %s — a user table declaring "+
+	if _, finalize := read("deploy/finalize.sql"); !strings.Contains(finalize, sweep) {
+		t.Fatalf("deploy/finalize.sql never calls %s — a user table declaring "+
 			"object_id core.entity_id would not get created_at/deleted_at", sweep)
 	}
 
-	// Ordering is load-bearing in both directions.
-	deployAt := strings.Index(deploySQL, "pg_temp.deploy()")
-	if deployAt == -1 {
-		t.Fatal("deploy.sql never calls pg_temp.deploy()")
+	// Ordering is load-bearing in both directions: deploy.sql runs finalize.sql
+	// after the plan loop and before the test gate.
+	raw, code := read("deploy.sql")
+	const runFinalize = "pg_temp.run_file('./deploy/finalize.sql')"
+	finalizeAt := strings.Index(raw, runFinalize)
+	if finalizeAt == -1 || !strings.HasPrefix(code[finalizeAt:], "pg_temp.run_file(") {
+		t.Fatal("deploy.sql never runs deploy/finalize.sql")
 	}
-	if sweepAt < deployAt {
-		t.Error("the sweep runs before pg_temp.deploy(), so it cannot see tables the " +
+	loopAt := strings.Index(raw, "EXECUTE f.content")
+	if loopAt == -1 {
+		t.Fatal("deploy.sql has no plan loop executing f.content")
+	}
+	if finalizeAt < loopAt {
+		t.Error("finalize.sql runs before the plan loop, so the sweep cannot see tables the " +
 			"deployment just created")
 	}
 
-	testsAt := strings.Index(deploySQL, "CALL pgmi_test(")
+	testsAt := strings.Index(code, "CALL pgmi_test(")
 	if testsAt == -1 {
 		t.Fatal("deploy.sql never calls pgmi_test()")
 	}
-	if sweepAt > testsAt {
+	if finalizeAt > testsAt {
 		t.Error("the sweep runs after the test gate, so tests see un-swept tables and a " +
 			"conformance failure would abort the deploy only after the tests claimed it was fine")
 	}

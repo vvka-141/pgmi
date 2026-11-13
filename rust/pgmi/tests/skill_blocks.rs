@@ -250,16 +250,16 @@ fn deploy_skill_blocks(
 }
 
 fn enable_guard_options(project: &Project, names: &[&str]) {
-    let mut out = project.read("deploy.sql");
+    let mut out = project.read("deploy/settings.sql");
     for name in names {
         let row = Regex::new(&format!(r"(\('{name}',\s*)false\)")).unwrap();
         assert!(
             row.is_match(&out),
-            "deploy.sql has no switch for guard option {name}"
+            "deploy/settings.sql has no switch for guard option {name}"
         );
         out = row.replace_all(&out, "${1}true)").into_owned();
     }
-    project.write("deploy.sql", &out);
+    project.write("deploy/settings.sql", &out);
 }
 
 fn skill_blocks_deploy(template: &str) {

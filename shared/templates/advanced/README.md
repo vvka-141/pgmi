@@ -78,7 +78,8 @@ myproject/
 ├── data/authorization.json   # Permission vocabulary and roles, synced every deploy
 ├── data/catalogs/            # Reference data synced by pg_temp.sync_catalog (create when needed)
 ├── gateways/                  # Reference gateways per language (gateways/README.md); never deployed
-├── deploy.sql                # Deployment orchestrator (includes infrastructure bootstrap)
+├── deploy.sql                # The deployment, top to bottom: phases, transaction, file loop
+├── deploy/                   # Setup deploy.sql runs by name (settings.sql: the lists you edit)
 ├── session.xml               # Parameter declarations consumed by deploy.sql
 ├── pgmi.yaml                 # Project configuration (connection, params, timeout)
 ├── ARCHITECTURE.md           # Design rationale
@@ -93,7 +94,22 @@ myproject/
 | `core/` | Your entity tables (run once) and kernels, the functions that write them | Yes - create it for your domain |
 | `api/` | Your HTTP handlers (REST, RPC, MCP) | Yes - your application code |
 | `__test__/` | Tests of the whole project; an API test goes in `api/__test__/`, over its Alice fixture | Yes - add tests here |
-| `deploy.sql` | Deployment phases, transaction control, infrastructure bootstrap | Yes - customize deployment |
+| `deploy.sql` | Deployment phases, transaction control, the file loop | Yes - customize deployment |
+| `deploy/` | Setup `deploy.sql` runs by name: settings, parameters, file rules, roles, schemas, ledger, finalize | `settings.sql` yes; others rarely, in the file whose name fits |
+
+### deploy.sql and deploy/
+
+`deploy.sql` reads as the deployment, top to bottom, in five banners:
+PREFLIGHT, BOOTSTRAP, DEPLOY, VERIFY and TAIL. Its setup code lives in
+`deploy/`, a fixed set of files `deploy.sql` runs by name through
+`pg_temp.run_file`. They are not in the plan and carry no `<pgmi-meta>` block.
+
+- `deploy/settings.sql` holds the lists a project edits: required extensions,
+  database settings, schema grants, tenant columns and the optional guards.
+- Add code to the `deploy/` file whose name fits. A new `deploy/` file is a
+  design change, not a place for one more statement.
+- `deploy/` files run inside the deploy's transaction: they never `COMMIT` and
+  never build an index `CONCURRENTLY`. Those go in the TAIL of `deploy.sql`.
 
 ## Trimming the template
 
@@ -502,7 +518,7 @@ Any handler may declare a minimum isolation floor (`minTransactionIsolation`); a
 Pass the required password parameters as `PGMI_PARAM_*` environment variables,
 stdin or a params file, never as command-line `--param` — see [Deploy](#1-deploy).
 
-Defaults sit beside the values, in one `CASE` in `deploy.sql`. A parameter
+Defaults sit beside the values, in one `CASE` in `deploy/parameters.sql`. A parameter
 without a default is required, and a blank value counts as not given.
 
 ## Environments
@@ -652,8 +668,8 @@ only to logins you trust to state who calls.
 entry points (`api.rest_invoke`, `api.rpc_invoke`, `api.rpc_resolve`,
 `api.mcp_handle_request`, the route-policy lookups, `api.catalog_version`,
 `api.open_login_session`, `api.close_login_session`, and
-`api.open_dev_login_session` with `env=dev`), granted once at the end of
-`deploy.sql`. The admin login has no grant of its own; it is a member of the
+`api.open_dev_login_session` with `env=dev`), granted once at the end of the
+deploy (`deploy/finalize.sql`). The admin login has no grant of its own; it is a member of the
 owner. The optional jobs login executes every `api.job_*` routine and nothing
 else. No routine is executable by `PUBLIC`. `lib/__test__/test_exact_grants.sql`
 fails the deploy on any other grant.
@@ -674,7 +690,7 @@ key points at one with it (its rows belong to an organization too, so an
 exemption does not cover it), a table with an organization column, row-level
 security off and a `SELECT` grant beyond the owner, admin and kernel, and an
 exemption whose table is gone or now forced. The organization columns are
-`pg_temp.tenant_column()` in `deploy.sql`.
+`pg_temp.tenant_column()` in `deploy/settings.sql`.
 
 **Kernels.** Membership rows are read by requests through the owner's
 policies (themselves, their organization, the organizations they belong to)
@@ -715,12 +731,12 @@ file's `CREATE OR REPLACE` works, and the file hands it over again.
 | `internal` | Deployment tracking, infrastructure | kernel |
 | `extensions` | `uuid-ossp`, `pgcrypto`, `pg_trgm`, `hstore`, `btree_gist`, kept out of `search_path` conflicts | PUBLIC |
 
-`pg_temp.approved_schema_grant()` in `deploy.sql` holds this table as a list,
+`pg_temp.approved_schema_grant()` in `deploy/settings.sql` holds this table as a list,
 and `lib/__test__/test_approved_schemas.sql` fails the deploy on a schema or
 schema grant it does not name. A project that creates a schema adds its rows.
 
 The database-wide settings come from one list, `pg_temp.database_setting()` in
-`deploy.sql`; add a row there rather than an `ALTER DATABASE` elsewhere. An
+`deploy/settings.sql`; add a row there rather than an `ALTER DATABASE` elsewhere. An
 extension already installed in another schema (some images pre-install them in
 `public`) is moved into `extensions`; one that cannot be moved stops the deploy
 with the commands to recreate it.
@@ -1064,7 +1080,7 @@ it cannot pass by looking at nothing.
 | `test_rls_initplan.sql` | a row policy calling an identity reader (`api.current_organization_id()`, `api.has_permission(...)`, ...) without wrapping it as `(SELECT ...)`, which runs it once per row instead of once per query |
 | `test_policy_drift.sql` | a row policy that differs from what the deploy's files left (`ALTER POLICY` by hand), one no deploy file created, or one that is gone. The deploy records each policy a file creates, changes or drops in `internal.policy_fingerprint`; change a policy in a new run-once file |
 | `test_fk_index_coverage.sql` | a foreign key no index leads with (a key holding an organization column is judged by its other column, led by it or by `(organization, it)`). A key left unindexed on purpose is declared in the run-once file that creates it: `SELECT pg_temp.exempt_from_fk_index('core.task', '{created_by_user_id}', '<reason>');` (recorded in `internal.fk_index_exemption`); an exemption naming no unindexed key fails as stale |
-| `test_approved_schemas.sql` | an application schema, or a grant on one, that `pg_temp.approved_schema_grant()` in `deploy.sql` does not list, or a listed one the database lacks. A new schema adds its rows there |
+| `test_approved_schemas.sql` | an application schema, or a grant on one, that `pg_temp.approved_schema_grant()` in `deploy/settings.sql` does not list, or a listed one the database lacks. A new schema adds its rows there |
 | `test_handler_context_reads.sql` | a handler, `api.job_*` or `core` routine reading an `auth.*` setting or a session header by name instead of the typed readers |
 | `test_exact_grants.sql` | see Role Hierarchy |
 | `test_common_reach.sql` | a routine pinning a `search_path` without `common` |
@@ -1074,7 +1090,7 @@ it cannot pass by looking at nothing.
 
 Eight more checks ship off: each encodes one house's rules, so a project
 switches on the ones it holds. A switch is a row in `pg_temp.guard_enabled()`
-in `deploy.sql`; set it to `true`:
+in `deploy/settings.sql`; set it to `true`:
 
 ```sql
     SELECT o.enabled INTO v_enabled FROM (VALUES
@@ -1096,7 +1112,7 @@ in `deploy.sql`; set it to `true`:
 Off, each file still proves on a planted object that its check works, so a
 switched-on option cannot pass by looking at nothing. On, an object it should
 let pass is listed with the reason in `pg_temp.guard_exemption()` in
-`deploy.sql`, spelled as the error names it; for `trigger_allowlist` that list
+`deploy/settings.sql`, spelled as the error names it; for `trigger_allowlist` that list
 is the allowlist:
 
 ```sql

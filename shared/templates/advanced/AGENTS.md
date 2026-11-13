@@ -20,6 +20,7 @@ contract and refuses a deploy that breaks it.
 | choose a protocol, design identity or access, review the API's layering or security | `.agents/skills/pgmi-api/SKILL.md` and `ARCHITECTURE.md` |
 | change roles, grants or row-level security | `README.md` (privileges) |
 | write SQL or PL/pgSQL, or change `deploy.sql` | `.agents/skills/pgmi-sql/SKILL.md` |
+| change the deployment's setup (roles, schemas, parameters, guards) | `README.md` ("deploy.sql and deploy/"): add code to the `deploy/` file whose name fits; ask before creating a new one |
 | add a test or fixture in a `__test__/` directory | `.agents/skills/pgmi-testing/SKILL.md`; an API test goes in `api/__test__/` over its Alice fixture, with the helpers in `.agents/skills/pgmi-api/references/identity-and-access.md` |
 | fix a failed deploy | `.agents/skills/pgmi-debug-deploy/SKILL.md` |
 | set sort keys or other pgmi-meta attributes | `.agents/skills/pgmi-metadata/SKILL.md` and `README.md` (sort key conventions) |
@@ -41,7 +42,8 @@ version that fits this project.
 
 ## Where things are
 
-- `deploy.sql` — the deployment and its guards.
+- `deploy.sql` — the deployment, top to bottom: PREFLIGHT, BOOTSTRAP, DEPLOY, VERIFY, TAIL.
+- `deploy/` — the setup `deploy.sql` runs by name; `deploy/settings.sql` holds the lists a project edits. These files never `COMMIT`.
 - `lib/` — the framework the template ships (core, API protocols, common helpers); change it only on purpose.
 - `api/` — the application's endpoints; the shipped ones are examples to replace.
 - `membership/` — people, organizations and access.

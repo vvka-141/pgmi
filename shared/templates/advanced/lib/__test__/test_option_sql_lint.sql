@@ -1,7 +1,7 @@
 -- ============================================================================
 -- Option sql_lint: routine and view bodies avoid four known traps
 -- ============================================================================
--- Off by default; switched on in pg_temp.guard_enabled() in deploy.sql.
+-- Off by default; switched on in pg_temp.guard_enabled() in deploy/settings.sql.
 -- Each rule names SQL that is legal and always a mistake:
 --   NULL comparison   x = NULL, x <> NULL: always NULL, never true
 --   NOT IN (SELECT    one NULL from the subquery and nothing matches

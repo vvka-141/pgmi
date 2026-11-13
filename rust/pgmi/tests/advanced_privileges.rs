@@ -31,11 +31,11 @@ END $$;
 fn approve_schema(p: &Project, schema: &str) {
     let public = "           ('public',     NULL,                   NULL)";
     assert!(
-        p.read("deploy.sql").contains(public),
-        "deploy.sql has no public row in pg_temp.approved_schema_grant()"
+        p.read("deploy/settings.sql").contains(public),
+        "deploy/settings.sql has no public row in pg_temp.approved_schema_grant()"
     );
     p.replace(
-        "deploy.sql",
+        "deploy/settings.sql",
         public,
         &format!("           ('{schema}', NULL, NULL),\n{public}"),
     );

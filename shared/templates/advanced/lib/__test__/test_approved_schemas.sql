@@ -1,7 +1,7 @@
 -- ============================================================================
 -- Test: the application schemas and who may use them are exactly the lists
 -- ============================================================================
--- pg_temp.approved_schema_grant() in deploy.sql lists every application
+-- pg_temp.approved_schema_grant() in deploy/settings.sql lists every application
 -- schema with each privilege granted on it. A schema not in the list, a listed
 -- one missing, and a grant on a schema that the list does not hold or that the
 -- database lacks fail the deploy. The jobs login's row counts only once it is
@@ -69,7 +69,7 @@ BEGIN
     SELECT string_agg(d, E'\n  ' ORDER BY d) INTO v_bad FROM pg_temp.schema_drift() d;
     IF v_bad IS NOT NULL THEN
         RAISE EXCEPTION E'TEST FAILED: application schemas differ from pg_temp.approved_schema_grant():\n  %', v_bad
-            USING HINT = 'A new schema, or a new grant on one, is added to pg_temp.approved_schema_grant() in deploy.sql.';
+            USING HINT = 'A new schema, or a new grant on one, is added to pg_temp.approved_schema_grant() in deploy/settings.sql.';
     END IF;
 
     CREATE SCHEMA schema_probe;

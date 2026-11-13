@@ -4,6 +4,7 @@ A full SQL-native application built on pgmi, for you to read, trim, and own — 
 
 Structure:
   ├── deploy.sql
+  ├── deploy/          (the setup deploy.sql runs by name: roles, schemas, ledger)
   ├── pgmi.yaml
   ├── session.xml      (deployment parameters and their defaults)
   ├── README.md

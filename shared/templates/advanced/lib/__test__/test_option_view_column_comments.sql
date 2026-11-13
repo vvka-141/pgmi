@@ -1,7 +1,7 @@
 -- ============================================================================
 -- Option view_column_comments: every core view and column says what it is
 -- ============================================================================
--- Off by default; switched on in pg_temp.guard_enabled() in deploy.sql.
+-- Off by default; switched on in pg_temp.guard_enabled() in deploy/settings.sql.
 -- The views of core are what the application, its reports and an assistant
 -- read; a comment on the view and on each column is their documentation, kept
 -- in the catalog beside them. A core view or column without one fails.

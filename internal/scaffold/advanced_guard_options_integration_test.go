@@ -20,7 +20,7 @@ var guardOptions = []string{
 // pg_temp.guard_enabled(), as a project does.
 func enableGuardOptions(t *testing.T, projectPath string, names ...string) {
 	t.Helper()
-	path := filepath.Join(projectPath, "deploy.sql")
+	path := filepath.Join(projectPath, "deploy", "settings.sql")
 	src, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -29,7 +29,7 @@ func enableGuardOptions(t *testing.T, projectPath string, names ...string) {
 	for _, name := range names {
 		row := regexp.MustCompile(`(\('` + name + `',\s*)false\)`)
 		if !row.MatchString(out) {
-			t.Fatalf("deploy.sql has no switch for guard option %s", name)
+			t.Fatalf("deploy/settings.sql has no switch for guard option %s", name)
 		}
 		out = row.ReplaceAllString(out, "${1}true)")
 	}

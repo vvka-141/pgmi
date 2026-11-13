@@ -278,22 +278,29 @@ fn code_only(sql: &str) -> String {
 
 #[test]
 fn advanced_deploy_sql_wires_the_entity_standards_sweep() {
-    let sql = code_only(&embedded("templates/advanced/deploy.sql"));
-    let sweep = sql
-        .find("pg_temp.apply_entity_standards_all()")
-        .expect("deploy.sql never calls pg_temp.apply_entity_standards_all(): a user table declaring object_id core.entity_id would not get created_at/deleted_at");
-    let deploy = sql
-        .find("pg_temp.deploy()")
-        .expect("deploy.sql never calls pg_temp.deploy()");
+    let finalize = code_only(&embedded("templates/advanced/deploy/finalize.sql"));
     assert!(
-        sweep > deploy,
-        "the sweep runs before pg_temp.deploy(), so it cannot see tables the deployment just created"
+        finalize.contains("pg_temp.apply_entity_standards_all()"),
+        "deploy/finalize.sql never calls pg_temp.apply_entity_standards_all(): a user table declaring object_id core.entity_id would not get created_at/deleted_at"
+    );
+    let raw = embedded("templates/advanced/deploy.sql");
+    let sql = code_only(&raw);
+    let finalize_at = raw
+        .find("pg_temp.run_file('./deploy/finalize.sql')")
+        .filter(|&at| sql[at..].starts_with("pg_temp.run_file("))
+        .expect("deploy.sql never runs deploy/finalize.sql");
+    let loop_at = raw
+        .find("EXECUTE f.content")
+        .expect("deploy.sql has no plan loop executing f.content");
+    assert!(
+        finalize_at > loop_at,
+        "finalize.sql runs before the plan loop, so the sweep cannot see tables the deployment just created"
     );
     let tests = sql
         .find("CALL pgmi_test(")
         .expect("deploy.sql never calls pgmi_test()");
     assert!(
-        sweep < tests,
+        finalize_at < tests,
         "the sweep runs after the test gate, so tests see un-swept tables"
     );
 }
@@ -312,12 +319,8 @@ fn shipped_templates_split_at_their_documented_commit() {
         ("basic", "SAVEPOINT _tests", vec!["RAISE NOTICE"]),
         (
             "advanced",
-            "Required deployment parameter",
-            vec![
-                "Deployment lock released",
-                "NOT i.indisvalid",
-                "RAISE NOTICE $ascii$",
-            ],
+            "Deployment complete",
+            vec!["NOT i.indisvalid", "RAISE NOTICE $ascii$"],
         ),
     ] {
         let units = script::split(&embedded(&format!("templates/{template}/deploy.sql")));
@@ -507,11 +510,11 @@ fn readme_advanced_template_size_follows_the_code() {
 
 #[test]
 fn docs_name_every_advanced_extension() {
-    let deploy = embedded("templates/advanced/deploy.sql");
+    let deploy = embedded("templates/advanced/deploy/settings.sql");
     let row = Regex::new(r"FROM \(VALUES (.*?)\) AS r\(name\)").unwrap();
     let row = row
         .captures(&deploy)
-        .expect("no extension VALUES row found in advanced/deploy.sql");
+        .expect("no extension VALUES row found in advanced/deploy/settings.sql");
     let extensions: Vec<String> = Regex::new("'([^']+)'")
         .unwrap()
         .captures_iter(&row[1])

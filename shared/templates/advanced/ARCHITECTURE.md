@@ -65,6 +65,7 @@ A deploy is itself a transaction over the dataset, so `deploy.sql` refuses anyth
 - **Access is part of the state.** Privileges start closed, and grants, policies and triggers may not disappear unless a file declares the removal (below).
 - **Reference data is a file.** `data/catalogs/<schema>.<table>.json` is the whole content of a lookup table; every deploy makes the table equal it.
 - **Atomic head, then a tail.** Everything up to the `COMMIT` is one transaction. After it, `deploy.sql` builds concurrent indexes and fails on any invalid index.
+- **The deployment reads top to bottom.** `deploy.sql` is five banners (PREFLIGHT, BOOTSTRAP, DEPLOY, VERIFY, TAIL) with the file loop inline. Its setup lives in a fixed set of `deploy/` files it runs by name; add code to the file whose name fits, never `COMMIT` in one, and treat a new one as a design change.
 
 The history of every deploy and script is readable in `internal.vw_deployment` and `internal.vw_deployed_script`. README "Extending the Framework" has the details.
 

@@ -118,13 +118,13 @@ func TestDocsHaveNoStaleTemplateClaims(t *testing.T) {
 // Operators check these lists against their provider's allow-list before the
 // first deploy, so each must name every extension advanced/deploy.sql creates.
 func TestDocsNameEveryAdvancedExtension(t *testing.T) {
-	deploy, err := os.ReadFile("../../shared/templates/advanced/deploy.sql")
+	deploy, err := os.ReadFile("../../shared/templates/advanced/deploy/settings.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	row := regexp.MustCompile(`FROM \(VALUES (.*?)\) AS r\(name\)`).FindSubmatch(deploy)
 	if row == nil {
-		t.Fatal("no extension VALUES row found in advanced/deploy.sql")
+		t.Fatal("no extension VALUES row found in advanced/deploy/settings.sql")
 	}
 	var extensions []string
 	for _, m := range regexp.MustCompile(`'([^']+)'`).FindAllSubmatch(row[1], -1) {

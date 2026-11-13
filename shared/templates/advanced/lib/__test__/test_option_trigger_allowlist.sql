@@ -1,11 +1,11 @@
 -- ============================================================================
 -- Option trigger_allowlist: every trigger on a core table is listed
 -- ============================================================================
--- Off by default; switched on in pg_temp.guard_enabled() in deploy.sql.
+-- Off by default; switched on in pg_temp.guard_enabled() in deploy/settings.sql.
 -- A trigger is work no caller sees: a write does more than it says, and a
 -- trigger that copies rows into another table keeps two truths in step by
 -- hand. So each trigger on a core table is allowed by name, with the reason,
--- in pg_temp.guard_exemption() in deploy.sql:
+-- in pg_temp.guard_exemption() in deploy/settings.sql:
 --   ('trigger_allowlist', 'core.task trg_task_number', 'numbers each task of an organization in order')
 -- A listed trigger that no longer exists fails as stale. A partition's clone
 -- of its parent's trigger is the parent's.

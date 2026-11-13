@@ -1,7 +1,7 @@
 -- ============================================================================
 -- Option handler_reads_views: handlers read the semantic layer, not tables
 -- ============================================================================
--- Off by default; switched on in pg_temp.guard_enabled() in deploy.sql.
+-- Off by default; switched on in pg_temp.guard_enabled() in deploy/settings.sql.
 -- The domain lives in core: tables hold the facts, views (core.vw_*) are what
 -- the application reads, kernels (core.fn_*) are how it writes. A handler that
 -- names a core table couples the API to storage, so a registered handler body

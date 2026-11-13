@@ -1,7 +1,7 @@
 -- ============================================================================
 -- Option plpgsql_check: every PL/pgSQL routine passes plpgsql_check
 -- ============================================================================
--- Off by default; switched on in pg_temp.guard_enabled() in deploy.sql.
+-- Off by default; switched on in pg_temp.guard_enabled() in deploy/settings.sql.
 -- PostgreSQL checks a PL/pgSQL body's SQL only when a statement runs, so a
 -- misspelt column in a branch no test reaches ships. plpgsql_check reads every
 -- statement of every routine of an application schema (a trigger function

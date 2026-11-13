@@ -34,8 +34,7 @@ func TestShippedTemplatesSplitAtTheirDocumentedCommit(t *testing.T) {
 		tail []string
 	}{
 		{"basic", "SAVEPOINT _tests", []string{"RAISE NOTICE"}},
-		{"advanced", "Required deployment parameter", []string{
-			"Deployment lock released", "NOT i.indisvalid", "RAISE NOTICE $ascii$"}},
+		{"advanced", "Deployment complete", []string{"NOT i.indisvalid", "RAISE NOTICE $ascii$"}},
 	} {
 		t.Run(tc.template, func(t *testing.T) {
 			body, err := os.ReadFile("../../shared/templates/" + tc.template + "/deploy.sql")
