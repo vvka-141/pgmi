@@ -334,7 +334,7 @@ The first SIGINT or SIGTERM during the load is exit 130 and a
 `--timeout` that runs out there is exit 16, as in Go, which loads after
 connecting.
 
-Cases: `dialect/pgmiignore`, `dialect/pgmiignore-characters`, `dialect/root-deploy-file-any-case`, `dialect/pgmiignore-hides-deploy`, `execution/loader-at-scale`, `dialect/project-walk`, `commands/metadata-refusals`, `errors/special-file`, `dialect/nested-deploy-sql-loaded`, `dialect/pgmiignore-broken-patterns`, `formats/binary-file-in-test-directory`. The load racing a signal and the timeout: Rust unit tests `blocking_work_gives_way_to_the_first_signal`, `blocking_work_gives_way_to_the_timeout`.
+Cases: `dialect/pgmiignore`, `dialect/pgmiignore-characters`, `dialect/root-deploy-file-any-case`, `dialect/pgmiignore-hides-deploy`, `execution/loader-at-scale`, `dialect/project-walk`, `commands/metadata-refusals`, `errors/special-file`, `dialect/nested-deploy-sql-loaded`, `dialect/pgmiignore-broken-patterns`, `formats/binary-file-in-test-directory`. The load racing a signal and the timeout: Rust unit tests `blocking_work_gives_way_to_the_first_signal`, `blocking_work_gives_way_to_the_timeout`, `formats/deploy-sql-not-capped`, `errors/deploy-sql-directory`.
 
 ### Session API
 
@@ -460,7 +460,7 @@ privilege gives the `GRANT CONNECT`, and a host DNS cannot find says to check
 its spelling, DNS and `$PGHOST`. The server's DETAIL follows the error as a
 `DETAIL:` line and is `detail` in `--json`.
 
-Cases: `errors/connection-failures`, `errors/connect-refusal-detail`, `connection/connect-timeout-range`, `env/pg-tls-protocol-variables`, `connection/pgpass`, `connection/pgpass-wildcard-and-file`, `connection/pgpass-world-readable`, `connection/multi-host`, `connection/target-session-attrs`, `connection/keywords`, `connection/unix-socket`, `env/pg-variables`, `env/pgappname`, `env/pgconnect-timeout`, `env/ignored-variables`, `errors/connection-failures`, `exit-codes/11-connection-failed`, `connection/protocol-version`, `bad-weather/connect-resets-retried`, `bad-weather/startup-refusals-retried`, `bad-weather/startup-refusals-final`, `retry/connect-gave-up`.
+Cases: `errors/connection-failures`, `errors/connect-refusal-detail`, `connection/connect-timeout-range`, `env/pg-tls-protocol-variables`, `connection/pgpass`, `connection/pgpass-wildcard-and-file`, `connection/pgpass-world-readable`, `connection/multi-host`, `connection/target-session-attrs`, `connection/keywords`, `connection/unix-socket`, `env/pg-variables`, `env/pgappname`, `env/pgconnect-timeout`, `env/ignored-variables`, `errors/connection-failures`, `exit-codes/11-connection-failed`, `connection/protocol-version`, `bad-weather/connect-resets-retried`, `bad-weather/startup-refusals-retried`, `bad-weather/startup-refusals-final`, `retry/connect-gave-up`, `errors/hints-kept`.
 
 ### TLS
 
@@ -488,7 +488,7 @@ sslmode came from `pgmi.yaml`, the Rust binary names the line and the fix
 (owner 2026-11-11, PGMI-873; case `cloud/token-auth-pgmi-yaml-sslmode`). `--json`
 reports `tls.enabled`, `tls.version` (`TLS 1.3`), `tls.sslmode`.
 
-Cases: `tls/sslmode-matrix`, `tls/sslmode-refusals`, `tls/default-files`, `tls/default-files-good-root`, `tls/tls-only-and-plain-servers`, `tls/client-certificate`, `tls/sslmode-flag-overrides`, `tls/channel-binding-and-direct`, `tls/system-roots`, `tls/verify-without-root`, `tls/encrypted-client-key`, `tls/encrypted-pkcs8-client-key`, `tls/require-auth-and-version`, `tls/yaml-certificates-with-string`, `cloud/token-auth-requires-tls`, `cloud/token-auth-pgmi-yaml-sslmode`.
+Cases: `tls/sslmode-matrix`, `tls/sslmode-refusals`, `tls/default-files`, `tls/default-files-good-root`, `tls/tls-only-and-plain-servers`, `tls/client-certificate`, `tls/sslmode-flag-overrides`, `tls/channel-binding-and-direct`, `tls/system-roots`, `tls/verify-without-root`, `tls/encrypted-client-key`, `tls/encrypted-pkcs8-client-key`, `tls/require-auth-and-version`, `tls/yaml-certificates-with-string`, `cloud/token-auth-requires-tls`, `cloud/token-auth-pgmi-yaml-sslmode`, `tls/self-signed-server-certificate`.
 
 ### Target database, overwrite and approval
 
@@ -1083,7 +1083,7 @@ password does not blank out every letter. No pattern is guessed. A password
 read from a password file (`~/.pgpass`, `PGPASSFILE`, `passfile`) is known
 from the moment it is read, for the maintenance and the target database.
 
-Cases: `notices/secrets-redacted`, `notices/pgpass-secret-redacted`.
+Cases: `notices/secrets-redacted`, `notices/pgpass-secret-redacted`, `notices/password-equal-to-login`.
 
 ### A non-ASCII letter glued to CALL belongs to the word
 
@@ -1377,7 +1377,7 @@ and `timeUsedMs`, present once an attempt started. SIGINT or SIGTERM during
 an attempt or a wait is exit 130 at once. `retry: false` in `pgmi.yaml`
 turns it off; there is no flag.
 
-Cases: `retry/connection-lost-mid-run`, `retry/server-shutdown-mid-run`, `retry/connect-gave-up`, `retry/concurrency-errors`, `retry/read-only-on-a-standby`, `retry/sign-in-unavailable`, `retry/deadline-during-an-attempt`, `retry/wait-cut-at-the-deadline`, `retry/signal-during-a-wait`, `retry/failing-test-not-retried`, `retry/retry-false`, `retry/no-retry-after-commit`, `retry/orphaned-session-holds-lock`, `retry/no-time-box-five-attempts`, `exit-codes/11-connection-failed`. The table of transient failures, the backoff and the messages: the Rust unit tests of `deploy::retry`.
+Cases: `retry/connection-lost-mid-run`, `retry/server-shutdown-mid-run`, `retry/connect-gave-up`, `retry/concurrency-errors`, `retry/read-only-on-a-standby`, `retry/sign-in-unavailable`, `retry/deadline-during-an-attempt`, `retry/wait-cut-at-the-deadline`, `retry/signal-during-a-wait`, `retry/failing-test-not-retried`, `retry/retry-false`, `retry/no-retry-after-commit`, `retry/orphaned-session-holds-lock`, `retry/no-time-box-five-attempts`, `exit-codes/11-connection-failed`. The table of transient failures, the backoff and the messages: the Rust unit tests of `deploy::retry`, `retry/lost-reply-never-retried`.
 
 ## Behaviour changes in 0.20
 
