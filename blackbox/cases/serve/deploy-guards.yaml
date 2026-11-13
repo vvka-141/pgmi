@@ -1,4 +1,4 @@
-description: the serve deploy tool never reads the project .env, refuses overwrite without a matching confirmDatabaseName with exit code 12 before connecting, and refuses an argument it does not know with exit code 10
+description: the serve deploy tool never reads the project .env, refuses overwrite without a matching confirmDatabaseName with exit code 12 before connecting (Rust also needs the operator's PGMI_SERVE_ALLOW_OVERWRITE=1, set here; case serve/overwrite-needs-operator-switch), and refuses an argument it does not know with exit code 10
 project:
   files:
     .env: "PGMI_PARAM_FROM_DOTENV=dotenv\n"
@@ -6,6 +6,7 @@ project:
       CREATE TABLE seen AS SELECT count(*) AS n FROM pg_temp.pgmi_parameter_view WHERE key = 'from_dotenv';
 steps:
   - pgmi: [serve]
+    env: {PGMI_SERVE_ALLOW_OVERWRITE: "1"}
     stdin:
       - '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"blackbox","version":"1"}}}'
       - '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"{conn}","database":"{db}"}}}'

@@ -318,3 +318,4 @@ execution/tail-semicolon-in-parentheses
 retry/orphaned-session-holds-lock
 deploy/metadata-description-default
 dialect/pgmiignore-characters
+serve/overwrite-needs-operator-switch

@@ -283,7 +283,7 @@ deploy's error is `PASSWORD [redacted]` in the text, `message` and `error`.
 A client that reads its answers while it pipelines thousands of requests gets
 every answer in order.
 
-Cases: `serve/session`, `serve/deploy-verbose`, `serve/deploy-timeout-zero`, `serve/burst`, `serve/slow-reader-many-answers`, `serve/slow-reader-huge-answer`, `serve/deploy-tool`, `serve/cancel`, `serve/malformed`, `serve/protocol-versions`, `serve/deploy-guards`, `serve/deploys-in-sequence`, `serve/concurrent-deploys`, `serve/deploy-timeout`, `serve/deploy-warning-lines`, `serve/deploy-param-key`, `serve/deploy-password-masked`.
+Cases: `serve/session`, `serve/deploy-verbose`, `serve/deploy-timeout-zero`, `serve/burst`, `serve/slow-reader-many-answers`, `serve/slow-reader-huge-answer`, `serve/deploy-tool`, `serve/cancel`, `serve/malformed`, `serve/protocol-versions`, `serve/deploy-guards`, `serve/overwrite-needs-operator-switch`, `serve/deploys-in-sequence`, `serve/concurrent-deploys`, `serve/deploy-timeout`, `serve/deploy-warning-lines`, `serve/deploy-param-key`, `serve/deploy-password-masked`.
 
 ### config
 
@@ -1350,6 +1350,7 @@ release notes take their "Behaviour changes" section from this table.
 | project `.env` that starts with a UTF-8 byte-order mark | warning, none of it applied | applied, the mark ignored | owner 2026-11-12 (PGMI-943) |
 | project `.env` setting a key that locates credentials, endpoints, proxies or trust roots: `AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE`, `AWS_WEB_IDENTITY_TOKEN_FILE`, `AWS_CONTAINER_*`, `AWS_ENDPOINT_URL*`, `AZURE_AUTHORITY_HOST`, `AZURE_FEDERATED_TOKEN_FILE`, `IDENTITY_*`, `MSI_*`, `GOOGLE_APPLICATION_CREDENTIALS`, `CLOUDSDK_*`, `DATABRICKS_CONFIG_FILE`, `DATABRICKS_HOST`, `SSL_CERT_*`, `*_PROXY` (any case) | applied | refused; the rest of the file applies and the `.env applied:` line names each refused key; the operator's own environment can still set them | owner 2026-11-12 (PGMI-921) |
 | `pgmi serve`: a deploy to a server the operator did not allow (not its environment's own `host:port`, not in `PGMI_SERVE_HOSTS`) | the operator's `PGPASSWORD`, `.pgpass` and cloud sign-in are used | none of them is used (a password typed in the tool call's connection string still is); a cloud sign-in is refused, exit 10; stderr names the server; the plain CLI is unchanged | owner 2026-11-12 (PGMI-915) |
+| `pgmi serve`: a deploy tool call with `overwrite: true` | runs when the call's own `confirmDatabaseName` matches | refused with exit 12 before connecting unless the operator started `pgmi serve` with `PGMI_SERVE_ALLOW_OVERWRITE=1`; then `confirmDatabaseName` must still match; the deploy tool's description says so | PGMI-924 |
 | Failure summary after a stop or a retry | `nothing committed` whenever the run failed | names the units committed before a stop and those an earlier attempt committed; a unit the server never answered reads `whether it committed is unknown, check the database`; `--json` adds `outcomeUnknown` and `attempts[].unitsCommitted` | owner 2026-11-12 (PGMI-911, PGMI-912) |
 | Azure tenant id outside letters, digits, `.` and `-` | refused at sign-in, exit 11 | refused before connecting, exit 10 | agent 2026-11-12 (PGMI-910) |
 | Google sign-in without Application Default Credentials | exit 1 | exit 11 | intended |

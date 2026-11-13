@@ -18,6 +18,11 @@ used. stderr names the server that was not allowed.
 
 A tool call may not set `hostaddr` or `passfile` in its connection string.
 
+A deploy tool call with `overwrite: true` drops the database, so it is
+refused (exit 12, before connecting) unless the operator starts `pgmi serve`
+with `PGMI_SERVE_ALLOW_OVERWRITE=1`. With it, the call must still repeat the
+database name in `confirmDatabaseName`.
+
 ```json
 {"mcpServers": {"pgmi": {"command": "pgmi", "args": ["serve"],
   "env": {"PGMI_SERVE_HOSTS": "db.internal,staging.example.com:6432"}}}}

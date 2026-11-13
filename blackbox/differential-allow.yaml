@@ -411,3 +411,13 @@ accept:
     case: cases/cloud/azure-tenant-id-refused\.yaml
     field: stderr
     rust: "invalid Azure tenant id"
+  - row: '`pgmi serve`: a deploy tool call with `overwrite: true`'
+    case: cases/serve/(session|protocol-versions)\.yaml
+    field: stdout
+    rust: 'it is refused unless the operator started pgmi serve with PGMI_SERVE_ALLOW_OVERWRITE=1, and '
+    rust_as: ''
+  - row: '`pgmi serve`: a deploy tool call with `overwrite: true`'
+    case: cases/serve/(session|protocol-versions)\.yaml
+    field: stdout
+    rust: '; refused unless the operator set PGMI_SERVE_ALLOW_OVERWRITE=1 where pgmi serve runs'
+    rust_as: ''

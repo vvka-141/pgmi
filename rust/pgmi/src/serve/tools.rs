@@ -504,6 +504,12 @@ fn deploy_context(
     if let Some(c) = connection.as_deref() {
         refuse_operator_keys(c)?;
     }
+    if overwrite && env.get("PGMI_SERVE_ALLOW_OVERWRITE").ok().flatten() != Some("1") {
+        return Err(Error::new(
+            Kind::Denied,
+            "overwrite is off in this pgmi serve: the operator turns it on by starting pgmi serve with PGMI_SERVE_ALLOW_OVERWRITE=1; nothing was deployed and no database was dropped",
+        ));
+    }
     if !path.exists() {
         return Err(Error::config(format!(
             "project path {:?} does not exist",
@@ -740,12 +746,40 @@ mod tests {
     }
 
     #[test]
+    fn overwrite_needs_the_operators_switch_whatever_the_call_confirms() {
+        let call = raw(
+            "{\"path\":\"/\",\"database\":\"d\",\"overwrite\":true,\"confirmDatabaseName\":\"d\"}",
+        );
+        for value in [None, Some("0"), Some("true"), Some("")] {
+            let env = value.map_or_else(Env::default, |v| {
+                Env::from_pairs(&[("PGMI_SERVE_ALLOW_OVERWRITE", v)])
+            });
+            let e = deploy_context(Some(&call), &env, false).err().unwrap();
+            assert_eq!(e.exit_code(), 12, "{value:?}");
+            assert!(
+                e.text().contains("PGMI_SERVE_ALLOW_OVERWRITE=1"),
+                "{}",
+                e.text()
+            );
+        }
+        let on = Env::from_pairs(&[("PGMI_SERVE_ALLOW_OVERWRITE", "1")]);
+        assert!(
+            deploy_context(Some(&call), &on, false)
+                .unwrap()
+                .request
+                .overwrite
+        );
+        let plain = raw("{\"path\":\"/\",\"database\":\"d\"}");
+        deploy_context(Some(&plain), &Env::default(), false).unwrap();
+    }
+
+    #[test]
     fn deploy_arguments_map_to_flags() {
         let ctx = deploy_context(
             Some(&raw(
                 "{\"path\":\"/\",\"database\":\"-d\",\"timeout\":\"2s\",\"params\":{\"k\":\"v\"},\"paramsFile\":[\"a\",\"b\"],\"overwrite\":true,\"confirmDatabaseName\":\"-d\"}",
             )),
-            &Env::default(),
+            &Env::from_pairs(&[("PGMI_SERVE_ALLOW_OVERWRITE", "1")]),
             false,
         )
         .unwrap();

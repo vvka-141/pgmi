@@ -1,0 +1,22 @@
+description: Rust only (contract "Behaviour changes in 0.20", PGMI-924). The serve deploy tool refuses overwrite with exit 12 before connecting unless the operator started pgmi serve with PGMI_SERVE_ALLOW_OVERWRITE=1, even when the call confirms the database name itself; nothing is dropped
+impl: rust
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - sql: CREATE TABLE precious (n int)
+  - pgmi: [serve]
+    stdin:
+      - '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"blackbox","version":"1"}}}'
+      - '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"{conn}","database":"{db}","overwrite":true,"confirmDatabaseName":"{db}"}}}'
+      - {until: '"id":2,', timeout: 30}
+    timeout: 60
+    expect:
+      exit: 0
+      stdout:
+        - '(?m)^{"jsonrpc":"2.0","id":2,"result":{.*PGMI_SERVE_ALLOW_OVERWRITE.*"exitCode":12.*"isError":true}}$'
+      sql:
+        - query: SELECT count(*) FROM precious
+          rows: [[0]]
+project:
+  files:
+    deploy.sql: SELECT 1;
