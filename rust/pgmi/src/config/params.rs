@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 
 use tokio_util::sync::CancellationToken;
@@ -42,8 +42,8 @@ pub(crate) struct Inputs<'a> {
 }
 
 impl Inputs<'_> {
-    /// A params file's display name and text.
-    fn read(&mut self, file: &str) -> Result<(String, String)> {
+    /// A params file's display name and bytes.
+    fn read(&mut self, file: &str) -> Result<(String, Vec<u8>)> {
         let limit = self.limit;
         let (name, bytes) = if file == "-" {
             let input = self.stdin.as_mut().ok_or_else(|| {
@@ -72,15 +72,37 @@ impl Inputs<'_> {
                 "failed to read params file {name}: exceeds {limit}-byte limit (override via PGMI_MAX_FILE_SIZE)"
             )));
         }
-        let text = String::from_utf8(bytes).map_err(|_| {
-            Error::config(format!("failed to read params file {name}")).with_source(
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "stream did not contain valid UTF-8",
-                ),
-            )
-        })?;
-        Ok((name, text))
+        Ok((name, bytes))
+    }
+}
+
+/// The parameters every source gave, merged, before the check of each key
+/// and value that Go runs once the deploy has started.
+#[derive(Debug)]
+pub(crate) struct Collected {
+    values: BTreeMap<String, String>,
+    keys: Vec<String>,
+    not_utf8: BTreeSet<String>,
+}
+
+impl Collected {
+    pub(crate) fn checked(self) -> Result<BTreeMap<String, String>> {
+        self.keys.iter().try_for_each(|k| check_key(k))?;
+        if let Some(k) = self.not_utf8.first() {
+            return Err(Error::config(format!(
+                "invalid parameter value for '{k}': not valid UTF-8"
+            )));
+        }
+        if let Some((k, at)) = self
+            .values
+            .iter()
+            .find_map(|(k, v)| v.find('\0').map(|at| (k, at)))
+        {
+            return Err(Error::config(format!(
+                "invalid parameter value for '{k}': contains NUL byte at offset {at}"
+            )));
+        }
+        Ok(self.values)
     }
 }
 
@@ -100,16 +122,6 @@ pub(crate) fn check_key(k: &str) -> Result<()> {
     Err(Error::config(format!(
         "invalid parameter key '{k}': must start with a letter or underscore and contain only letters, digits and underscores, 1-63 characters (PostgreSQL identifier limit)"
     )))
-}
-
-fn check(out: &BTreeMap<String, String>, keys: &[String]) -> Result<()> {
-    keys.iter().try_for_each(|k| check_key(k))?;
-    if let Some((k, at)) = out.iter().find_map(|(k, v)| v.find('\0').map(|at| (k, at))) {
-        return Err(Error::config(format!(
-            "invalid parameter value for '{k}': contains NUL byte at offset {at}"
-        )));
-    }
-    Ok(())
 }
 
 fn no_case_twins<'a>(source: &str, keys: impl IntoIterator<Item = &'a str>) -> Result<()> {
@@ -132,12 +144,10 @@ fn no_case_twins<'a>(source: &str, keys: impl IntoIterator<Item = &'a str>) -> R
     clippy::too_many_lines,
     reason = "Go's precedence order, one source after another"
 )]
-pub(crate) fn collect(
-    src: Sources<'_>,
-    mut inputs: Inputs<'_>,
-) -> Result<BTreeMap<String, String>> {
+pub(crate) fn collect(src: Sources<'_>, mut inputs: Inputs<'_>) -> Result<Collected> {
     let mut out = BTreeMap::new();
     let mut keys: Vec<String> = Vec::new();
+    let mut not_utf8 = BTreeSet::new();
     no_case_twins("pgmi.yaml params", src.yaml.iter().map(|(k, _)| k.as_str()))?;
     for (k, v) in src.yaml {
         keys.push(k.clone());
@@ -180,10 +190,10 @@ pub(crate) fn collect(
             "--params-file - (stdin) given {stdin_count} times; stdin can be read once"
         )));
     }
-    let mut from_files = std::collections::BTreeSet::new();
+    let mut from_files = BTreeSet::new();
     for file in src.files {
         (src.note)(format!("Loading parameters from file: {file}"));
-        let (name, text) = inputs.read(file).map_err(|e| {
+        let (name, bytes) = inputs.read(file).map_err(|e| {
             let text = format!(
                 "{}\n\nTip: Verify the path or use --param to set parameters directly:\n  pgmi deploy . --database mydb --param key=value",
                 e.text()
@@ -191,6 +201,8 @@ pub(crate) fn collect(
             let kind = e.kind();
             e.reworded(kind, text)
         })?;
+        let utf8 = std::str::from_utf8(&bytes).is_ok();
+        let text = String::from_utf8_lossy(&bytes);
         let pairs = dotenv::parse(&text, Mode::Strict).map_err(|e| {
             let text = format!(
                 "failed to parse params file '{name}': {}\n\nTip: Verify the file format (KEY=VALUE)",
@@ -208,6 +220,11 @@ pub(crate) fn collect(
             seen.insert(lower.clone(), k.clone());
             keys.push(k);
             from_files.insert(lower.clone());
+            if utf8 || !v.contains(char::REPLACEMENT_CHARACTER) {
+                not_utf8.remove(&lower);
+            } else {
+                not_utf8.insert(lower.clone());
+            }
             out.insert(lower, v);
         }
         (src.note)(format!(
@@ -221,9 +238,9 @@ pub(crate) fn collect(
         let (k, v) = match p {
             Param::Pair(k, v) => (k.as_str(), v.as_str()),
             Param::NotUtf8(k) => {
-                return Err(Error::config(format!(
-                    "invalid parameter value for '{k}': not valid UTF-8"
-                )));
+                not_utf8.insert(k.to_lowercase());
+                keys.push(k.clone());
+                continue;
             }
             Param::Flag(text) => match text.split_once('=') {
                 Some((k, v)) if !k.is_empty() => (k, v),
@@ -244,6 +261,7 @@ pub(crate) fn collect(
         }
         flagged.insert(lower.clone(), k);
         keys.push(k.to_string());
+        not_utf8.remove(&lower);
         out.insert(lower, v.to_string());
     }
     if !src.flags.is_empty() {
@@ -252,8 +270,11 @@ pub(crate) fn collect(
             src.flags.len()
         ));
     }
-    check(&out, &keys)?;
-    Ok(out)
+    Ok(Collected {
+        values: out,
+        keys,
+        not_utf8,
+    })
 }
 
 #[cfg(test)]
@@ -285,7 +306,9 @@ mod tests {
     fn a_params_file_is_read_through_the_filesystem_and_refused_over_the_limit() {
         let env = Env::default();
         let files = ["p.env".to_string()];
-        let out = collect(sources(&env, &files), inputs(None)).unwrap();
+        let out = collect(sources(&env, &files), inputs(None))
+            .and_then(Collected::checked)
+            .unwrap();
         assert_eq!(out["a"], "file");
         let big = format!("a={}\n", "x".repeat(64));
         let mut over = inputs(None);
@@ -322,6 +345,7 @@ mod tests {
             },
             inputs(Some(&mut "a=file\nb=file\n".as_bytes())),
         )
+        .and_then(Collected::checked)
         .unwrap();
         assert_eq!(out["a"], "flag");
         assert_eq!(out["b"], "file");
@@ -345,6 +369,7 @@ mod tests {
             },
             inputs(Some(&mut "a=secret-file\nc=1\nC2=2\n".as_bytes())),
         )
+        .and_then(Collected::checked)
         .unwrap();
         assert_eq!(
             notes.into_inner(),
@@ -373,6 +398,7 @@ mod tests {
             },
             inputs(None),
         )
+        .and_then(Collected::checked)
         .unwrap();
         assert_eq!(out["a"], "x=y");
         assert_eq!(out["b"], "x=y");
@@ -387,6 +413,7 @@ mod tests {
             },
             inputs(None),
         )
+        .and_then(Collected::checked)
         .unwrap_err();
         assert!(
             e.text().contains("invalid parameter key 'a=b'"),
@@ -410,6 +437,7 @@ mod tests {
                 },
                 inputs(Some(&mut input.as_bytes())),
             )
+            .and_then(Collected::checked)
         };
         let e = run(&env, &[], &[], "").unwrap_err();
         assert!(e.text().contains("PGMI_PARAM_TOKEN"));
@@ -469,6 +497,7 @@ mod tests {
             },
             inputs(Some(&mut &stdin[..])),
         )
+        .and_then(Collected::checked)
     }
 
     fn key_check(key: &str) -> Result<BTreeMap<String, String>> {
@@ -529,7 +558,50 @@ mod tests {
         let stdin = b"api_key=before\xff\xfeafter\n";
         let e = run(&[], &Env::default(), &["-".into()], &[], stdin).unwrap_err();
         assert_eq!(e.kind(), Kind::Config);
-        assert!(!e.text().contains("before"), "{}", e.text());
+        assert_eq!(
+            e.text(),
+            "invalid parameter value for 'api_key': not valid UTF-8"
+        );
+    }
+
+    #[test]
+    fn a_params_file_value_that_is_not_utf8_counts_only_while_no_later_source_replaces_it() {
+        let stdin = b"# caf\xe9\nok=1\nbad=\xff\n";
+        let out = run(&[], &Env::default(), &["-".into()], &["bad=v"], stdin).unwrap();
+        assert_eq!(out["bad"], "v");
+        assert_eq!(out["ok"], "1");
+        let out = run(
+            &[],
+            &Env::default(),
+            &["-".into()],
+            &[],
+            b"# caf\xe9\nok=1\n",
+        )
+        .unwrap();
+        assert_eq!(out["ok"], "1");
+    }
+
+    #[test]
+    fn key_and_value_refusals_wait_for_the_deploy_to_start() {
+        let flags = [Param::Flag("1k=v".into())];
+        let collected = collect(
+            Sources {
+                yaml: vec![],
+                env: &Env::default(),
+                files: &[],
+                flags: &flags,
+                note: &|_| {},
+            },
+            inputs(None),
+        )
+        .unwrap();
+        assert!(
+            collected
+                .checked()
+                .unwrap_err()
+                .text()
+                .starts_with("invalid parameter key '1k'")
+        );
     }
 
     #[cfg(unix)]
@@ -610,7 +682,9 @@ mod tests {
             let files: Vec<String> = names.iter().map(|n| (*n).to_string()).collect();
             let mut over = inputs(None);
             over.files = &fs;
-            collect(sources(&env, &files), over).unwrap()
+            collect(sources(&env, &files), over)
+                .and_then(Collected::checked)
+                .unwrap()
         };
         assert_eq!(
             read(&["a.env", "b.env"]),

@@ -206,6 +206,12 @@ fn usage_text(e: &clap::Error, args: &[OsString]) -> String {
                     path = at.path
                 );
             }
+            if missing.contains(&"<NAME>") {
+                return format!(
+                    "missing required argument: <template_name>\n\nUsage: {path} <template_name> [flags]\n\nExample:\n  {path} basic\n\nUse 'pgmi templates list' to see available templates.",
+                    path = at.path
+                );
+            }
             if !missing.iter().any(|m| m.starts_with('<')) {
                 let text = e.render().to_string();
                 let text = text.trim_end();
@@ -312,6 +318,10 @@ mod tests {
             "unknown command \"x\" for \"pgmi version\""
         );
         assert_eq!(refused(&["completion"]), "accepts 1 arg(s), received 0");
+        assert_eq!(
+            refused(&["templates", "describe"]),
+            "missing required argument: <template_name>\n\nUsage: pgmi templates describe <template_name> [flags]\n\nExample:\n  pgmi templates describe basic\n\nUse 'pgmi templates list' to see available templates."
+        );
         assert_eq!(
             refused(&["deploy"]),
             "missing required argument: <project_path>\n\nUsage: pgmi deploy <project_path> [flags]\n\nExample:\n  pgmi deploy . -d mydb"

@@ -1,0 +1,36 @@
+description: the next-step hints Go gives are kept - an unknown auth_method names password sign-in, a params-file value that is not UTF-8 names its key, a missing template name shows the usage, init --help describes -t, and the connection source follows a refusal of two cloud flags and an empty -h
+project:
+  files:
+    p/deploy.sql: SELECT 1;
+    yaml/deploy.sql: SELECT 1;
+    yaml/pgmi.yaml: "connection:\n  auth_method: gcp\n"
+    bad.params: {hex: "6b3dff0a"}
+steps:
+  - pgmi: [deploy, "{project}/yaml", -d, "{db}"]
+    expect:
+      exit: 10
+      stderr: ["^pgmi: error: failed to load pgmi\\.yaml: auth_method \"gcp\" is not one of azure, aws, google \\(omit it for password authentication\\)$"]
+  - pgmi: [deploy, "{project}/p", --connection, "{conn}", -d, "{db}", --params-file, "{project}/bad.params"]
+    expect:
+      exit: 10
+      stderr: ["^pgmi: error: invalid parameter value for 'k': not valid UTF-8$"]
+      stderr_not: ["Tip:"]
+  - pgmi: [templates, describe]
+    expect:
+      exit: 2
+      stderr: ["missing required argument: <template_name>", "Use 'pgmi templates list' to see available templates\\."]
+  - pgmi: [init, --help]
+    expect:
+      exit: 0
+      stdout: ["Template to use \\(minimal, basic, advanced\\)"]
+  - pgmi: [deploy, "{project}/p", -d, "{db}", --azure, --aws, --json]
+    env: {PGHOST: "{host}"}
+    expect:
+      exit: 10
+      stderr: ["choose one of --azure, --aws, or --google\n\\(connection from PGHOST\\)$"]
+      json: {connectionSource: PGHOST}
+  - pgmi: [deploy, "{project}/p", -h, "", -d, "{db}"]
+    env: {PGHOST: "{host}", PGPORT: "{port}", PGUSER: "{user}", PGPASSWORD: "{password}"}
+    expect:
+      exit: 0
+      stderr: ["^connection: from PGHOST \\({host}:{port}/{db}\\)$"]

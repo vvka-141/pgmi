@@ -614,6 +614,7 @@ impl Steps<'_> {
             .verbose(&format!("Found {} files to load", loaded.files()));
         Self::record_loaded(st, &loaded);
         let contract = contract?;
+        let params = params.checked()?;
         if request.overwrite {
             overwrite::refuse_maintenance(&spec.target_db, &spec.maintenance_db)?;
         }
@@ -791,9 +792,9 @@ impl Steps<'_> {
 
     fn target(&self, st: &mut Progress, yaml: Option<&ProjectConfig>) -> Result<Target> {
         let (request, env) = (&self.ctx.request, &self.ctx.env);
-        let cloud = cloud::select(&request.cloud, &request.cloud_request, env, yaml)?;
         let yaml_connection = yaml.map(|y| &y.connection);
         st.connection_source = Some(resolve::source(&request.connection, env, yaml_connection)?);
+        let cloud = cloud::select(&request.cloud, &request.cloud_request, env, yaml)?;
         st.overrides = overrides(&request.connection, env, yaml_connection)?;
         let mut spec = resolve::resolve(&request.connection, env, yaml_connection)?;
         if let Some((provider, options)) = &cloud {
@@ -841,7 +842,7 @@ impl Steps<'_> {
         Ok(())
     }
 
-    async fn params(&self, yaml: Vec<(String, String)>) -> Result<BTreeMap<String, String>> {
+    async fn params(&self, yaml: Vec<(String, String)>) -> Result<params::Collected> {
         let request = &self.ctx.request;
         let (env, files, flags, stdin) = (
             self.ctx.env.clone(),

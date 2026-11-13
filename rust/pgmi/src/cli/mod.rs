@@ -169,7 +169,7 @@ Examples:
 #[derive(Debug, Args)]
 pub(crate) struct InitArgs {
     pub(crate) path: Option<PathBuf>,
-    #[arg(short = 't', long)]
+    #[arg(short = 't', long, help = "Template to use (minimal, basic, advanced)")]
     pub(crate) template: Option<String>,
 }
 
@@ -291,15 +291,15 @@ impl From<DeployArgs> for crate::deploy::Request {
             project: a.project,
             connection: Flags {
                 connection: a.connection,
-                host: a.host,
+                host: given(a.host),
                 port: a.port.filter(|p| *p != 0),
-                username: a.username,
-                database: a.database,
+                username: given(a.username),
+                database: given(a.database),
                 sslmode: a.sslmode.as_deref().and_then(|m| m.parse().ok()),
                 invalid_sslmode: a.sslmode.filter(|m| m.parse::<SslMode>().is_err()),
-                sslcert: a.sslcert,
-                sslkey: a.sslkey,
-                sslrootcert: a.sslrootcert,
+                sslcert: given(a.sslcert),
+                sslkey: given(a.sslkey),
+                sslrootcert: given(a.sslrootcert),
             },
             maintenance_db: None,
             cloud,
@@ -319,6 +319,10 @@ impl From<DeployArgs> for crate::deploy::Request {
             json: a.json,
         }
     }
+}
+
+fn given(flag: Option<String>) -> Option<String> {
+    flag.filter(|v| !v.is_empty())
 }
 
 pub(crate) fn go_bool(s: &str) -> Result<bool, String> {
@@ -643,6 +647,43 @@ mod tests {
             panic!()
         };
         assert_eq!(i.template.as_deref(), Some("minimal"));
+    }
+
+    #[test]
+    fn an_empty_text_flag_is_unset_as_in_go() {
+        let request = crate::deploy::Request::from(deploy(&[
+            ".",
+            "-h",
+            "",
+            "-U",
+            "",
+            "-d",
+            "",
+            "--sslcert",
+            "",
+            "--sslkey",
+            "",
+            "--sslrootcert",
+            "",
+        ]));
+        let c = request.connection;
+        assert_eq!(
+            (c.host, c.username, c.database),
+            (None, None, None),
+            "empty -h, -U and -d"
+        );
+        assert_eq!((c.sslcert, c.sslkey, c.sslrootcert), (None, None, None));
+    }
+
+    #[test]
+    fn init_help_describes_the_template_flag() {
+        let Ok(Parsed::Help(text)) = parse(&["init", "--help"]) else {
+            panic!()
+        };
+        assert!(
+            text.contains("Template to use (minimal, basic, advanced)"),
+            "{text}"
+        );
     }
 
     #[test]

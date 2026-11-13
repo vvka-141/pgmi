@@ -102,7 +102,7 @@ impl std::fmt::Display for YamlError {
             YamlError::AuthMethod(text) => {
                 write!(
                     f,
-                    "invalid auth_method {text:?}: expected azure, aws or google"
+                    "auth_method {text:?} is not one of azure, aws, google (omit it for password authentication)"
                 )
             }
         }
@@ -309,11 +309,11 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_auth_method_reads_as_before() {
+    fn an_unknown_auth_method_names_the_choices_and_password_sign_in() {
         let e = Error::from(ProjectConfig::parse("connection:\n  auth_method: gcp\n").unwrap_err());
         assert_eq!(
             e.text(),
-            "failed to load pgmi.yaml: invalid auth_method \"gcp\": expected azure, aws or google"
+            "failed to load pgmi.yaml: auth_method \"gcp\" is not one of azure, aws, google (omit it for password authentication)"
         );
     }
 
@@ -349,7 +349,7 @@ mod tests {
             ),
             (
                 MemFs::default().file("pgmi.yaml", "connection:\n  auth_method: kerberos\n"),
-                "failed to load pgmi.yaml: invalid auth_method \"kerberos\": expected azure, aws or google",
+                "failed to load pgmi.yaml: auth_method \"kerberos\" is not one of azure, aws, google (omit it for password authentication)",
             ),
             (
                 MemFs::default().unreadable_file("pgmi.yaml"),
