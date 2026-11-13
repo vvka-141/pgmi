@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main, develop]
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Lint
@@ -298,7 +301,7 @@ jobs:
       - name: Format and clippy (fuzz crate)
         run: |
           cargo fmt --manifest-path rust/pgmi/fuzz/Cargo.toml --check
-          cargo clippy --manifest-path rust/pgmi/fuzz/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --locked --manifest-path rust/pgmi/fuzz/Cargo.toml --all-targets -- -D warnings
       # The template deployment tests run in parallel; each advanced deploy
       # takes more locks than the default max_locks_per_transaction allows
       # several of at once, and a services container cannot pass -c.
@@ -358,7 +361,7 @@ jobs:
           for attempt in 1 2 3; do
             rustup toolchain install "$NIGHTLY" --profile minimal \
               && cargo +"$NIGHTLY" install --locked cargo-fuzz@0.13.2 \
-              && cargo +"$NIGHTLY" fetch \
+              && cargo +"$NIGHTLY" fetch --locked \
               && exit 0
             echo "::warning::toolchain or dependency download failed (attempt $attempt)"
             sleep $((attempt * 30))
