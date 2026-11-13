@@ -18,6 +18,10 @@
 --   pg_temp.deployment_setting(key)     - Helper with error handling
 -- ============================================================================
 
+BEGIN;
+-- A table lock the deploy cannot get within 5s fails it (55P03) instead of
+-- queueing every application query behind it for the rest of the deploy.
+SET LOCAL lock_timeout = '5s';
 
 DO $$
 BEGIN
@@ -1404,14 +1408,7 @@ END $$;
 -- ============================================================================
 -- EXECUTE DEPLOYMENT
 -- ============================================================================
--- Transaction-scoped advisory lock: released on COMMIT or ROLLBACK, so a
--- failed deploy never leaves it held while the session stays open.
-BEGIN;
-    SELECT pg_advisory_xact_lock(hashtext('pgmi_deploy_' || current_database()));
-    DO $$ BEGIN RAISE NOTICE '[pgmi] Acquired deployment lock (transaction-scoped)'; END $$;
-    -- A table lock the deploy cannot get within 5s fails it (55P03) instead of
-    -- queueing every application query behind it for the rest of the deploy.
-    SET LOCAL lock_timeout = '5s';
+-- pgmi takes the deploy lock before this file runs.
     INSERT INTO pg_temp.access_baseline SELECT * FROM pg_temp.access_entry();
     SELECT pg_temp.kernel_reclaim();
     INSERT INTO internal.deployment (xact_id, environment)

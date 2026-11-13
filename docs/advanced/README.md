@@ -52,8 +52,7 @@ database, and template fixes arrive by manual merge
   [`api.exchange`](#the-exchange-log) and its per-protocol children.
 - **Jobs.** A job driver with a run log (`internal.job_run_log`) and one
   shipped job, `CALL api.job_purge_exchanges()`, for cron or `pg_cron`.
-- **Deploy guards.** An advisory lock against concurrent deploys,
-  `lock_timeout`, the run-once and re-run file contract, a check for grants
+- **Deploy guards.** `lock_timeout` from the first statement, the run-once and re-run file contract, a check for grants
   that disappeared, and no routine executable by `PUBLIC`.
 - **Test gate.** `CALL pgmi_test()` runs the tests inside the deploy
   transaction, before `COMMIT`; a failing test commits nothing.

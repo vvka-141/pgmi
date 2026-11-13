@@ -531,11 +531,9 @@ A script that ends inside an open `BEGIN` — a missing final `COMMIT` — appli
 nothing from that transaction: pgmi rolls it back and fails the deploy with
 exit 13 rather than report a success that did not land.
 
-One more honest note: the advisory lock the advanced template takes with
-`pg_advisory_xact_lock` is transaction-scoped — it ends at the head's
-`COMMIT`. During the tail, the only concurrency guard is pgmi's own
-session-level deploy lock, which excludes concurrent *pgmi* deploys but not a
-non-pgmi migrator.
+One more honest note: the only concurrency guard is pgmi's own session-level
+deploy lock, taken before deploy.sql starts and held through the tail. It
+excludes concurrent *pgmi* deploys but not a non-pgmi migrator.
 
 ### Zero-downtime phased deployment
 
