@@ -24,7 +24,7 @@ LANGUAGE sql STABLE AS $$
         SELECT a.schema_name, r.oid AS grantee, a.privilege
         FROM approved a
         JOIN pg_roles r ON r.rolname = pg_temp.deployment_setting(a.role_key, false)
-        WHERE a.role_key IS DISTINCT FROM 'database_jobs_role' OR pg_temp.service_registered(r.rolname)
+        WHERE a.role_key IS DISTINCT FROM 'database_jobs_role' OR internal.service_registered(r.rolname)
     ),
     actual AS (
         SELECT s.name AS schema_name, g.grantee, g.privilege_type AS privilege

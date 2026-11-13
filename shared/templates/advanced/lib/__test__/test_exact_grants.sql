@@ -28,7 +28,7 @@ AS $$
                pg_temp.deployment_setting('database_api_role')::regrole AS api,
                pg_temp.deployment_setting('database_kernel_role')::regrole AS kernel,
                to_regrole(quote_ident(pg_temp.deployment_setting('database_jobs_role'))) AS jobs,
-               pg_temp.service_registered(pg_temp.deployment_setting('database_jobs_role')) AS jobs_registered
+               internal.service_registered(pg_temp.deployment_setting('database_jobs_role')) AS jobs_registered
     ),
     routine AS (
         SELECT p.oid, p.oid::regprocedure::text AS name, p.proowner, p.prosecdef, p.proacl
@@ -202,7 +202,7 @@ BEGIN
            OR membership.fn_register_service_principal('service.jobs', 'Background jobs', v_jobs) IS DISTINCT FROM v_service THEN
             RAISE EXCEPTION 'TEST FAILED: the jobs login must register once as service principal service.jobs, got %', row_to_json(v_service);
         END IF;
-        PERFORM pg_temp.grant_jobs();
+        PERFORM internal.grant_jobs();
     END IF;
 
     SELECT string_agg(format('%s %s: %s', role_name, coalesce(routine, ''), problem), ', ' ORDER BY role_name, routine)
@@ -211,7 +211,7 @@ BEGIN
         RAISE EXCEPTION 'TEST FAILED: with the jobs login, grants differ from the lists: %', v_drift;
     END IF;
 
-    IF NOT pg_temp.service_registered(v_jobs) THEN
+    IF NOT internal.service_registered(v_jobs) THEN
         RAISE DEBUG '   jobs login % is no registered service principal; live probe skipped', v_jobs;
         RETURN;
     END IF;
