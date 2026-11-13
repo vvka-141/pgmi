@@ -21,6 +21,7 @@ azure_identity.workspace = true
 base64ct.workspace = true
 cbc.workspace = true
 clap.workspace = true
+cms.workspace = true
 crossterm.workspace = true
 des.workspace = true
 google-cloud-auth.workspace = true

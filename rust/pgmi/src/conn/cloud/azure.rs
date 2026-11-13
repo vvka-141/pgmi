@@ -734,6 +734,19 @@ mod certificate {
                 .to_string();
             assert!(wrong.contains("PKCS#12"), "{wrong}");
         }
+
+        #[test]
+        fn a_pfx_with_an_absurd_mac_iteration_count_is_refused_at_once() {
+            use x509_cert::der::{Decode, Encode};
+            let mut pfx =
+                pkcs12::pfx::Pfx::from_der(include_bytes!("testdata/sp-aes.p12")).unwrap();
+            pfx.mac_data.as_mut().unwrap().iterations = i32::MAX;
+            let absurd = pfx.to_der().unwrap();
+            let started = std::time::Instant::now();
+            let e = read(&absurd, "p12-pass").unwrap_err().to_string();
+            assert!(e.contains("PKCS#12"), "{e}");
+            assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        }
     }
 }
 
