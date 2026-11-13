@@ -131,6 +131,11 @@ accept:
     field: json
     go: '(?<=: )invalid configuration: '
     go_as: ''
+  - row: A failure to connect to the maintenance database
+    case: 'variant/connection: .*'
+    field: stderr
+    go: '(?m)^pgmi: error: maintenance database: connect to '
+    go_as: 'pgmi: error: connect to '
   - row: Driver error text in connection and retry lines
     case: 'cases/(bad-weather|cloud|connection|env|errors|exit-codes|tls)/.*\.yaml|variant/(connection|pgmi\.yaml): .*'
     field: stderr
@@ -223,11 +228,6 @@ accept:
     step: steps[3]
     field: stderr
     rust: '\Apgmi: error: AWS IAM auth requires region \(use --aws-region or \$AWS_REGION\)$'
-  - row: Input refused before connecting
-    case: cases/(params/invalid-key|flags/repeated-flags)\.yaml
-    field: stderr
-    go: '\AFAILED \{db\}: failed after <duration>\n'
-    go_as: ''
   - row: A parameter key in an error message
     case: cases/params/invalid-key\.yaml
     step: steps[3]
@@ -250,9 +250,9 @@ accept:
     go: '"error": "invalid connection string: '
     go_as: '"error": "--connection: '
   - row: Connection-string parse errors
-    case: 'variant/connection: .*connect_timeout=x.*'
+    case: 'variant/connection: .*connect_timeout=x.*|cases/connection/empty-and-trailing-values\.yaml'
     field: stderr
-    go: 'invalid connect_timeout "x": strconv\.Atoi'
+    go: 'invalid connect_timeout (value )?"x": strconv\.Atoi'
     rust: '\Apgmi: error: invalid connect_timeout "x"$'
   - row: Known secrets (password, `sslpassword`, sign-in tokens) in notices, errors, `--json`, serve
     case: cases/notices/pgpass-secret-redacted\.yaml
@@ -268,7 +268,7 @@ accept:
     go: 'existing database such as postgres: '
     go_as: 'existing database such as ***: '
   - row: Help layout (`--help`, `help <command>`)
-    case: &help cases/(commands/(help|deploy-help-exit-codes|deploy-help-text|short-help-and-sslmode-value|usage-errors)|flags/bool-forms|terminal/no-terminal-queries)\.yaml
+    case: &help cases/(commands/(help|deploy-help-exit-codes|deploy-help-text|short-help-and-sslmode-value|usage-errors)|errors/hints-kept|flags/bool-forms|terminal/no-terminal-queries)\.yaml
     field: stdout
     go: '(?s)^Usage:\n.*\Z'
     go_as: 'Usage:'
@@ -338,12 +338,6 @@ accept:
     field: json
     go: '"path": "\./lib",'
     go_as: '"path": "./lib/",'
-  - row: '`--json` `target` of a deploy refused before connecting'
-    case: cases/flags/json-database-before-load\.yaml
-    step: steps[0]
-    field: json
-    go: '"target": null,'
-    rust: '"target": \{'
   - row: 'Refusal order: a bad `pgmi.yaml` timeout and no database'
     case: "variant/pgmi\\.yaml: .*'timeout': 'abc'.*"
     field: stderr
@@ -416,7 +410,31 @@ accept:
     field: stdout
     rust: '; refused unless the operator set PGMI_SERVE_ALLOW_OVERWRITE=1 where pgmi serve runs'
     rust_as: ''
-  - row: '`PGSSLCRL`, `PGSSLCRLDIR`, `PGREQUIREPEER` or `PGHOSTADDR` set and non-empty'
-    case: cases/env/ignored-variables\.yaml
+  - row: '`invalid configuration:` inside an error message'
+    case: cases/flags/json-record-once-deploy-starts\.yaml
+    step: steps[3]
+    field: json
+    go: '\\n: invalid configuration",'
+    go_as: '\\n",'
+  - row: '`connect_timeout` or `sslmode` in a connection string that is not a valid value'
+    case: 'variant/connection: .*sslmode=bogus.*'
+    field: stderr
+    go: 'invalid sslmode "bogus" in the connection \(valid: [^)]*\)'
+    go_as: 'invalid sslmode value: "bogus"'
+  - row: 'Refusal order: a `pgmi.yaml` port that is not a number, or a quoted one, and no database'
+    case: "variant/pgmi\\.yaml: .*'port': '(x|\\d+)'.*"
+    field: stderr
+    go: '\Apgmi: error: failed to load pgmi\.yaml: parse \{project\}/pgmi\.yaml: yaml: unmarshal errors:\n  line \d+: cannot unmarshal !!str `[^`]*` into int$'
+    rust: '\Apgmi: error: (database name is required|invalid port "x"|invalid timeout in pgmi\.yaml)'
+  - row: '`pgmi.yaml` quoted port (`port: "5433"`)'
+    case: "variant/pgmi\\.yaml: .*'port': '\\d+'.*'database'.*"
+    field: exit
+    go: '^10$'
+  - row: '`pgmi.yaml` quoted port (`port: "5433"`)'
+    case: "variant/pgmi\\.yaml: .*'port': '\\d+'.*'database'.*"
+    field: stderr
+    go: 'cannot unmarshal !!str `\d+` into int'
+  - row: '`pgmi.yaml` quoted port (`port: "5433"`)'
+    case: "variant/pgmi\\.yaml: .*'port': '\\d+'.*'database'.*"
     field: db
-    rust: '<no database>'
+    go: '<no database>'

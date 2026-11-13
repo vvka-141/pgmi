@@ -391,7 +391,13 @@ inside; a port in `Host=h:port` wins over `Port=` wherever it stands;
 `dbname` and any libpq keyword spelled exactly are taken as written). In a URI
 query only `%XX` is decoded (`+` stays a plus), keys are read in any case,
 `applicationname` and `connecttimeout` stand for `application_name` and
-`connect_timeout`, and a repeated key takes its first value. `-d` (or `PGDATABASE`, or
+`connect_timeout`, and a repeated key takes its first value. As in Go: an
+empty connection flag (`-h ''`, `-U ''`, `-d ''`, `--sslcert ''`, `--sslkey ''`,
+`--sslrootcert ''`) is unset, so the next source applies and is announced; an
+empty `sslmode` in any form of string is unset; ADO.NET text after a closing
+quote is dropped up to the next `;`; a keyword/value `connect_timeout` that is
+not a number is refused even when the key comes again with a number (any other
+repeated keyword takes its last value) (case `connection/empty-and-trailing-values`). `-d` (or `PGDATABASE`, or
 `pgmi.yaml` `database`) names the target; the string's database is the
 maintenance database. Refused with exit 10: `--connection` with `-h`, `-p` or
 `-U`; `-h`, `-p` or `-U` next to `PGMI_CONNECTION_STRING` or `DATABASE_URL`;
@@ -515,7 +521,10 @@ role-in-database settings, comment and privileges; a deploying role that
 could not put one of them back is refused with exit 10 naming each item, and
 nothing is dropped. A database PostgreSQL marked invalid (connection limit
 -2, left by an interrupted `DROP DATABASE`) comes back with no connection
-limit. Full reference: `docs/CLI.md` "--overwrite".
+limit. `--overwrite` of `template0` or `template1`, in any letter case, is
+exit 10 before connecting, as in Go; the Rust binary also refuses any other
+database the server marks `datistemplate` once connected (case
+`flags/overwrite-template-database`). Full reference: `docs/CLI.md` "--overwrite".
 
 Cases: `exit-codes/12-overwrite-denied`, `flags/overwrite-force`, `flags/overwrite-connection-limit`, `flags/overwrite-invalid-database`, `flags/overwrite-new-database`, `flags/overwrite-restores`, `terminal/overwrite-confirmation`, `terminal/force-banner`, `terminal/force-countdown-timeout`, `terminal/non-interactive`, `terminal/prompt-cancel`, `connection/maintenance-database-only-when-needed`, `bad-weather/overwrite-signal-between-drop-and-create` (the fault-injecting proxy holds the `CREATE DATABASE`), `a_signal_after_the_drop_still_recreates_and_restores_the_database`, `a_failed_create_after_the_drop_says_the_database_is_gone`, `terminal/overwrite-prompt-and-countdown`.
 
@@ -621,9 +630,14 @@ sent them, in both. A run that stops before it reaches the deploy (a
 mistyped project path, a connection that cannot be resolved) has
 `durationMs`, `created`, `recreated`, `filesLoaded`, `pathsIgnored` and
 `testMacros` null; once it reaches the deploy they are numbers and booleans,
-zero and false until known.
+zero and false until known. `database` and `target` follow the same line: null
+until the deploy starts (a parameter source that cannot be read, a `--param`
+without `=`), set from then on (a refused parameter key or value, a missing
+`deploy.sql` included), never one without the other; `target` lists `host`,
+`port`, `database` in that order. A DETAIL, HINT or WHERE field the server
+sent empty is left out, on stderr, in `--json` and in a notice, as in Go.
 
-Cases: `deploy/json-success`, `flags/json-database-before-load`, `flags/compat-record`, `deploy/json-failure`, `errors/attribution`, `errors/diagnostics-secrets`, `execution/atomic-head`, `config/dotenv`. The Rust redaction: unit test `a_failure_record_redacts_detail_hint_and_where`.
+Cases: `deploy/json-success`, `flags/json-database-before-load`, `flags/json-record-once-deploy-starts`, `flags/compat-record`, `deploy/json-failure`, `errors/attribution`, `errors/diagnostics-secrets`, `execution/atomic-head`, `config/dotenv`. The Rust redaction: unit test `a_failure_record_redacts_detail_hint_and_where`.
 
 ### Error attribution
 
@@ -1385,7 +1399,7 @@ release notes take their "Behaviour changes" section from this table.
 | Azure tenant id outside letters, digits, `.` and `-` | refused at sign-in, exit 11 | refused before connecting, exit 10 | agent 2026-11-12 (PGMI-910) |
 | A cloud sign-in endpoint that answers a redirect (pgmi's own sign-in client: Azure managed identity, Databricks, AWS, Google Cloud SQL) | followed, https to http included, and the target's answer used | not followed: the redirect is the answer, so the sign-in fails naming its status | PGMI-931 |
 | `sslnegotiation=direct` to a TLS server that selects no ALPN protocol | the startup and the password are sent | refused after the handshake, before the startup message, exit 11 (libpq 17 refuses too) | PGMI-932 |
-| `PGSSLCRL`, `PGSSLCRLDIR`, `PGREQUIREPEER` or `PGHOSTADDR` set and non-empty | ignored | refused before connecting, exit 10, naming the variable (the connection-string keys `sslcrl`, `sslcrldir`, `requirepeer` were already refused; `hostaddr` belongs in the connection string) | PGMI-934 |
+| `PGSSLCRLDIR` or `PGREQUIREPEER` set and non-empty | ignored | refused before connecting, exit 10, naming the variable (the connection-string keys `sslcrl`, `sslcrldir`, `requirepeer` were already refused); `PGSSLCRL` and `PGHOSTADDR` stay ignored, as in Go (owner 2026-11-13, PGMI-973) | PGMI-934 |
 | A `.env` value that grows past 1 MiB as its variables expand (`V=$V$V` line after line) | expanded until memory runs out | refused, exit 10, naming the line and the key | PGMI-948 |
 | A cloud sign-in answer larger than 1 MiB | read whole into memory | refused after 1 MiB, not retried; the sign-in fails | PGMI-930 |
 | Google sign-in without Application Default Credentials | exit 1 | exit 11 | intended |
@@ -1416,12 +1430,11 @@ release notes take their "Behaviour changes" section from this table.
 | Azure, AWS and Google sign-in failure text | the Go SDKs' wording, credential chain and troubleshooting links | pgmi's own sign-in chain: one line per credential tried; `connect to "<db>": ` and the exit codes unchanged | agent 2026-11-12 (PGMI-907), owner may revisit |
 | Help layout (`--help`, `help <command>`) | cobra's: `Usage:` on its own line, `Flags:` with `[=true|false]` and a type word, examples after the usage | clap's: `Usage: pgmi ...`, `Arguments:`, `Options:` with `[default: ...]`, examples last; the descriptions and examples are Go's, except `pgmi help help`, reworded without "simply" | agent 2026-11-12 (PGMI-907, PGMI-908), owner may revisit |
 | Session-preparation failure | `session preparation failed: execution failed: failed to create internal tables: failed to create pgmi schema: ...; pgmi's session tables need the TEMPORARY privilege: GRANT ...` | `session preparation failed: create the session tables: ...`, the `GRANT` on its own line | agent 2026-11-12 (PGMI-907), owner may revisit |
-| Input refused before connecting | `FAILED <db>: failed after ...`, then the error (an invalid parameter key, a connection option value, a client certificate without its key, AWS sign-in without a region) | the error alone; exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
+| Input refused before connecting | `FAILED <db>: failed after ...`, then the error (a connection option value, a client certificate without its key, AWS sign-in without a region) | the error alone; exit 10 both (a refused parameter key or value prints the FAILED line in both) | agent 2026-11-12 (PGMI-907), owner may revisit |
 | `pgmi.yaml` that is not valid YAML or has an unknown key | yaml.v3's text (`yaml: unmarshal errors: line 2: field x not found in type config.ProjectConfig`) | the line, column and parser text, naming the keys expected (`line 2 column 3: unknown field ...`); exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
 | A project path that does not exist | `failed to scan directory: failed to open directory: failed to access path: stat <path>: no such file or directory` | `project path "<path>" does not exist`; exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
 | `PGMI_MAX_FILE_SIZE` that is not a positive whole number | reported inside the first file read (`failed to read ./x.sql: PGMI_MAX_FILE_SIZE=...`) | reported alone; exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
 | A `.pgmiignore` pattern that cannot be read | Go regexp's reason (`error parsing regexp: ...`, `empty character class`) | `invalid pattern "<p>"`; exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
-| `--json` `target` of a deploy refused before connecting | null | the resolved host, port and database | agent 2026-11-12 (PGMI-907), owner may revisit |
 | `--json` `filesLoaded` when connecting fails | 0 | the files loaded before connecting | agent 2026-11-12 (PGMI-907), owner may revisit |
 | Refusal order: a bad `pgmi.yaml` timeout and no database | the missing database | the timeout; exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
 | Connection source named after refusing a flag beside an environment connection string | `(connection defaults)`, or none | `(connection from DATABASE_URL)` (the variable that clashed); exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
@@ -1456,7 +1469,7 @@ release notes take their "Behaviour changes" section from this table.
 | `pgmi init`: `sslmode` in the scaffolded `pgmi.yaml` | `prefer`, refused with token sign-in | not written; the default applies (`prefer`, or TLS only with token sign-in) | owner 2026-11-11 |
 | Token sign-in refusing `sslmode: prefer` from `pgmi.yaml` | names the source | names the file line and the fix; exit 10 both | owner 2026-11-11 |
 | Basic template's privilege test | fails on any PUBLIC-executable function in `public`, also a hosting provider's | checks only the deploying role's functions | owner 2026-11-11 |
-| Known secrets (password, `sslpassword`, sign-in tokens) in notices, errors, `--json`, serve | printed | shown as `***` | owner 2026-11-11 |
+| Known secrets (password, `sslpassword`, sign-in tokens) in notices, errors, `--json`, serve | printed | shown as `***`, also where the secret is part of a longer word; a password equal to the login or a database name is not hidden, since pgmi prints those names anyway (owner 2026-11-13, PGMI-973) | owner 2026-11-11 |
 | A non-ASCII letter glued to `CALL` (`ÄCALL pgmi_test()`) | expanded | left to the server, as PostgreSQL reads one identifier | owner 2026-11-11 |
 | `--overwrite -d POSTGRES` with maintenance database `postgres` | refused (case-insensitive) | allowed: names compared exactly | owner 2026-11-11 |
 | Wizard selection lists | stop at the ends | wrap around | owner 2026-11-11 |
@@ -1490,6 +1503,22 @@ release notes take their "Behaviour changes" section from this table.
 | A NUL byte in the project `.env` | in a key: nothing applied, WARNING; in a value: that pair dropped, the rest applied and listed | nothing applied, WARNING; exit 0 both, the value never printed | intended |
 | `pgmi init` into a directory that exists but cannot be listed | exit 1 both (Rust 0.20 alphas: files overwritten) | exit 1, nothing written; files created exclusively | intended |
 | TLS or cloud sign-in on an x86-64 CPU without AES-NI, PCLMULQDQ, SSSE3, AVX, AVX2, BMI1, BMI2, ADX (before about 2014), or an arm64 CPU without NEON, AES, PMULL, SHA2 | works | newly refused before connecting, exit 10, naming the missing features; `sslmode=disable` and commands without a database still run (record 0021) | owner 2026-11-11 |
+| `--help` of a binary run under another file name | `Usage:` names `pgmi` | names the file it was run as, as clap prints it; usage errors say `pgmi` in both (the differential run names both binaries `pgmi`) | owner 2026-11-13 (PGMI-973): wording only |
+| A command-line argument pgmi reads as text that is not UTF-8 (`-d $'\xff'`) | passed on, fails later (exit 11 or 1) | refused at once, exit 2 (`invalid UTF-8 was detected in one or more arguments`) | owner 2026-11-13 (PGMI-973): a usage error is known before anything runs |
+| `--timeout` with a negative value (`-1s`) | runs, then exit 11 `exceeded --timeout -1s` | refused, exit 2 (`must not be negative`), as `pgmi.yaml` is | owner 2026-11-13 (PGMI-973): better, a typo is not a timeout |
+| A write to stdout that fails (`> /dev/full`) | ignored, exit 0 | `write output: no space left on device`, exit 1 | owner 2026-11-13 (PGMI-973): better, lost output is a failure |
+| `metadata scaffold <file>` | scans as if given a directory | refused, exit 10 (`"<file>" is a file; pass the project directory`) | owner 2026-11-13 (PGMI-973): better, the command takes a project |
+| `CALL pgmi_test('pattern', NULL)` | not expanded; the server answers 42883, exit 13 | expanded with the default callback, as the contract's macro section says | owner 2026-11-13 (PGMI-973): better |
+| Session SQL against a `search_path` that puts a user schema first (a `public` function shadowing a catalog one) | pgmi's session queries can call the user's function | they call `pg_catalog` objects by qualified name (PGMI-917) | owner 2026-11-13 (PGMI-973): better |
+| `pgmi.yaml` timeout that is not a duration, with a `--timeout` flag | the flag wins, the bad value is ignored | refused, exit 10 (`invalid timeout in pgmi.yaml`) | owner 2026-11-13 (PGMI-973): a broken file is reported whatever overrides it |
+| A `<pgmi-meta>` block with more than one fault (a bad id and a bad `idempotent`, a bad id and broken XML, an empty id) | the id first (`id attribute is not a UUID`) | the first fault in the Rust parser's order (`idempotent`, the XML, an empty id as `id attribute is required`); exit 10 both | owner 2026-11-13 (PGMI-973): wording only |
+| `CALL pgmi_test('<pattern>')` with a pattern that is not a valid regular expression | `failed to preprocess deploy.sql: execution failed: failed to call pgmi_test_generate: ERROR: Invalid regex pattern ...` | the server's `ERROR: Invalid regex pattern ...` alone; exit 13 both | owner 2026-11-13 (PGMI-973): wording only |
+| `pgmi init <dir>` into a directory that is not empty | names the absolute path | names the path as typed; exit 2 both | owner 2026-11-13 (PGMI-973): wording only |
+| `PGMI_PARAM_<NAME>` whose value is not UTF-8 | `FAILED <db>: ...`, then `invalid parameter value for '<name>': not valid UTF-8` | `environment variable PGMI_PARAM_<NAME> is not valid UTF-8`, the error alone; exit 10 both | owner 2026-11-13 (PGMI-973): wording only, it names the variable to fix |
+| `connect_timeout` or `sslmode` in a connection string that is not a valid value | `invalid connection string: invalid connect_timeout [value] "x": strconv.Atoi: ...`; `invalid sslmode "x" in the connection (valid: disable, allow, ...)` | `invalid connect_timeout "x"`; `invalid sslmode value: "x"`, libpq's words; exit 10 both | owner 2026-11-13 (PGMI-973): wording only |
+| A failure to connect to the maintenance database | `maintenance database: connect to "<db>": ...` | `connect to "<db>": ...`; exit codes unchanged | owner 2026-11-13 (PGMI-973): wording only, the line names the database |
+| Refusal order: a `pgmi.yaml` port that is not a number, or a quoted one, and no database | the port (`cannot unmarshal !!str ... into int`) | the missing database; with a database, `invalid port "x"` (a quoted number is accepted, row above); exit 10 both | owner 2026-11-13 (PGMI-973): wording only |
+| A database name holding `"` or `\` in the `--overwrite` lines | Go-escaped (`"o2\"x"`) | as written between double quotes | owner 2026-11-13 (PGMI-973): wording only |
 
 No case of its own: each row's section above names its cases or its Rust unit
 test.
