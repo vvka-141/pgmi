@@ -12,36 +12,21 @@
 </pgmi-meta>
 */
 
--- ============================================================================
--- common.is_regexp - Validate if text is a valid PostgreSQL regular expression
--- ============================================================================
--- Tests whether the given text is a valid POSIX regular expression by
--- attempting to compile it. Returns TRUE for valid patterns, FALSE for invalid.
---
--- Example:
---   SELECT common.is_regexp('^[a-z]+$');              -- TRUE
---   SELECT common.is_regexp('[invalid');             -- FALSE
---   SELECT common.is_regexp('^(get|post|put)$');     -- TRUE
---
--- Use Case:
---   Validate user-supplied regex patterns before storing or using them,
---   enabling graceful error handling instead of runtime exceptions.
--- ============================================================================
-
+-- Matching against '' compiles the pattern: a caller checks user input here
+-- instead of failing on it later.
 CREATE OR REPLACE FUNCTION common.is_regexp(p_pattern text)
 RETURNS boolean
 LANGUAGE plpgsql
 IMMUTABLE
-STRICT           -- NULL in → NULL out
+STRICT
 PARALLEL SAFE
 AS $$
 BEGIN
-    -- Compile attempt: matching against an empty string triggers regex compilation
     PERFORM '' ~ p_pattern;
     RETURN TRUE;
 EXCEPTION
-    WHEN SQLSTATE '2201B' THEN   -- invalid_regular_expression
-        RETURN FALSE;            -- Only regex-compile errors are swallowed
+    WHEN invalid_regular_expression THEN
+        RETURN FALSE;
 END;
 $$;
 
@@ -73,24 +58,7 @@ BEGIN
 END $test$;
 
 
--- ============================================================================
--- common.to_regexp - Convert UUID to regex pattern with optional dashes
--- ============================================================================
--- Converts a UUID to a regular expression pattern where dashes are optional.
--- This allows matching UUIDs in URLs with or without dash separators.
---
--- Example:
---   SELECT common.to_regexp('550e8400-e29b-41d4-a716-446655440000'::uuid);
---   -- Returns: '550e8400-?e29b-?41d4-?a716-?446655440000'
---
---   -- This pattern matches both:
---   --   /api/550e8400-e29b-41d4-a716-446655440000/details
---   --   /api/550e8400e29b41d4a716446655440000/details
---
--- Use Case:
---   Building flexible HTTP route patterns that accept UUIDs with or without dashes.
--- ============================================================================
-
+-- A route pattern that matches the UUID with or without its dashes.
 CREATE OR REPLACE FUNCTION common.to_regexp(uuid)
 RETURNS text
 LANGUAGE sql
@@ -105,17 +73,7 @@ COMMENT ON FUNCTION common.to_regexp(uuid) IS
 'Converts UUID to regex pattern with optional dashes for flexible URL matching';
 
 
--- ============================================================================
--- semantic_fingerprint() - Normalized Text Hash
--- ============================================================================
--- Generates SHA-256 hash for normalized text content, ensuring consistent
--- lookup for semantic matching.
---
--- Example:
---   SELECT common.semantic_fingerprint('  Hello   World  ');
---   SELECT common.semantic_fingerprint('hello world');
---   -- Both return same hash
-
+-- Text that differs only in case and whitespace gets one lookup key.
 CREATE OR REPLACE FUNCTION common.semantic_fingerprint(content text)
 RETURNS text
 LANGUAGE sql
@@ -134,7 +92,6 @@ AS $$
     );
 $$;
 
--- Inline test
 DO $$
 BEGIN
     IF common.semantic_fingerprint('  Hello   World  ') IS DISTINCT FROM
@@ -146,13 +103,7 @@ END $$;
 COMMENT ON FUNCTION common.semantic_fingerprint(text) IS
     'Generates SHA-256 hash for normalized text content, ensuring consistent lookup for semantic matching';
 
--- ============================================================================
--- common.like_escape - match user text literally inside a LIKE pattern
--- ============================================================================
--- Example:
---   WHERE title ILIKE '%' || common.like_escape(p_search) || '%'
--- Uses LIKE's default escape character, the backslash.
-
+-- User text inside a LIKE pattern, as in title ILIKE '%' || like_escape(p_search) || '%'.
 CREATE OR REPLACE FUNCTION common.like_escape(p_text text)
 RETURNS text
 LANGUAGE sql

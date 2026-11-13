@@ -138,7 +138,8 @@ COMMENT ON FUNCTION common.try_cast(text, numeric) IS
 
 -- ISO-8601 (P1Y2M3DT4H30M), .NET TimeSpan ([-][d.]hh:mm[:ss[.fffffff]]), then
 -- PostgreSQL's own parser ('2 days 3 hours', '1w 2d'). STABLE: the native
--- parser depends on DateStyle and IntervalStyle.
+-- parser depends on DateStyle and IntervalStyle. One routine: the three
+-- parsers are tried in that order and the first that matches answers.
 CREATE OR REPLACE FUNCTION common.try_cast(input text, default_value interval)
 RETURNS interval
 LANGUAGE plpgsql
@@ -156,8 +157,6 @@ BEGIN
     IF v_input ~* '^[+-]?infinity$' THEN
         RETURN $2;
     END IF;
-    -- Use coarse patterns to classify format, then parse accordingly
-    -- This avoids expensive regex validation upfront
 
     -- ISO-8601: starts with optional sign + 'P', and names at least one component
     IF v_input ~* '^-?PT?$' THEN
@@ -228,6 +227,20 @@ $$;
 COMMENT ON FUNCTION common.try_cast(text, interval) IS
     'Try to parse text as interval using ISO-8601, .NET TimeSpan, or natural language formats. Returns default value on failure.';
 
+-- Unix epoch seconds, or milliseconds from 10^10 on (1970-04-26 in
+-- milliseconds, 2286 in seconds), as timestamptz; NULL outside 0001-01-01 to
+-- 9999-12-31, which leaves a larger number to the native parser.
+CREATE OR REPLACE FUNCTION common.epoch_timestamptz(epoch numeric)
+RETURNS timestamptz
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+    SELECT CASE
+        WHEN abs($1) >= 10000000000 THEN
+            CASE WHEN $1 BETWEEN -62135596800000 AND 253402300799999 THEN to_timestamp($1 / 1000.0) END
+        WHEN $1 BETWEEN -62135596800 AND 253402300799 THEN to_timestamp($1)
+    END;
+$$;
+
 -- Unix epoch seconds, or milliseconds by magnitude, then PostgreSQL's own
 -- parser. STABLE: text parsing depends on DateStyle, and the epoch path goes
 -- through timestamptz, so the result depends on TimeZone.
@@ -238,7 +251,7 @@ STABLE PARALLEL SAFE
 AS $$
 DECLARE
     v_input TEXT;
-    v_numeric NUMERIC;
+    v_epoch timestamptz;
 BEGIN
     IF $1 IS NULL THEN
         RETURN $2;
@@ -253,30 +266,15 @@ BEGIN
         RETURN $2;
     END IF;
 
-    -- Unix epoch: pure numeric (integer or decimal)
-    -- Pattern: optional sign, digits, optional decimal point and digits
     IF v_input ~ '^\-?\d+(\.\d+)?$' THEN
         BEGIN
-            v_numeric := v_input::numeric;
-
-            -- Distinguish milliseconds from seconds by magnitude
-            -- Millisecond epoch >= 10^10 (corresponds to year ~2286 as seconds, or ~1973 as milliseconds)
-            IF abs(v_numeric) >= 10000000000 THEN
-                -- Millisecond epoch: divide by 1000, same 0001..9999 bounds
-                IF v_numeric BETWEEN -62135596800000 AND 253402300799999 THEN
-                    RETURN to_timestamp(v_numeric / 1000.0)::timestamp;
-                END IF;
-            ELSE
-                -- Second epoch (supports decimal for subsecond precision)
-                -- Sanity check: PostgreSQL timestamp range is 4713 BC to 294276 AD
-                -- Unix epoch range: -62135596800 (0001-01-01) to 253402300799 (9999-12-31)
-                IF v_numeric BETWEEN -62135596800 AND 253402300799 THEN
-                    RETURN to_timestamp(v_numeric)::timestamp;
-                END IF;
+            v_epoch := common.epoch_timestamptz(v_input::numeric);
+            IF v_epoch IS NOT NULL THEN
+                RETURN v_epoch::timestamp;
             END IF;
         EXCEPTION
             WHEN OTHERS THEN
-                -- Fall through to next strategy
+                -- Fall through to the native parser
         END;
     END IF;
 
@@ -303,7 +301,7 @@ STABLE PARALLEL SAFE
 AS $$
 DECLARE
     v_input TEXT;
-    v_numeric NUMERIC;
+    v_epoch timestamptz;
 BEGIN
     IF $1 IS NULL THEN
         RETURN $2;
@@ -317,16 +315,11 @@ BEGIN
         RETURN $2;
     END IF;
 
-    -- Unix epoch: pure numeric (seconds, or milliseconds by magnitude)
     IF v_input ~ '^\-?\d+(\.\d+)?$' THEN
         BEGIN
-            v_numeric := v_input::numeric;
-            IF abs(v_numeric) >= 10000000000 THEN
-                IF v_numeric BETWEEN -62135596800000 AND 253402300799999 THEN
-                    RETURN to_timestamp(v_numeric / 1000.0);
-                END IF;
-            ELSIF v_numeric BETWEEN -62135596800 AND 253402300799 THEN
-                RETURN to_timestamp(v_numeric);
+            v_epoch := common.epoch_timestamptz(v_input::numeric);
+            IF v_epoch IS NOT NULL THEN
+                RETURN v_epoch;
             END IF;
         EXCEPTION
             WHEN OTHERS THEN

@@ -16,123 +16,103 @@
 </pgmi-meta>
 */
 
--- Columns no row names are left alone (a new row takes their default). A row
--- that leaves out a column another row names sets it NULL. Refused, before
--- anything changes: a column the table does not have, a row without its
--- primary key, two rows with one key, and deleting a row something still
--- references, whatever the foreign key's ON DELETE action: a catalog edit must
--- not cascade into application data.
-CREATE OR REPLACE FUNCTION pg_temp.sync_catalog(p_table regclass, p_rows jsonb, p_source text DEFAULT NULL)
-RETURNS void
+-- What is wrong with p_rows as the rows of p_table, keyed by p_keys, or NULL:
+-- not an array of objects, no primary key, a column the table does not have,
+-- a row without its key, two rows with one key. The first problem found wins.
+CREATE OR REPLACE FUNCTION pg_temp.catalog_rows_problem(p_table regclass, p_table_name text, p_rows jsonb, p_keys text[])
+RETURNS text
 LANGUAGE plpgsql AS $$
 DECLARE
-    v_table   text := (SELECT format('%I.%I', n.nspname, c.relname)
-                       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.oid = p_table);
-    v_source  text := coalesce(p_source, v_table);
-    v_keys    text[];
-    v_cols    text[];
-    v_set     text[];
     v_problem text;
-    v_fk      record;
-    v_refs    text;
-    v_changed bigint;
-    v_doomed  bigint;
-    v_forced  boolean;
 BEGIN
     IF (CASE WHEN jsonb_typeof(p_rows) IS DISTINCT FROM 'array' THEN true
              ELSE EXISTS (SELECT FROM jsonb_array_elements(p_rows) r WHERE jsonb_typeof(r) IS DISTINCT FROM 'object') END) THEN
-        RAISE EXCEPTION 'Catalog %: expected a JSON array of objects, one per row', v_source;
+        RETURN 'expected a JSON array of objects, one per row';
     END IF;
 
-    SELECT array_agg(a.attname::text ORDER BY k.ord) INTO v_keys
-    FROM pg_index i
-    CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord)
-    JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
-    WHERE i.indrelid = p_table AND i.indisprimary;
-    IF v_keys IS NULL THEN
-        RAISE EXCEPTION 'Catalog %: table % has no primary key to match rows by', v_source, v_table;
+    IF p_keys IS NULL THEN
+        RETURN format('table %s has no primary key to match rows by', p_table_name);
     END IF;
 
-    v_cols := ARRAY(
-        SELECT DISTINCT k FROM jsonb_array_elements(p_rows) r, jsonb_object_keys(r) k ORDER BY k);
-
-    SELECT string_agg(c, ', ' ORDER BY c) INTO v_problem
-    FROM unnest(v_cols) c
-    WHERE NOT EXISTS (
-        SELECT FROM pg_attribute a
-        WHERE a.attrelid = p_table AND a.attname = c AND a.attnum > 0 AND NOT a.attisdropped);
+    SELECT string_agg(DISTINCT k, ', ' ORDER BY k) INTO v_problem
+    FROM jsonb_array_elements(p_rows) r, jsonb_object_keys(r) k
+    WHERE NOT pg_temp.has_column(p_table, k);
     IF v_problem IS NOT NULL THEN
-        RAISE EXCEPTION 'Catalog %: table % has no column %', v_source, v_table, v_problem;
+        RETURN format('table %s has no column %s', p_table_name, v_problem);
     END IF;
 
     SELECT string_agg(r.ord::text, ', ' ORDER BY r.ord) INTO v_problem
     FROM jsonb_array_elements(p_rows) WITH ORDINALITY AS r(row, ord)
-    WHERE EXISTS (SELECT FROM unnest(v_keys) k WHERE coalesce(r.row -> k, 'null') = 'null');
+    WHERE EXISTS (SELECT FROM unnest(p_keys) k WHERE coalesce(r.row -> k, 'null') = 'null');
     IF v_problem IS NOT NULL THEN
-        RAISE EXCEPTION 'Catalog %: row(s) % lack a value for the primary key (%)',
-            v_source, v_problem, array_to_string(v_keys, ', ');
+        RETURN format('row(s) %s lack a value for the primary key (%s)', v_problem, array_to_string(p_keys, ', '));
     END IF;
 
     SELECT string_agg(key::text, ', ' ORDER BY key::text) INTO v_problem
     FROM (
-        SELECT (SELECT jsonb_object_agg(k, r -> k) FROM unnest(v_keys) k) AS key
+        SELECT (SELECT jsonb_object_agg(k, r -> k) FROM unnest(p_keys) k) AS key
         FROM jsonb_array_elements(p_rows) r
         GROUP BY 1 HAVING count(*) > 1
     ) dup;
     IF v_problem IS NOT NULL THEN
-        RAISE EXCEPTION 'Catalog %: more than one row with key %', v_source, v_problem;
+        RETURN format('more than one row with key %s', v_problem);
     END IF;
 
-    -- Lock the rows the sync will delete before checking who references them:
-    -- FOR UPDATE conflicts with the FOR KEY SHARE a referencing insert takes,
-    -- so one racing the deploy waits and then fails its own key check, and one
-    -- already committed is seen below. Without it, a reference committed
-    -- between the check and the MERGE would be cascaded or set null.
-    EXECUTE format(
-        'SELECT FROM %1$s t WHERE NOT EXISTS (SELECT FROM jsonb_populate_recordset(NULL::%1$s, $1) s WHERE %2$s) FOR UPDATE',
-        v_table,
-        (SELECT string_agg(format('s.%1$I = t.%1$I', k), ' AND ') FROM unnest(v_keys) k))
-    USING p_rows;
-    GET DIAGNOSTICS v_doomed = ROW_COUNT;
+    RETURN NULL;
+END $$;
 
-    -- Forced row-level security hides tenant rows from the owner, but not
-    -- from an ON DELETE CASCADE, SET NULL or SET DEFAULT action: such a check
-    -- runs with FORCE lifted on the referencing table (ACCESS EXCLUSIVE until
-    -- commit), and only when the sync deletes something. A NO ACTION or
-    -- RESTRICT key needs no lift: its own check sees every row and refuses.
+-- The rows of p_table that p_rows drops and some row still references, one
+-- line per foreign key, or NULL. p_match is the key match of a p_rows row s
+-- and a table row t. Forced row-level security hides other organizations'
+-- rows from the owner, so this check would miss references a CASCADE, SET
+-- NULL or SET DEFAULT key then acts on: for such a key the check runs with
+-- FORCE lifted on the referencing table (ACCESS EXCLUSIVE until commit). A NO
+-- ACTION or RESTRICT key needs no lift: its own check sees every row and
+-- refuses.
+CREATE OR REPLACE FUNCTION pg_temp.catalog_rows_in_use(p_table regclass, p_table_name text, p_rows jsonb, p_match text)
+RETURNS text
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_fk      record;
+    v_refs    text;
+    v_forced  boolean;
+    v_problem text;
+BEGIN
     FOR v_fk IN
         SELECT c.conname, c.conrelid = p_table AS self, c.conrelid, c.confdeltype IN ('c', 'n', 'd') AS acts,
                (SELECT format('%I.%I', n.nspname, r.relname) FROM pg_class r JOIN pg_namespace n ON n.oid = r.relnamespace
                 WHERE r.oid = c.conrelid) AS referencing_name,
-               (SELECT string_agg(format('r.%I', a.attname), ', ' ORDER BY k.ord)
+               (SELECT string_agg(format('t.%I', a.attname), ', ' ORDER BY k.ord)
                 FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
                 JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum) AS referencing_cols,
                (SELECT string_agg(format('d.%I', a.attname), ', ' ORDER BY k.ord)
                 FROM unnest(c.confkey) WITH ORDINALITY AS k(attnum, ord)
                 JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = k.attnum) AS referenced_cols
         FROM pg_constraint c
-        WHERE c.contype = 'f' AND c.confrelid = p_table AND v_doomed > 0
-        ORDER BY 5, c.conname
+        WHERE c.contype = 'f' AND c.confrelid = p_table
+        ORDER BY referencing_name, c.conname
     LOOP
         v_forced := v_fk.acts AND (SELECT relforcerowsecurity FROM pg_class WHERE oid = v_fk.conrelid);
         IF v_forced THEN
             EXECUTE format('ALTER TABLE %s NO FORCE ROW LEVEL SECURITY', v_fk.conrelid::regclass);
         END IF;
+        -- %1 the catalog table, %2 p_match, %3 the referenced key of a doomed
+        -- row d, %4 the referencing table t, %5 its foreign key columns, %6 on
+        -- a self-reference: only rows the sync keeps count as references.
         EXECUTE format(
             $sql$
             WITH src AS (SELECT * FROM jsonb_populate_recordset(NULL::%1$s, $1)),
             doomed AS (SELECT t.* FROM %1$s t WHERE NOT EXISTS (SELECT FROM src s WHERE %2$s))
             SELECT string_agg(DISTINCT '(' || concat_ws(', ', %3$s) || ')', ', ')
-            FROM %4$s r JOIN doomed d ON (%5$s) = (%3$s)
+            FROM %4$s t JOIN doomed d ON (%5$s) = (%3$s)
             %6$s
             $sql$,
-            v_table,
-            (SELECT string_agg(format('s.%1$I = t.%1$I', k), ' AND ') FROM unnest(v_keys) k),
+            p_table_name,
+            p_match,
             v_fk.referenced_cols,
             v_fk.referencing_name,
             v_fk.referencing_cols,
-            CASE WHEN v_fk.self THEN format('WHERE EXISTS (SELECT FROM src s WHERE %s)',
-                (SELECT string_agg(format('s.%1$I = r.%1$I', k), ' AND ') FROM unnest(v_keys) k)) END)
+            CASE WHEN v_fk.self THEN format('WHERE EXISTS (SELECT FROM src s WHERE %s)', p_match) END)
         INTO v_refs
         USING p_rows;
         IF v_forced THEN
@@ -141,9 +121,62 @@ BEGIN
 
         IF v_refs IS NOT NULL THEN
             v_problem := concat_ws(E'\n  ', v_problem,
-                format('%s %s, still referenced by %s (%s)', v_table, v_refs, v_fk.referencing_name, v_fk.conname));
+                format('%s %s, still referenced by %s (%s)', p_table_name, v_refs, v_fk.referencing_name, v_fk.conname));
         END IF;
     END LOOP;
+    RETURN v_problem;
+END $$;
+
+-- Columns no row names are left alone (a new row takes their default). A row
+-- that leaves out a column another row names sets it NULL. Refused, before
+-- anything changes: what catalog_rows_problem finds, and deleting a row
+-- something still references, whatever the foreign key's ON DELETE action: a
+-- catalog edit must not cascade into application data. It reads in the order
+-- it acts: check, lock, refuse, merge.
+CREATE OR REPLACE FUNCTION pg_temp.sync_catalog(p_table regclass, p_rows jsonb, p_source text DEFAULT NULL)
+RETURNS void
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_table   text := (SELECT format('%I.%I', n.nspname, c.relname)
+                       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.oid = p_table);
+    v_source  text := coalesce(p_source, v_table);
+    v_keys    text[];
+    v_match   text;
+    v_cols    text[];
+    v_set     text[];
+    v_problem text;
+    v_changed bigint;
+    v_doomed  bigint;
+BEGIN
+    SELECT array_agg(a.attname::text ORDER BY k.ord) INTO v_keys
+    FROM pg_index i
+    CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord)
+    JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+    WHERE i.indrelid = p_table AND i.indisprimary;
+
+    v_problem := pg_temp.catalog_rows_problem(p_table, v_table, p_rows, v_keys);
+    IF v_problem IS NOT NULL THEN
+        RAISE EXCEPTION 'Catalog %: %', v_source, v_problem;
+    END IF;
+
+    v_match := (SELECT string_agg(format('s.%1$I = t.%1$I', k), ' AND ') FROM unnest(v_keys) k);
+    v_cols := ARRAY(
+        SELECT DISTINCT k FROM jsonb_array_elements(p_rows) r, jsonb_object_keys(r) k ORDER BY k);
+
+    -- Lock the rows the sync will delete before checking who references them:
+    -- FOR UPDATE conflicts with the FOR KEY SHARE a referencing insert takes,
+    -- so one racing the deploy waits and then fails its own key check, and one
+    -- already committed is seen below. Without it, a reference committed
+    -- between the check and the MERGE would be cascaded or set null.
+    EXECUTE format(
+        'SELECT FROM %1$s t WHERE NOT EXISTS (SELECT FROM jsonb_populate_recordset(NULL::%1$s, $1) s WHERE %2$s) FOR UPDATE',
+        v_table, v_match)
+    USING p_rows;
+    GET DIAGNOSTICS v_doomed = ROW_COUNT;
+
+    IF v_doomed > 0 THEN
+        v_problem := pg_temp.catalog_rows_in_use(p_table, v_table, p_rows, v_match);
+    END IF;
     IF v_problem IS NOT NULL THEN
         RAISE EXCEPTION E'Catalog % drops rows that are still in use:\n  %', v_source, v_problem
             USING ERRCODE = 'foreign_key_violation',
@@ -161,7 +194,7 @@ BEGIN
         WHEN NOT MATCHED BY SOURCE THEN DELETE
         $sql$,
         v_table,
-        (SELECT string_agg(format('t.%1$I = s.%1$I', k), ' AND ') FROM unnest(v_keys) k),
+        v_match,
         CASE WHEN cardinality(v_set) > 0 THEN format(
             'WHEN MATCHED AND (%s) IS DISTINCT FROM (%s) THEN UPDATE SET %s',
             (SELECT string_agg(format('t.%I', c), ', ') FROM unnest(v_set) c),

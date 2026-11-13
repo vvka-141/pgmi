@@ -10,17 +10,10 @@
   </sortKeys>
 </pgmi-meta>
 */
--- ============================================================================
--- Utils: Encoding Types and Chainable Bytea Casts
--- ============================================================================
--- Provides chainable bytea decoding via PostgreSQL cast syntax:
---
---   my_bytea::utf8::jsonb    -- Decode as UTF-8, then parse as JSONB
---   my_bytea::utf8::json     -- Decode as UTF-8, then parse as JSON
---   my_bytea::utf8::xml      -- Decode as UTF-8, then parse as XML
---   my_bytea::utf8::text     -- Decode as UTF-8 to text
---   my_bytea::latin1::text   -- Decode as Latin-1 to text
---   my_bytea::win1252::text  -- Decode as Windows-1252 to text
+
+-- Chainable bytea decoding through casts: my_bytea::utf8::jsonb, ::utf8::json,
+-- ::utf8::xml, ::utf8::text, ::latin1::text, ::win1252::text. The wrapper
+-- types are structure and live in encoding-structure.sql, which runs once.
 --
 -- Volatility: the convert_from-based functions are deliberately IMMUTABLE even
 -- though pg_proc marks convert_from STABLE (its result depends on the database
@@ -29,14 +22,10 @@
 -- like to_jsonb(payload) index-eligible. XML parsing uses explicit
 -- xmlparse(DOCUMENT ...), not the xmloption-dependent text::xml cast, so it is
 -- deterministic as well.
--- ============================================================================
 
--- ============================================================================
--- Encoding Types (Composite wrappers around text)
--- ============================================================================
--- The types themselves (common.utf8, common.latin1, common.win1252) are
--- structure and live in encoding-structure.sql, which runs once.
-
+-- ############################################################################
+-- CASTS - bytea to a wrapper type, then the wrapper to text, jsonb, json or xml
+-- ############################################################################
 -- CREATE CAST has no OR REPLACE, so each cast is dropped by name before being
 -- recreated. Naming them individually is what keeps the redeploy from touching
 -- anything the template does not own.
@@ -50,11 +39,7 @@ DROP CAST IF EXISTS (common.utf8 AS jsonb);
 DROP CAST IF EXISTS (common.utf8 AS json);
 DROP CAST IF EXISTS (common.utf8 AS xml);
 
--- ============================================================================
--- bytea → Encoding Type Casts
--- ============================================================================
--- First step in the chain: decode bytea to wrapped text.
-
+-- The first step of a chain: decode bytea to wrapped text.
 CREATE OR REPLACE FUNCTION common.bytea_to_utf8(input bytea)
 RETURNS common.utf8
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
@@ -87,11 +72,8 @@ $$;
 CREATE CAST (bytea AS common.win1252)
     WITH FUNCTION common.bytea_to_win1252(bytea);
 
--- ============================================================================
--- Encoding Type → text Casts
--- ============================================================================
--- Extract the decoded text from the wrapper.
 
+-- The wrapper back to its decoded text.
 CREATE OR REPLACE FUNCTION common.utf8_to_text(input common.utf8)
 RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
@@ -124,12 +106,7 @@ $$;
 CREATE CAST (common.win1252 AS text)
     WITH FUNCTION common.win1252_to_text(common.win1252);
 
--- ============================================================================
--- utf8 → JSON/JSONB/XML Casts
--- ============================================================================
--- Direct conversion from utf8 wrapper to structured types.
--- These enable: my_bytea::utf8::jsonb without intermediate ::text
-
+-- Straight to jsonb, json or xml: my_bytea::utf8::jsonb needs no ::text between.
 CREATE OR REPLACE FUNCTION common.utf8_to_jsonb(input common.utf8)
 RETURNS jsonb
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
@@ -162,11 +139,9 @@ $$;
 CREATE CAST (common.utf8 AS xml)
     WITH FUNCTION common.utf8_to_xml(common.utf8);
 
--- ============================================================================
--- Convenience Functions (for those who prefer function syntax)
--- ============================================================================
--- Alternative to cast syntax: to_jsonb(my_bytea), utf8(my_bytea)::jsonb
-
+-- ############################################################################
+-- FUNCTIONS - the same decodings in function syntax: utf8(x)::jsonb, to_jsonb(x)
+-- ############################################################################
 CREATE OR REPLACE FUNCTION common.utf8(input bytea)
 RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
@@ -227,6 +202,9 @@ $$;
 COMMENT ON FUNCTION common.to_xml(bytea) IS
     'Decode bytea as UTF-8 and parse as XML document. One-step shortcut.';
 
+-- ############################################################################
+-- CHECKS AND GRANTS - the chains decode as documented; roles may name the types
+-- ############################################################################
 DO $test$
 DECLARE
     v_json bytea := convert_to('{"key": "value", "num": 42}', 'UTF8');

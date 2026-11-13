@@ -67,8 +67,7 @@ DECLARE
 BEGIN
     SELECT string_agg(c, ', ') INTO v_missing
     FROM unnest(ARRAY['object_id', 'organization_id']) c
-    WHERE NOT EXISTS (SELECT FROM pg_attribute a
-                      WHERE a.attrelid = p_table AND a.attname = c AND a.attnum > 0 AND NOT a.attisdropped);
+    WHERE NOT pg_temp.has_column(p_table, c);
     IF v_missing IS NOT NULL THEN
         RAISE EXCEPTION 'apply_change_tracking: % has no % column', p_table, v_missing;
     END IF;

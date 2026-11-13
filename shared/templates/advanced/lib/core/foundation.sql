@@ -57,23 +57,10 @@ $$;
 -- ============================================================================
 -- core.apply_org_rls(regclass) - canonical multi-tenant RLS for domain tables
 -- ============================================================================
--- One call installs the standard org-scoped ENABLE + FORCE RLS policy set on a
--- domain table, keyed on api.current_organization_id(): a request works in one
--- organization, the one its organization session fixes. FORCE (not just ENABLE) means the policies bind
--- even for the table owner, so a SECURITY DEFINER handler that forgets an
--- explicit organization_id predicate is still constrained to the caller's
--- organization. That closes the most common multi-tenant footgun: a kernel mutation
--- running as owner, where ENABLE-only RLS would not apply.
---
--- Requirements: the table has an `organization_id uuid` column (and, when
--- p_has_created_by, a `created_by_user_id uuid` column). Both readers are
--- wrapped as (SELECT ...): PostgreSQL then builds a one-time InitPlan, so the
--- STABLE function runs once per query instead of once per candidate row. A
--- request without an organization matches no row.
---
--- It creates the policies, so call it once, from the run-once file that
--- creates the table.
-
+-- ENABLE and FORCE: the policies bind the owner too, so a SECURITY DEFINER
+-- kernel that forgets its organization_id predicate stays in the request's
+-- organization. The readers are wrapped as (SELECT ...) so they run once per
+-- query. Call it once, from the run-once file that creates the table.
 CREATE OR REPLACE FUNCTION core.apply_org_rls(
     p_table          regclass,
     p_has_created_by boolean DEFAULT true
@@ -87,18 +74,10 @@ DECLARE
 BEGIN
     SELECT relname INTO v_rel FROM pg_class WHERE oid = p_table;
 
-    ASSERT EXISTS (
-        SELECT 1 FROM pg_attribute
-        WHERE attrelid = p_table AND attname = 'organization_id'
-          AND attnum > 0 AND NOT attisdropped
-    ), format('apply_org_rls: %s must have an organization_id column', p_table);
+    ASSERT pg_temp.has_column(p_table, 'organization_id'), format('apply_org_rls: %s must have an organization_id column', p_table);
 
     IF p_has_created_by THEN
-        ASSERT EXISTS (
-            SELECT 1 FROM pg_attribute
-            WHERE attrelid = p_table AND attname = 'created_by_user_id'
-              AND attnum > 0 AND NOT attisdropped
-        ), format('apply_org_rls: %s declares p_has_created_by but lacks created_by_user_id', p_table);
+        ASSERT pg_temp.has_column(p_table, 'created_by_user_id'), format('apply_org_rls: %s declares p_has_created_by but lacks created_by_user_id', p_table);
     END IF;
 
     EXECUTE format('ALTER TABLE %s ENABLE ROW LEVEL SECURITY', p_table);
