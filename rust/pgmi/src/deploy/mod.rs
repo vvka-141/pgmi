@@ -616,7 +616,7 @@ impl Steps<'_> {
         let contract = contract?;
         let params = params.checked()?;
         if request.overwrite {
-            overwrite::refuse_maintenance(&spec.target_db, &spec.maintenance_db)?;
+            overwrite::refuse_target(&spec.target_db, &spec.maintenance_db)?;
         }
         let dialer = self.dialer(log);
         let maintenance = if request.overwrite {

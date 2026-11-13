@@ -9,16 +9,25 @@ use crate::output::Notice;
 /// sign-in token the dialer presents, renewed tokens included. Shared with
 /// the dialer's callbacks, so an append-only set behind a short lock.
 #[derive(Clone, Default)]
-pub(super) struct Secrets(Arc<Mutex<Vec<Secret>>>);
+pub(super) struct Secrets(Arc<Mutex<Known>>);
+
+#[derive(Default)]
+struct Known {
+    secrets: Vec<Secret>,
+    names: Vec<String>,
+}
 
 impl Secrets {
-    pub(super) fn insert(&self, secret: &Secret) {
-        let mut s = self
-            .0
+    fn known(&self) -> std::sync::MutexGuard<'_, Known> {
+        self.0
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !s.contains(secret) {
-            s.push(secret.clone());
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub(super) fn insert(&self, secret: &Secret) {
+        let mut k = self.known();
+        if !k.secrets.contains(secret) {
+            k.secrets.push(secret.clone());
         }
     }
 
@@ -26,13 +35,23 @@ impl Secrets {
         for p in [&spec.password, &spec.sslpassword].into_iter().flatten() {
             self.insert(p);
         }
+        let mut k = self.known();
+        for name in [&spec.user, &spec.target_db, &spec.maintenance_db] {
+            if !k.names.contains(name) {
+                k.names.push(name.clone());
+            }
+        }
     }
 
+    /// The secrets to hide; one equal to the login or a database name hides
+    /// nothing, since pgmi prints those names anyway.
     pub(super) fn list(&self) -> Vec<Secret> {
-        self.0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+        let k = self.known();
+        k.secrets
+            .iter()
+            .filter(|s| !k.names.iter().any(|n| n == s.expose()))
+            .cloned()
+            .collect()
     }
 
     pub(super) fn notice(&self, mut n: Notice) -> Notice {
@@ -41,5 +60,34 @@ impl Secrets {
         n.detail = n.detail.map(|d| redact(&d, &secrets));
         n.hint = n.hint.map(|h| redact(&h, &secrets));
         n
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::conn::resolve::{Flags, resolve};
+    use crate::env::Env;
+
+    fn spec(conn: &str) -> Spec {
+        let flags = Flags {
+            connection: Some(Secret::from(conn.to_string())),
+            ..Flags::default()
+        };
+        resolve(&flags, &Env::default(), None).unwrap()
+    }
+
+    #[test]
+    fn a_password_equal_to_the_login_or_a_database_is_not_hidden() {
+        let secrets = Secrets::default();
+        secrets.resolved(&spec("postgresql://postgres:postgres@h/app"));
+        assert!(secrets.list().is_empty());
+        secrets.insert(&Secret::from("app".to_string()));
+        assert!(secrets.list().is_empty());
+        secrets.insert(&Secret::from("s3cret".to_string()));
+        assert_eq!(
+            redact("postgres reads app with s3cret", &secrets.list()),
+            "postgres reads app with ***"
+        );
     }
 }

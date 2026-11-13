@@ -1,0 +1,18 @@
+description: --overwrite of template0 or template1, in any letter case, is refused before connecting, exit 10, even when the server cannot be reached
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --overwrite, --force, --connection, "postgresql://{user}@127.0.0.1:1/postgres", -d, template1]
+    expect:
+      exit: 10
+      stderr: ["cannot drop template database \"template1\" \\(template0/template1 are protected by PostgreSQL\\)"]
+      stderr_not: ["Connection attempt"]
+  - pgmi: [deploy, "{project}", --overwrite, --force, --connection, "{conn}", -d, TEMPLATE1]
+    expect:
+      exit: 10
+      stderr: ["cannot drop template database \"TEMPLATE1\""]
+  - pgmi: [deploy, "{project}", --overwrite, --force, --connection, "{conn}", -d, Template0]
+    expect:
+      exit: 10
+      stderr: ["cannot drop template database \"Template0\""]

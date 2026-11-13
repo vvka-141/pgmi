@@ -110,10 +110,18 @@ fn first<T: for<'a> tokio_postgres::types::FromSql<'a>>(rows: &[Row]) -> Result<
     rows.first().map(|r| get(r, 0)).transpose()
 }
 
-pub(crate) fn refuse_maintenance(target: &str, maintenance: &str) -> Result<()> {
+pub(crate) fn refuse_target(target: &str, maintenance: &str) -> Result<()> {
     if target == maintenance {
         return Err(Error::config(format!(
             "cannot overwrite maintenance database \"{target}\"\npgmi connects to it for CREATE/DROP DATABASE; pick a different target with -d"
+        )));
+    }
+    if ["template0", "template1"]
+        .iter()
+        .any(|t| target.eq_ignore_ascii_case(t))
+    {
+        return Err(Error::config(format!(
+            "cannot drop template database \"{target}\" (template0/template1 are protected by PostgreSQL)"
         )));
     }
     Ok(())
@@ -648,19 +656,32 @@ mod tests {
 
     #[test]
     fn the_maintenance_database_is_never_the_overwrite_target() {
-        let e = refuse_maintenance("postgres", "postgres").unwrap_err();
+        let e = refuse_target("postgres", "postgres").unwrap_err();
         assert_eq!(e.kind(), Kind::Config);
         assert!(
             e.text()
                 .starts_with("cannot overwrite maintenance database \"postgres\"")
         );
         assert_eq!(
-            refuse_maintenance("admin_db", "admin_db")
-                .unwrap_err()
-                .kind(),
+            refuse_target("admin_db", "admin_db").unwrap_err().kind(),
             Kind::Config
         );
-        assert!(refuse_maintenance("myapp", "postgres").is_ok());
-        assert!(refuse_maintenance("POSTGRES", "postgres").is_ok());
+        assert!(refuse_target("myapp", "postgres").is_ok());
+        assert!(refuse_target("POSTGRES", "postgres").is_ok());
+    }
+
+    #[test]
+    fn template0_and_template1_are_refused_in_any_case_before_connecting() {
+        for db in ["template1", "TEMPLATE1", "Template0"] {
+            let e = refuse_target(db, "postgres").unwrap_err();
+            assert_eq!(e.kind(), Kind::Config);
+            assert_eq!(
+                e.text(),
+                format!(
+                    "cannot drop template database \"{db}\" (template0/template1 are protected by PostgreSQL)"
+                )
+            );
+        }
+        assert!(refuse_target("template2", "postgres").is_ok());
     }
 }

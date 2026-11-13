@@ -1,0 +1,17 @@
+description: an empty sslmode in a connection string is unset (prefer), in every form; ADO.NET text after a closing quote is dropped up to the next semicolon; in key=value a connect_timeout that is not a number is refused even when a later one repeats the key
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@{host}:{port}/postgres?sslmode=", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "host={host} port={port} user={user} password={password} dbname=postgres sslmode=''", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "Host={host};Port={port};Username={user};Password={password};Database=postgres;SSL Mode=", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "Host={host};Port={port};Username={user};Password=\"{password}\" trailing;Database=postgres", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "host={host} port={port} user={user} password={password} dbname=postgres connect_timeout=x connect_timeout=5", -d, "{db}"]
+    expect:
+      exit: 10
+      stderr: ["connect_timeout \"x\""]

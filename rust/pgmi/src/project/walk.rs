@@ -86,6 +86,12 @@ pub(crate) fn load(fs: &impl Vfs, max_size: u64) -> Result<Project> {
     let scanning = scan_failed(Some(&fs.display("")));
     let rules = rules(fs).map_err(&scanning)?;
     let deploy = fs.stat("deploy.sql");
+    if deploy.as_ref().is_ok_and(|s| s.kind == FileKind::Dir) {
+        return Err(Error::config(format!(
+            "{} is a directory, expected a regular file",
+            fs.display("deploy.sql")
+        )));
+    }
     if deploy
         .as_ref()
         .is_ok_and(|s| s.kind == FileKind::Other && !s.link)
@@ -529,18 +535,23 @@ mod tests {
     }
 
     #[test]
-    fn deploy_sql_missing_or_a_directory_is_exit_14() {
-        for fs in [MemFs::default(), MemFs::default().dir("deploy.sql")] {
-            let e = load(&fs, MAX).unwrap_err();
-            assert_eq!(e.exit_code(), 14, "{}", e.text());
-            assert_eq!(
-                e.text(),
-                format!(
-                    "deploy.sql not found in /mem\nexpected: {} — run `pgmi init` to scaffold one",
-                    Path::new("/mem").join("deploy.sql").display()
-                )
-            );
-        }
+    fn deploy_sql_missing_is_exit_14_and_a_directory_exit_10() {
+        let path = Path::new("/mem").join("deploy.sql");
+        let e = load(&MemFs::default(), MAX).unwrap_err();
+        assert_eq!(e.exit_code(), 14, "{}", e.text());
+        assert_eq!(
+            e.text(),
+            format!(
+                "deploy.sql not found in /mem\nexpected: {} — run `pgmi init` to scaffold one",
+                path.display()
+            )
+        );
+        let e = load(&MemFs::default().dir("deploy.sql"), MAX).unwrap_err();
+        assert_eq!(e.exit_code(), 10, "{}", e.text());
+        assert_eq!(
+            e.text(),
+            format!("{} is a directory, expected a regular file", path.display())
+        );
         assert!(scan(&MemFs::default(), MAX).is_ok());
     }
 

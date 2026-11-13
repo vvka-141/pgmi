@@ -118,13 +118,15 @@ fn refusals() {
 }
 
 #[test]
+fn pghostaddr_and_pgsslcrl_are_ignored_as_in_go() {
+    let env = Env::from_pairs(&[("PGHOSTADDR", "10.0.0.5"), ("PGSSLCRL", "/etc/crl.pem")]);
+    let spec = resolve(&conn("host=h dbname=d"), &env, None).unwrap();
+    assert_eq!((spec.first().name.as_str(), spec.first().addr), ("h", None));
+}
+
+#[test]
 fn libpq_variables_pgmi_does_not_honour_are_refused_not_ignored() {
-    for (var, value) in [
-        ("PGSSLCRL", "/etc/crl.pem"),
-        ("PGSSLCRLDIR", "/etc/crl"),
-        ("PGREQUIREPEER", "postgres"),
-        ("PGHOSTADDR", "10.0.0.5"),
-    ] {
+    for (var, value) in [("PGSSLCRLDIR", "/etc/crl"), ("PGREQUIREPEER", "postgres")] {
         let env = Env::from_pairs(&[(var, value)]);
         let e = refused(resolve(&flags(), &env, None));
         assert!(e.to_string().starts_with(&format!("{var} is set")), "{e}");

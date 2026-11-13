@@ -1,0 +1,10 @@
+description: a deploy.sql that is a directory is invalid configuration, exit 10, named as a directory rather than reported missing
+project:
+  files:
+    deploy.sql: {dir: "0755"}
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 10
+      stderr: ["deploy\\.sql is a directory, expected a regular file"]
+      stderr_not: ["not found"]

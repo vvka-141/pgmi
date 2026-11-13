@@ -71,7 +71,6 @@ pub(crate) enum ParseError {
     UnterminatedBracket,
     KeyWithoutEquals,
     UnterminatedQuote,
-    TextAfterQuote,
     PartWithoutEquals,
     SslMode(String),
 }
@@ -112,10 +111,6 @@ impl fmt::Display for ParseError {
             ParseError::UnterminatedQuote => {
                 f.write_str("invalid connection string: unterminated quoted value")
             }
-            ParseError::TextAfterQuote => write!(
-                f,
-                "invalid connection string ({HIDDEN}): text after a closing quote; put the whole value inside the quotes"
-            ),
             ParseError::PartWithoutEquals => write!(
                 f,
                 "invalid connection string ({HIDDEN}): a part has no \"=\""
@@ -162,7 +157,7 @@ fn after_password(s: &str, key: &str) -> bool {
 
 fn fields(t: &str) -> Result<Fields> {
     let scheme = t.get(..t.find("://").map_or(0, |i| i + 3)).unwrap_or("");
-    let fields = if scheme.eq_ignore_ascii_case("postgresql://")
+    let mut fields = if scheme.eq_ignore_ascii_case("postgresql://")
         || scheme.eq_ignore_ascii_case("postgres://")
     {
         uri(t)?
@@ -174,6 +169,9 @@ fn fields(t: &str) -> Result<Fields> {
         keyword(t)?
     };
     check(&fields)?;
+    if fields.get("sslmode").is_some_and(String::is_empty) {
+        fields.remove("sslmode");
+    }
     Ok(fields)
 }
 
@@ -385,7 +383,13 @@ fn keyword(s: &str) -> Result<Fields> {
                 }
             }
         }
-        out.insert(key, value);
+        let refused_first = key == "connect_timeout"
+            && out
+                .get(&key)
+                .is_some_and(|t| t.trim().parse::<i64>().is_err());
+        if !refused_first {
+            out.insert(key, value);
+        }
     }
 }
 
@@ -418,10 +422,7 @@ fn ado_pairs(s: &str) -> Result<Vec<(String, String)>> {
                         None => return Err(ParseError::UnterminatedQuote),
                     }
                 }
-                while chars.next_if(|c| c.is_whitespace()).is_some() {}
-                if chars.next_if(|c| *c != ';').is_some() {
-                    return Err(ParseError::TextAfterQuote);
-                }
+                while chars.next_if(|c| *c != ';').is_some() {}
                 value
             }
             None => std::iter::from_fn(|| chars.next_if(|c| *c != ';'))
@@ -482,6 +483,7 @@ fn ado(s: &str) -> Result<Fields> {
 
 fn npgsql_sslmode(v: &str) -> Result<String> {
     let m = match v.to_ascii_lowercase().replace('-', "").as_str() {
+        "" => "",
         "disable" => "disable",
         "allow" => "allow",
         "prefer" => "prefer",
@@ -699,8 +701,8 @@ mod tests {
             Err(ParseError::UnterminatedQuote)
         );
         assert_eq!(
-            parse("Host=h;Password='pw'tail;Database=d"),
-            Err(ParseError::TextAfterQuote)
+            fields("Host=h;Password='pw'tail;Database=d"),
+            pairs(&[("host", "h"), ("password", "pw"), ("dbname", "d")])
         );
     }
 
@@ -712,10 +714,7 @@ mod tests {
                 "Host=h;Database=x;Password='p;SecretTail=ss",
                 Some("SecretTail"),
             ),
-            (
-                "Host=h;Database=x;Password='p;SecretTail=ss'junk",
-                Some("SecretTail"),
-            ),
+            ("Host=h;Database=x;Password='p;SecretTail=ss'junk", None),
             (
                 "Host=h;Database=x;Password=\"p;SecretTail\"\"=ss",
                 Some("SecretTail"),
@@ -874,6 +873,21 @@ mod tests {
             let f = parse(&format!("Host=h;Database=d;SSL Mode={given}")).unwrap();
             assert_eq!(f["sslmode"], want, "{given}");
         }
+        for given in [
+            "Host=h;SSL Mode=",
+            "host=h sslmode=''",
+            "postgresql://h/d?sslmode=",
+        ] {
+            assert!(!parse(given).unwrap().contains_key("sslmode"), "{given}");
+        }
+        assert_eq!(
+            parse("host=h connect_timeout=x connect_timeout=5").unwrap()["connect_timeout"],
+            "x"
+        );
+        assert_eq!(
+            parse("host=h connect_timeout=7 connect_timeout=5").unwrap()["connect_timeout"],
+            "5"
+        );
         let e = parse("Host=h;SSL Mode=Sometimes").unwrap_err();
         assert_eq!(e, ParseError::SslMode("Sometimes".into()));
         assert_eq!(e.to_string(), "invalid SSL Mode \"Sometimes\"");

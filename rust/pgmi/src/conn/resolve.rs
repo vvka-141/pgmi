@@ -523,11 +523,7 @@ pub(super) const ENV_DEFAULTS: &[(&str, &str)] = &[
     ("PGCLIENTENCODING", "client_encoding"),
 ];
 
-const UNSUPPORTED_ENV: [(&str, &str); 4] = [
-    (
-        "PGSSLCRL",
-        "certificate revocation lists are not checked; unset it",
-    ),
+const UNSUPPORTED_ENV: [(&str, &str); 2] = [
     (
         "PGSSLCRLDIR",
         "certificate revocation lists are not checked; unset it",
@@ -535,10 +531,6 @@ const UNSUPPORTED_ENV: [(&str, &str); 4] = [
     (
         "PGREQUIREPEER",
         "the server's operating-system user is not checked; unset it",
-    ),
-    (
-        "PGHOSTADDR",
-        "give hostaddr in the connection string instead, and unset it",
     ),
 ];
 
