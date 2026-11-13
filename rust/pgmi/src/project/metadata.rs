@@ -17,13 +17,54 @@ pub(crate) struct Meta {
 const MAX_BLOCK: usize = 10240;
 
 pub(crate) fn blocks(content: &str) -> Vec<&str> {
-    let src = content.as_bytes();
-    lexer::tokens(src)
+    meta_comments(content)
+        .into_iter()
+        .flat_map(|c| elements(&c[meta_tag(c).unwrap_or(0)..]))
+        .collect()
+}
+
+/// The block comments, trimmed, that hold a `<pgmi-meta` tag as Go finds it.
+fn meta_comments(content: &str) -> Vec<&str> {
+    lexer::tokens(content.as_bytes())
         .into_iter()
         .filter(|t| t.kind == TokenKind::BlockComment)
-        .filter_map(|t| content.get(t.start + 2..t.end.saturating_sub(2)))
-        .flat_map(elements)
+        .filter_map(|t| {
+            let end = if t.end - t.start >= 4 && content[..t.end].ends_with("*/") {
+                t.end - 2
+            } else {
+                t.end
+            };
+            content.get(t.start + 2..end)
+        })
+        .map(str::trim)
+        .filter(|c| meta_tag(c).is_some())
         .collect()
+}
+
+/// Where Go's `<\s*pgmi-meta[\s>]` first matches in `text`.
+fn meta_tag(text: &str) -> Option<usize> {
+    let go_space = |b: u8| matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0c);
+    let b = text.as_bytes();
+    (0..b.len()).filter(|&i| b[i] == b'<').find(|&i| {
+        let mut j = i + 1;
+        while j < b.len() && go_space(b[j]) {
+            j += 1;
+        }
+        b[j..].starts_with(b"pgmi-meta") && b.get(j + 9).is_some_and(|&c| go_space(c) || c == b'>')
+    })
+}
+
+/// The first element before the block, as Go's XML decoder meets it.
+fn element_before(prefix: &str) -> Option<&str> {
+    let at = prefix
+        .match_indices('<')
+        .map(|(i, _)| i)
+        .find(|&i| !matches!(prefix.as_bytes().get(i + 1), Some(b'!' | b'?')))?;
+    let name = &prefix[at + 1..];
+    let end = name
+        .find(|c: char| c.is_whitespace() || matches!(c, '>' | '/'))
+        .unwrap_or(name.len());
+    Some(&name[..end])
 }
 
 fn elements(mut text: &str) -> Vec<&str> {
@@ -153,25 +194,58 @@ fn xml_error(path: &str, e: &roxmltree::Error) -> MetaError {
     }
 }
 
-pub(crate) fn parse(path: &str, content: &str) -> std::result::Result<Option<Meta>, MetaError> {
-    let found = blocks(content);
-    let Some(xml) = found.first().copied() else {
-        if content.contains("<pgmi-meta") && unclosed_block(content) {
-            return Err(xml_error(path, &roxmltree::Error::UnexpectedEndOfStream));
-        }
+/// The `<pgmi-meta>` element of the file, refused where Go refuses it.
+fn block_xml<'a>(path: &str, content: &'a str) -> std::result::Result<Option<&'a str>, MetaError> {
+    let comments = meta_comments(content);
+    let Some(comment) = comments.first().copied() else {
         return Ok(None);
     };
+    if comments.len() > 1 {
+        return Err(MetaError::Multiple {
+            path: path.to_string(),
+        });
+    }
+    if comment.len() > MAX_BLOCK {
+        return Err(MetaError::TooLarge {
+            path: path.to_string(),
+            bytes: comment.len(),
+        });
+    }
+    let start = meta_tag(comment).unwrap_or(0);
+    if let Some(name) = element_before(&comment[..start]) {
+        return Err(MetaError::Xml {
+            path: path.to_string(),
+            line: 1,
+            text: format!("expected element type <pgmi-meta> but have <{name}>"),
+        });
+    }
+    let found = elements(&comment[start..]);
     if found.len() > 1 {
         return Err(MetaError::Multiple {
             path: path.to_string(),
         });
     }
-    if xml.len() > MAX_BLOCK {
-        return Err(MetaError::TooLarge {
-            path: path.to_string(),
-            bytes: xml.len(),
-        });
-    }
+    let rest = &comment[start..];
+    let xml = match found.first() {
+        Some(xml) => *xml,
+        None if rest.starts_with("<pgmi-meta") => {
+            return Err(xml_error(path, &roxmltree::Error::UnexpectedEndOfStream));
+        }
+        None => {
+            return Err(MetaError::Xml {
+                path: path.to_string(),
+                line: 1,
+                text: "expected element name after <".into(),
+            });
+        }
+    };
+    Ok(Some(xml))
+}
+
+pub(crate) fn parse(path: &str, content: &str) -> std::result::Result<Option<Meta>, MetaError> {
+    let Some(xml) = block_xml(path, content)? else {
+        return Ok(None);
+    };
     let doc = roxmltree::Document::parse(xml).map_err(|e| xml_error(path, &e))?;
     let root = doc.root_element();
     let mut problems = Vec::new();
@@ -246,17 +320,6 @@ fn element_text(node: roxmltree::Node<'_, '_>) -> String {
         .collect()
 }
 
-fn unclosed_block(content: &str) -> bool {
-    lexer::tokens(content.as_bytes())
-        .into_iter()
-        .filter(|t| t.kind == TokenKind::BlockComment)
-        .any(|t| {
-            content
-                .get(t.start..t.end)
-                .is_some_and(|c| c.contains("<pgmi-meta"))
-        })
-}
-
 pub(crate) fn fallback_id(path: &str) -> String {
     use md5::Digest;
     let digest = md5::Md5::digest(path.as_bytes());
@@ -266,7 +329,7 @@ pub(crate) fn fallback_id(path: &str) -> String {
 }
 
 pub(crate) fn outside_comment(content: &str, meta: Option<&Meta>) -> bool {
-    meta.is_none() && content.contains("<pgmi-meta") && !unclosed_block(content)
+    meta.is_none() && meta_tag(content).is_some() && meta_comments(content).is_empty()
 }
 
 #[derive(Debug, Default)]
@@ -584,6 +647,44 @@ mod tests {
             "{e}"
         );
         assert_eq!(MAX_BLOCK, 10 * 1024);
+    }
+
+    #[test]
+    fn blocks_are_found_and_refused_where_go_finds_and_refuses_them() {
+        const ID: &str = "5d0c4b8e-1111-4c4c-9a9a-000000000025";
+        let block = |pre: &str, tag: &str| {
+            format!("/* {pre}<{tag} id=\"{ID}\" idempotent=\"true\"></pgmi-meta> */\nSELECT 1;")
+        };
+        let refused = |content: &str| parse("./x.sql", content).unwrap_err().to_string();
+        let e = refused(&block("", " pgmi-meta"));
+        assert!(e.starts_with("metadata error in ./x.sql (line 1): "), "{e}");
+        let e = refused(&block("<x/> ", "pgmi-meta"));
+        assert!(
+            e.contains("expected element type <pgmi-meta> but have <x>"),
+            "{e}"
+        );
+        let big = format!(
+            "/* {} <pgmi-meta id=\"{ID}\" idempotent=\"true\"></pgmi-meta> */",
+            "x".repeat(11_000)
+        );
+        assert!(refused(&big).contains("over the 10240-byte limit"));
+        let kept = parse("./x.sql", &block("Header text ", "pgmi-meta"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(kept.id, ID);
+        let mention = format!("/* see <pgmi-metadata> docs */ {}", block("", "pgmi-meta"));
+        assert_eq!(parse("./x.sql", &mention).unwrap().unwrap().id, ID);
+        assert!(
+            refused(&block(
+                "",
+                "pgmi-meta id=\"5d0c4b8e-1111-4c4c-9a9a-000000000026\""
+            ))
+            .contains("id")
+        );
+        let two = format!(
+            "/* <pgmi-meta id=\"{ID}\" idempotent=\"true\"></pgmi-meta> <pgmi-meta id=\"{ID}\" idempotent=\"true\"></pgmi-meta> */"
+        );
+        assert!(refused(&two).contains("Multiple metadata blocks"));
     }
 
     #[test]

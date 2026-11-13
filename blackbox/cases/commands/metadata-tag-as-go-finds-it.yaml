@@ -1,0 +1,14 @@
+description: a block comment holding < pgmi-meta with a space after the < is a malformed metadata block, refused with exit 10, not a file without metadata that would rerun on every deploy
+project:
+  files:
+    x.sql: |
+      /* < pgmi-meta id="5d0c4b8e-1111-4c4c-9a9a-000000000025" idempotent="false"></pgmi-meta> */
+      CREATE TABLE once (n int);
+    deploy.sql: SELECT 1;
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 10
+      stderr: ["metadata error in \\./x\\.sql"]

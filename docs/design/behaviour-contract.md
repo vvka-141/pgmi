@@ -136,11 +136,14 @@ and may repeat. Refused with exit 10, naming the file: `idempotent` missing
 or not a boolean, a missing or nil id, an id with spaces, a blank sort key
 or description, an unknown entity, unclosed XML, two blocks (in the Rust
 binary also two `<pgmi-meta` elements in one comment, see "Two metadata
-elements in one comment are refused"), a block over
-10240 bytes. A file without a block gets the id `md5("./<path>")` read as a
+elements in one comment are refused", and a repeated attribute such as two
+`id`s), a block comment over 10240 bytes. A block is found as Go finds it,
+by `<\s*pgmi-meta[\s>]` in a block comment, so `< pgmi-meta` (a space after
+the `<`) or another element before the block is malformed metadata, exit
+10, never a file without metadata (PGMI-942). A file without a block gets the id `md5("./<path>")` read as a
 uuid, the same in `metadata plan` and `pgmi_plan_view.generic_id`.
 
-Cases: `commands/metadata`, `commands/metadata-invalid`, `commands/metadata-duplicate`, `commands/metadata-scaffold-run-once`, `commands/metadata-forms`, `commands/metadata-refusals`, `commands/metadata-scaffold-and-checks`.
+Cases: `commands/metadata`, `commands/metadata-invalid`, `commands/metadata-duplicate`, `commands/metadata-scaffold-run-once`, `commands/metadata-forms`, `commands/metadata-refusals`, `commands/metadata-scaffold-and-checks`, `commands/metadata-tag-as-go-finds-it`.
 
 ### templates, version, ai, completion, help
 
@@ -1414,6 +1417,7 @@ release notes take their "Behaviour changes" section from this table.
 | Windows: files under `%APPDATA%\postgresql` | read, and `pgmi config` saves the password there | unchanged | no change |
 | `min_protocol_version=3.2` or `latest` | protocol 3.2 | newly refused before connecting, exit 10 (known gap, PGMI-865) | owner 2026-11-11 |
 | Two `<pgmi-meta>` elements in one comment | the first used, the rest ignored | newly refused, exit 10 | owner 2026-11-11 |
+| A `<pgmi-meta>` element with an attribute given twice (two `id`s) | the last value used | refused, exit 10 | owner 2026-11-12 (PGMI-942) |
 | `serve`: a line over 16 MiB | read | newly refused with `-32600`, session goes on | owner 2026-11-11 |
 | A `--params-file` (or `paramsFile`, or `-`) over `PGMI_MAX_FILE_SIZE` (10 MiB) | read whole | newly refused, exit 10 (`exceeds N-byte limit`) | intended |
 | A project `.env` over `PGMI_MAX_FILE_SIZE` | applied | newly refused, exit 10, naming the file | intended |
