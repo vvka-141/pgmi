@@ -1313,7 +1313,11 @@ first failure. When an attempt fails for a transient reason, pgmi closes its
 session and runs the deploy again from the start on a new connection: a new
 session, the files loaded again, deploy.sql from its first line, exactly
 like a redeploy. Transient: SQLSTATE class 08 and a connection closed, reset
-or refused mid-run; 57P01, 57P02, 57P03; 53300; 40001, 40P01; 55P03; 25006
+or refused before deploy.sql runs (a connection lost while a unit of
+deploy.sql runs leaves that unit's outcome unknown and is never retried, even
+with `retry_after_commit`: exit 13, `not retried: unit U of T got no answer
+from the server, so whether it committed is unknown`, owner 2026-11-13,
+PGMI-970); 57P01, 57P02, 57P03; 53300; 40001, 40P01; 55P03; 25006
 only while the server reports `in_hot_standby = on` and the connection did
 not ask for a standby (`target_session_attrs` `read-only`, `standby`,
 `prefer-standby`); a cloud sign-in that still fails after its own retries
@@ -1368,7 +1372,7 @@ release notes take their "Behaviour changes" section from this table.
 
 | Change | 0.14 (Go) | 0.20 (Rust) | Decided |
 |---|---|---|---|
-| Whole-deployment retry | the first failure ends the run | a transient failure (class 08, a lost connection, 57P01-57P03, 53300, 40001, 40P01, 55P03, 25006 on a hot standby, a sign-in or connect retry that gave up) runs the deploy again from the start inside `--timeout`, once an attempt has reached the server (a first attempt that never connects fails at once, as in Go), waiting 1 s doubling to 30 s; once a unit has committed the failure is final, as in Go, unless `retry_after_commit: true` in `pgmi.yaml` allows a rerun (owner 2026-11-12, PGMI-918); `retry: false` turns retrying off; `--json` adds `attempts` (each with its `unitsCommitted`) and `timeUsedMs` | owner 2026-11-12 (record 0025) |
+| Whole-deployment retry | the first failure ends the run | a transient failure (class 08, a lost connection, 57P01-57P03, 53300, 40001, 40P01, 55P03, 25006 on a hot standby, a sign-in or connect retry that gave up) runs the deploy again from the start inside `--timeout`, once an attempt has reached the server (a first attempt that never connects fails at once, as in Go), waiting 1 s doubling to 30 s; once a unit has committed the failure is final, as in Go, unless `retry_after_commit: true` in `pgmi.yaml` allows a rerun (owner 2026-11-12, PGMI-918); a unit whose reply was lost is never retried (owner 2026-11-13, PGMI-970); `retry: false` turns retrying off; `--json` adds `attempts` (each with its `unitsCommitted`) and `timeUsedMs` | owner 2026-11-12 (record 0025) |
 | `sslmode=verify-ca` with no `sslrootcert` (the system trust store) | any certificate a trusted CA issued, for any host name | the host name is checked too, as in `verify-full`; with an explicit root file `verify-ca` checks no name, as before | owner 2026-11-12 (PGMI-923) |
 | project `.env` that starts with a UTF-8 byte-order mark | warning, none of it applied | applied, the mark ignored | owner 2026-11-12 (PGMI-943) |
 | project `.env` setting a key that locates credentials, endpoints, proxies or trust roots: `AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE`, `AWS_WEB_IDENTITY_TOKEN_FILE`, `AWS_CONTAINER_*`, `AWS_ENDPOINT_URL*`, `AZURE_AUTHORITY_HOST`, `AZURE_FEDERATED_TOKEN_FILE`, `IDENTITY_*`, `MSI_*`, `GOOGLE_APPLICATION_CREDENTIALS`, `CLOUDSDK_*`, `DATABRICKS_CONFIG_FILE`, `DATABRICKS_HOST`, `SSL_CERT_*`, `*_PROXY` (any case) | applied | refused; the rest of the file applies and the `.env applied:` line names each refused key; the operator's own environment can still set them | owner 2026-11-12 (PGMI-921) |

@@ -1,7 +1,7 @@
-description: Rust only (contract "Whole-deployment retry"). A first attempt lost to a reset is retried; the time box then runs out while the second attempt's long statement runs, which is cancelled on the server and rolled back, exit 16 with the time box, the attempts and the last error; the database is left unchanged
+description: Rust only (contract "Whole-deployment retry"). A first attempt lost to a reset while the session loads is retried; the time box then runs out while the second attempt's long statement runs, which is cancelled on the server and rolled back, exit 16 with the time box, the attempts and the last error; the database is left unchanged
 impl: rust
 proxy:
-  - {query: head_sleep, do: reset, after: 1, times: 1}
+  - {query: "PGMI Session Schema", do: reset, times: 1}
 project:
   files:
     deploy.sql: |
@@ -17,7 +17,7 @@ steps:
     timeout: 15
     expect:
       exit: 16
-      stderr: ["^pgmi: attempt 1 failed \\(connection lost\\); retrying in", "^pgmi: error: time box of 4s used up after 2 attempts; last error: execute deploy.sql"]
+      stderr: ["^pgmi: attempt 1 failed \\(connection lost\\); retrying in", "^pgmi: error: time box of 4s used up after 2 attempts; last error: session preparation failed"]
       stderr_not: ["attempt 2 failed"]
       sql:
         - query: SELECT to_regclass('marker') IS NULL

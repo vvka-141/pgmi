@@ -16,9 +16,7 @@ When an attempt fails for a transient reason, pgmi closes its session and
 runs the deploy again from the start on a new connection: a new session, the
 project files loaded again, deploy.sql from its first line. A retry runs the
 deploy again, exactly like a redeploy: run-once files are skipped by their
-ledger, everything else is rerunnable by design. When the answer to a
-`COMMIT` is lost, the next attempt finds the work done, as any redeploy
-would. PostgreSQL does not undo sequence advances, and nothing undoes effects
+ledger, everything else is rerunnable by design. PostgreSQL does not undo sequence advances, and nothing undoes effects
 outside the database.
 
 Only a deploy that has reached the server is retried. When the first
@@ -141,6 +139,18 @@ A project whose whole deploy.sql can run again after a partial run opts in:
 ```yaml
 retry_after_commit: true
 ```
+
+When the connection drops while a unit of deploy.sql runs, the server may
+have committed it or not; pgmi cannot tell. That failure is never retried,
+not even with `retry_after_commit`:
+
+```
+pgmi: attempt 1 failed (connection lost); not retried: unit 1 of 3 got no answer from the server, so whether it committed is unknown
+```
+
+Check the database, then deploy again. A connection lost before deploy.sql
+starts (while connecting, taking the lock or loading the session) is still
+retried.
 
 ## Turning it off
 

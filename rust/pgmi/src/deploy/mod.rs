@@ -677,10 +677,9 @@ impl Steps<'_> {
                 None
             };
             let Some(why) = why else { return Err(e) };
-            let committed = st.execution.as_ref().map_or(0, |x| x.committed);
-            if committed > 0 && !self.retry.after_commit {
+            if let Some(reason) = not_retried(st.execution.as_ref(), self.retry.after_commit) {
                 self.reporter.line(&format!(
-                    "pgmi: attempt {n} failed ({why}); not retried: {committed} unit(s) already committed (pgmi.yaml retry_after_commit: true allows it)"
+                    "pgmi: attempt {n} failed ({why}); not retried: {reason}"
                 ));
                 return Err(e);
             }
@@ -1357,6 +1356,25 @@ fn summary(p: &Progress, result: &Result<()>, elapsed: Duration) -> Option<Summa
     Some(Summary::Failed(text))
 }
 
+/// Why an attempt that failed with a retried error ends the deploy instead:
+/// a unit whose reply was lost (it may have committed), or committed units
+/// without `retry_after_commit`.
+fn not_retried(execution: Option<&Execution>, after_commit: bool) -> Option<String> {
+    let x = execution?;
+    if let Some(f) = x.failure.as_ref().filter(|f| f.unknown) {
+        return Some(format!(
+            "unit {} of {} got no answer from the server, so whether it committed is unknown",
+            f.unit, x.units
+        ));
+    }
+    (x.committed > 0 && !after_commit).then(|| {
+        format!(
+            "{} unit(s) already committed (pgmi.yaml retry_after_commit: true allows it)",
+            x.committed
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1697,6 +1715,44 @@ mod tests {
             summary_of(&created_then_sql, &sql).unwrap().text(),
             "app: failed after 1.23s — nothing committed; created database \"app\", left empty"
         );
+    }
+
+    #[test]
+    fn a_lost_reply_is_never_retried_and_committed_units_only_with_the_opt_in() {
+        let lost = |committed| {
+            executed(
+                committed,
+                Some(Failure {
+                    unit: 2,
+                    blame: blame::Blame::default(),
+                    unknown: true,
+                }),
+            )
+        };
+        for after_commit in [false, true] {
+            for committed in [0, 1] {
+                assert_eq!(
+                    not_retried(lost(committed).as_ref(), after_commit).as_deref(),
+                    Some(
+                        "unit 2 of 3 got no answer from the server, so whether it committed is unknown"
+                    )
+                );
+            }
+        }
+        let refused = executed(1, failure(2, blame::Blame::default()));
+        assert_eq!(
+            not_retried(refused.as_ref(), false).as_deref(),
+            Some("1 unit(s) already committed (pgmi.yaml retry_after_commit: true allows it)")
+        );
+        assert_eq!(not_retried(refused.as_ref(), true), None);
+        assert_eq!(
+            not_retried(
+                executed(0, failure(1, blame::Blame::default())).as_ref(),
+                false
+            ),
+            None
+        );
+        assert_eq!(not_retried(None, false), None);
     }
 
     #[test]

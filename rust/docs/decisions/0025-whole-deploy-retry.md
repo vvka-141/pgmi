@@ -162,6 +162,19 @@ never came counts as not committed here (record 0025: a lost COMMIT reply
 is found done by the next attempt). `retry: false` still turns all retrying
 off.
 
+## Changed by PGMI-970 (owner, 2026-11-13): a lost reply is never retried
+
+The PGMI-893 re-run showed the gap in "a lost COMMIT reply is found done":
+a deploy.sql with no ledger (`INSERT ...; SELECT pg_sleep(1);`) whose
+connection dropped while the server went on to commit ran again and
+inserted twice. Owner decision: when a unit of deploy.sql got no answer
+(the connection dropped while it ran), its outcome is unknown and the run
+ends there, whatever `retry_after_commit` says, with
+`pgmi: attempt N failed (<why>); not retried: unit U of T got no answer
+from the server, so whether it committed is unknown` and exit 13. A
+connection lost before deploy.sql runs (connect, lock, session load) is
+still retried.
+
 ## Changed by PGMI-919
 
 An attempt records the backend pid that took the deploy lock. When a later

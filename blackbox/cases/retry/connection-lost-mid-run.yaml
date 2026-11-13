@@ -1,8 +1,8 @@
-description: Rust only (contract "Whole-deployment retry"). A connection reset while the head runs, and (with retry_after_commit in pgmi.yaml, since the head has committed) one in the tail, end that attempt; the deploy runs again from the start on a new connection and succeeds, one stderr line per retried attempt, and --json lists every attempt with the units it committed
+description: Rust only (contract "Whole-deployment retry"). A connection reset before deploy.sql runs (here while the session tables are created) ends that attempt and the deploy runs again from the start on a new connection and succeeds, one stderr line per retried attempt, --json listing every attempt; a reset while a unit of deploy.sql runs leaves its outcome unknown, so it is never retried (PGMI-970), even with retry_after_commit
 impl: rust
 proxy:
-  - {query: head_sleep, do: reset, after: 0.5, times: 1, step: 1}
-  - {query: tail_sleep, do: reset, after: 0.5, times: 1, step: 2}
+  - {query: "PGMI Session Schema", do: reset, times: 1, step: 1}
+  - {query: head_sleep, do: reset, after: 0.5, times: 1, step: 2}
 project:
   files:
     pgmi.yaml: "retry_after_commit: true\n"
@@ -14,28 +14,28 @@ project:
       SELECT pg_sleep(1) AS head_sleep;
       COMMIT;
       INSERT INTO marker VALUES ('tail-1');
-      SELECT pg_sleep(1) AS tail_sleep;
       INSERT INTO marker VALUES ('tail-2');
 steps:
   - sql: CREATE DATABASE "{db}"
     database: maintenance
-  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}", --json]
     timeout: 30
     expect:
       exit: 0
+      json: {status: success, exitCode: 0}
+      stdout: ['"attempts": \[\s*\{\s*"durationMs": \d+,\s*"message": "[^"]+",\s*"startedAt": "[^"]+"\s*\},\s*\{\s*"durationMs": \d+,\s*"startedAt": "[^"]+",\s*"unitsCommitted": 3\s*\}\s*\]', '"timeUsedMs": \d+']
       stderr: ["^pgmi: attempt 1 failed \\(connection lost\\); retrying in [0-9.]+m?s, [0-9ms.]+ left$"]
       stderr_not: ["attempt 2 failed"]
       sql:
         - query: SELECT coalesce(string_agg(phase, ',' ORDER BY ctid), '') FROM marker
           rows: [["head,tail-1,tail-2"]]
-  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}", --json]
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
     delay: 1
     timeout: 30
     expect:
-      exit: 0
-      json: {status: success, exitCode: 0}
-      stdout: ['"attempts": \[\s*\{\s*"durationMs": \d+,\s*"message": "[^"]+",\s*"startedAt": "[^"]+",\s*"unitsCommitted": 2\s*\},\s*\{\s*"durationMs": \d+,\s*"startedAt": "[^"]+",\s*"unitsCommitted": 4\s*\}\s*\]', '"timeUsedMs": \d+']
-      stderr: ["^pgmi: attempt 1 failed \\(connection lost\\); retrying in"]
+      exit: 13
+      stderr: ["^pgmi: attempt 1 failed \\(connection lost\\); not retried: unit 1 of 3 got no answer from the server, so whether it committed is unknown$"]
+      stderr_not: ["retrying in"]
       sql:
         - query: SELECT coalesce(string_agg(phase, ',' ORDER BY ctid), '') FROM marker
-          rows: [["head,tail-1,tail-2,head,tail-1,head,tail-1,tail-2"]]
+          rows: [["head,tail-1,tail-2"]]

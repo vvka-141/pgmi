@@ -1,0 +1,29 @@
+description: owner decision 2026-11-13 (PGMI-970, consistent with PGMI-918). The connection resets while a unit runs and the server still commits it - the reply is lost, so whether it committed is unknown - the deploy is never retried and fails (exit 13); the INSERT ran at most once (Go may cancel it on the server, Rust leaves the server to finish, so it ran exactly once)
+proxy:
+  - {query: lost_reply, do: reset, after: 0.3, times: 1}
+project:
+  files:
+    deploy.sql: |
+      INSERT INTO marker VALUES ('ran');
+      SELECT pg_sleep(1) AS lost_reply;
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - sql: CREATE TABLE marker (v text)
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    timeout: 30
+    expect:
+      exit: 13
+      rust:
+        stderr: ["^pgmi: attempt 1 failed \\(connection lost\\); not retried: unit 1 of 1 got no answer from the server, so whether it committed is unknown$", "whether it committed is unknown, check the database"]
+        stderr_not: ["retrying in"]
+  - sql: SELECT 1
+    delay: 2
+    expect:
+      sql:
+        - query: SELECT count(*) <= 1 FROM marker
+          rows: [[true]]
+      rust:
+        sql:
+          - query: SELECT count(*) FROM marker
+            rows: [[1]]
