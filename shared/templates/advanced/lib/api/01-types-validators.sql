@@ -15,6 +15,7 @@
 -- The JSON Schema domain validates top-level keyword shapes at DDL time via
 -- api.is_valid_json_schema — this catches malformed schemas before they reach
 -- runtime. Not a full JSON Schema validator; does not recurse into subschemas.
+-- One function, long because it is one CHECK: a domain takes one expression.
 
 CREATE OR REPLACE FUNCTION api.is_valid_json_schema(p_value jsonb)
 RETURNS boolean

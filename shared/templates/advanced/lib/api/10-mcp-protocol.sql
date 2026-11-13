@@ -138,6 +138,14 @@ COMMENT ON FUNCTION api.mcp_ping(jsonb) IS
 -- ============================================================================
 -- Refusals before dispatch
 -- ============================================================================
+-- Whether a request's params._meta names a protocol version: that is what
+-- makes it a 2026-07-28 era request.
+CREATE OR REPLACE FUNCTION internal.mcp_names_protocol_version(p_meta jsonb)
+RETURNS boolean
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT COALESCE(jsonb_typeof(p_meta) = 'object' AND p_meta ? 'io.modelcontextprotocol/protocolVersion', false);
+$$;
+
 -- A 2026-07-28 request must name a version in api.mcp_supported_versions()
 -- (else -32022, data {supported, requested}) and declare
 -- io.modelcontextprotocol/clientCapabilities (else -32602); server/discover
@@ -147,7 +155,7 @@ CREATE OR REPLACE FUNCTION internal.mcp_meta_refusal(p_request jsonb)
 RETURNS jsonb
 LANGUAGE sql STABLE AS $$
     SELECT CASE
-               WHEN NOT r.meta ? 'io.modelcontextprotocol/protocolVersion'
+               WHEN NOT internal.mcp_names_protocol_version(r.meta)
                     OR p_request->>'jsonrpc' IS DISTINCT FROM '2.0'
                     OR COALESCE(jsonb_typeof(r.id) NOT IN ('string', 'number'), true)
                     OR r.method IS NULL OR r.method LIKE 'notifications/%'
@@ -285,7 +293,6 @@ DECLARE
     v_params jsonb;
     v_id jsonb;
     v_is_notification boolean;
-    v_meta jsonb;
     v_modern boolean;
     v_refusal jsonb;
     v_response api.mcp_response;
@@ -330,8 +337,7 @@ BEGIN
         RETURN ROW(NULL::jsonb)::api.mcp_response;
     END IF;
 
-    v_meta := CASE WHEN jsonb_typeof(v_params->'_meta') = 'object' THEN v_params->'_meta' END;
-    v_modern := v_method = 'server/discover' OR COALESCE(v_meta ? 'io.modelcontextprotocol/protocolVersion', false);
+    v_modern := v_method = 'server/discover' OR internal.mcp_names_protocol_version(v_params->'_meta');
 
     v_refusal := internal.mcp_meta_refusal(p_request);
     IF v_refusal IS NOT NULL THEN
@@ -432,9 +438,6 @@ COMMENT ON FUNCTION api.mcp_handle_request(jsonb, jsonb) IS
 -- no-policy row, so there is always exactly one row. The request arrives as
 -- text: a body every JSON parser accepts but jsonb refuses (a \u0000, a lone
 -- surrogate) is refused here with -32700, not a cast error and a 500.
-DROP FUNCTION IF EXISTS api.mcp_request_policy(jsonb, text);
-DROP FUNCTION IF EXISTS api.mcp_request_policy(jsonb, text, text, text, text);
-
 CREATE OR REPLACE FUNCTION internal.mcp_request_policy(
     p_request jsonb,
     p_requested_isolation text DEFAULT NULL,
@@ -478,8 +481,7 @@ AS $$
     )
     SELECT p.*,
            COALESCE(p_protocol_version <> ALL (api.mcp_legacy_versions()), false)
-               OR COALESCE(jsonb_typeof(p_request->'params'->'_meta') = 'object'
-                           AND p_request->'params'->'_meta' ? 'io.modelcontextprotocol/protocolVersion', false),
+               OR internal.mcp_names_protocol_version(p_request->'params'->'_meta'),
            internal.mcp_request_refusal(p_request, p_protocol_version, p_mcp_method, p_mcp_name),
            policy.handler_function_name,
            policy.input_annotations

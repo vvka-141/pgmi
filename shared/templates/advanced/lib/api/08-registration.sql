@@ -463,7 +463,8 @@ $$;
 -- with a pg_proc snapshot, for all three protocols. An MCP row also takes its
 -- handler type on update, and keeps JSON in and out; REST and RPC store their
 -- declared media types and response headers. No search_path of its own: the
--- snapshot reads pg_get_functiondef under the registering function's.
+-- snapshot reads pg_get_functiondef under the registering function's. Long
+-- only for its column lists: one upsert keeps the function and its row in step.
 CREATE OR REPLACE FUNCTION internal.install_handler(
     p_id            uuid,
     p_handler_type  api.handler_type,
@@ -574,6 +575,132 @@ $%s$ LANGUAGE plpgsql$sql$,
 END;
 $func$;
 
+-- A REST route's parameters (api.path_template_param_spec) from its path
+-- template; refuses a template no route can have. Matching is liberal at the
+-- funnel and exact at the identity: rest_dispatch canonicalizes every valid
+-- spelling of a path before matching, and a route declares its identity once,
+-- as a template in canonical form. A parameter takes a whole segment; that
+-- keeps the ranking of overlapping routes complete.
+CREATE OR REPLACE FUNCTION internal.rest_path_param_spec(p_label text, p_path text)
+RETURNS jsonb
+LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE
+    v_mixed_segment text;
+    v_repeated_param text;
+BEGIN
+    IF p_path IS NULL THEN
+        RAISE EXCEPTION 'REST handler %: metadata requires "path" (e.g. /projects/{id})', p_label
+            USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+
+    SELECT seg INTO v_mixed_segment
+    FROM unnest(string_to_array(ltrim(p_path, '/'), '/')) AS seg
+    WHERE seg ~ '[{}]' AND seg !~ '^\{[A-Za-z_][A-Za-z0-9_]*(:[A-Za-z0-9_]*)?\}$'
+    LIMIT 1;
+    IF v_mixed_segment IS NOT NULL THEN
+        RAISE EXCEPTION 'REST handler %: path segment "%" mixes literal text and a parameter', p_label, v_mixed_segment
+            USING ERRCODE = 'invalid_parameter_value',
+                  HINT = 'A parameter takes a whole segment: /files/{name}, not /files/{name}.json.';
+    END IF;
+
+    SELECT m[1] INTO v_repeated_param
+    FROM regexp_matches(p_path, '\{([^}:]+)', 'g') AS m
+    GROUP BY m[1]
+    HAVING count(*) > 1
+    LIMIT 1;
+    IF v_repeated_param IS NOT NULL THEN
+        RAISE EXCEPTION 'REST handler %: path parameter "%" appears twice in %', p_label, v_repeated_param, p_path
+            USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+
+    BEGIN
+        RETURN api.path_template_param_spec(p_path);
+    EXCEPTION WHEN invalid_parameter_value THEN
+        RAISE EXCEPTION 'REST handler %: %', p_label, SQLERRM
+            USING ERRCODE = 'invalid_parameter_value',
+                  HINT = 'Use {name}, {name:uuid} or {name:int}.';
+    END;
+END;
+$$;
+
+-- The 2xx statuses a REST route declares in successStatus (default 200).
+-- OpenAPI publishes only these, so every 2xx the body spells out, in a
+-- response call or a CASE branch, must be one of them; a status computed at
+-- run time is not checked.
+CREATE OR REPLACE FUNCTION internal.declared_success_statuses(p_label text, p_success_status jsonb, p_handler_body text)
+RETURNS int[]
+LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE
+    v_declared jsonb := COALESCE(p_success_status, '200');
+    v_statuses int[];
+    v_undeclared int[];
+BEGIN
+    IF jsonb_typeof(v_declared) IS DISTINCT FROM 'array' THEN
+        v_declared := jsonb_build_array(v_declared);
+    END IF;
+    v_statuses := ARRAY(
+        SELECT DISTINCT s::text::int FROM jsonb_array_elements(v_declared) s WHERE s::text ~ '^2[0-9][0-9]$');
+    IF cardinality(v_statuses) IS DISTINCT FROM jsonb_array_length(v_declared)
+       OR cardinality(v_statuses) IS NOT DISTINCT FROM 0 THEN
+        RAISE EXCEPTION 'REST handler %: successStatus must be a 2xx status or an array of distinct 2xx statuses, got %',
+            p_label, v_declared
+            USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+    v_undeclared := ARRAY(
+        SELECT DISTINCT m[1]::int
+        FROM regexp_matches(p_handler_body,
+            '(?:_response\s*\(|\mreturn\s*\(|\mrow\s*\(|\mthen\s+|\melse\s+)\s*(2[0-9][0-9])\M', 'gi') AS m
+        WHERE NOT m[1]::int = ANY (v_statuses)
+        ORDER BY 1);
+    IF cardinality(v_undeclared) > 0 THEN
+        RAISE EXCEPTION 'REST handler %: the body answers % but successStatus is %',
+            p_label, array_to_string(v_undeclared, ', '), v_declared
+            USING ERRCODE = 'invalid_parameter_value',
+                  HINT = 'Declare every 2xx the handler sends in successStatus, as an array when there are several, so OpenAPI publishes them.';
+    END IF;
+    RETURN v_statuses;
+END;
+$$;
+
+-- A 201 names what it created: a locationTemplate, or noLocation with the
+-- reason no GET reads it, and never both.
+CREATE OR REPLACE FUNCTION internal.refuse_bad_location(
+    p_label text, p_metadata jsonb, p_success_statuses int[], p_output_schema api.json_schema)
+RETURNS void
+LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    v_template text := p_metadata->>'locationTemplate';
+    v_problem text;
+BEGIN
+    IF (p_metadata ? 'noLocation') AND (jsonb_typeof(p_metadata->'noLocation') IS DISTINCT FROM 'string'
+                                        OR btrim(p_metadata->>'noLocation') = ''
+                                        OR v_template IS NOT NULL
+                                        OR NOT 201 = ANY (p_success_statuses)) THEN
+        RAISE EXCEPTION 'REST handler %: noLocation is the reason a 201 names no Location: a non-empty string, on a route that answers 201, without a locationTemplate',
+            p_label
+            USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+    IF 201 = ANY (p_success_statuses) AND v_template IS NULL AND NOT (p_metadata ? 'noLocation') THEN
+        RAISE EXCEPTION 'REST handler %: a 201 names what it created: declare a locationTemplate, or noLocation with the reason no GET reads it',
+            p_label
+            USING ERRCODE = 'invalid_parameter_value',
+                  HINT = 'locationTemplate: /things/{thingId}, each {name} a required top-level property of the outputSchema.';
+    END IF;
+    IF v_template IS NOT NULL THEN
+        v_problem := internal.location_template_problem(v_template, p_success_statuses,
+                                                        internal.resolved_schema(p_output_schema::jsonb));
+        IF v_problem IS NOT NULL THEN
+            RAISE EXCEPTION 'REST handler %: locationTemplate %: %', p_label, v_template, v_problem
+                USING ERRCODE = 'invalid_parameter_value',
+                      HINT = 'A 201 names the created resource: /things/{thingId}, each {name} a required top-level property of the outputSchema.';
+        END IF;
+    END IF;
+END;
+$$;
+
+-- One registration reads top to bottom: each metadata key is checked in the
+-- order the refusals reach the author, then the handler and its route are
+-- stored together. The checks with several steps live in the functions above.
 CREATE OR REPLACE FUNCTION api.create_or_replace_rest_handler(
     p_metadata jsonb,
     p_handler_body text
@@ -604,32 +731,31 @@ DECLARE
     v_input_schema api.json_schema;
     v_output_schema api.json_schema;
 
+    v_label text;
     v_path text;
     v_canonical_path text;
     v_existing_handler uuid;
     v_retired_key text;
-    v_bad_segment text;
     v_path_params jsonb;
     v_probe text;
     v_overlap_msg text;
     v_query_schema api.json_schema;
     v_query_problem text;
-    v_success_status jsonb;
     v_success_statuses int[];
-    v_body_statuses int[];
     v_location_template text;
 BEGIN
     v_id := (p_metadata->>'id')::uuid;
     IF v_id IS NULL THEN
         RAISE EXCEPTION 'REST handler metadata requires "id" (uuid)';
     END IF;
+    v_label := COALESCE(p_metadata->>'name', v_id::text);
 
     SELECT k INTO v_retired_key
     FROM unnest(ARRAY['uri', 'example', 'version', 'query']) AS k
     WHERE p_metadata ? k
     LIMIT 1;
     IF v_retired_key IS NOT NULL THEN
-        RAISE EXCEPTION 'REST handler %: the "%" key is not supported', COALESCE(p_metadata->>'name', v_id::text), v_retired_key
+        RAISE EXCEPTION 'REST handler %: the "%" key is not supported', v_label, v_retired_key
             USING ERRCODE = 'invalid_parameter_value',
                   HINT = CASE v_retired_key
                       WHEN 'version' THEN 'Version in the path instead: /v2/projects.'
@@ -643,48 +769,13 @@ BEGIN
     v_query_problem := CASE WHEN p_metadata ? 'querySchema'
                             THEN internal.query_schema_problem(p_metadata->'querySchema') END;
     IF v_query_problem IS NOT NULL THEN
-        RAISE EXCEPTION 'REST handler %: %', COALESCE(p_metadata->>'name', v_id::text), v_query_problem
+        RAISE EXCEPTION 'REST handler %: %', v_label, v_query_problem
             USING ERRCODE = 'invalid_parameter_value';
     END IF;
     v_query_schema := (p_metadata->'querySchema')::api.json_schema;
 
-    -- Matching is liberal at the funnel and exact at the identity: rest_dispatch
-    -- canonicalizes every valid spelling of a path before matching, and a
-    -- route declares its identity once, as a template in canonical form. A
-    -- parameter takes a whole segment; that keeps the ranking below complete.
     v_path := p_metadata->>'path';
-    IF v_path IS NULL THEN
-        RAISE EXCEPTION 'REST handler %: metadata requires "path" (e.g. /projects/{id})', COALESCE(p_metadata->>'name', v_id::text)
-            USING ERRCODE = 'invalid_parameter_value';
-    END IF;
-
-    SELECT seg INTO v_bad_segment
-    FROM unnest(string_to_array(ltrim(v_path, '/'), '/')) AS seg
-    WHERE seg ~ '[{}]' AND seg !~ '^\{[A-Za-z_][A-Za-z0-9_]*(:[A-Za-z0-9_]*)?\}$'
-    LIMIT 1;
-    IF v_bad_segment IS NOT NULL THEN
-        RAISE EXCEPTION 'REST handler %: path segment "%" mixes literal text and a parameter', COALESCE(p_metadata->>'name', v_id::text), v_bad_segment
-            USING ERRCODE = 'invalid_parameter_value',
-                  HINT = 'A parameter takes a whole segment: /files/{name}, not /files/{name}.json.';
-    END IF;
-
-    SELECT m[1] INTO v_bad_segment
-    FROM regexp_matches(v_path, '\{([^}:]+)', 'g') AS m
-    GROUP BY m[1]
-    HAVING count(*) > 1
-    LIMIT 1;
-    IF v_bad_segment IS NOT NULL THEN
-        RAISE EXCEPTION 'REST handler %: path parameter "%" appears twice in %', COALESCE(p_metadata->>'name', v_id::text), v_bad_segment, v_path
-            USING ERRCODE = 'invalid_parameter_value';
-    END IF;
-
-    BEGIN
-        v_path_params := api.path_template_param_spec(v_path);
-    EXCEPTION WHEN invalid_parameter_value THEN
-        RAISE EXCEPTION 'REST handler %: %', COALESCE(p_metadata->>'name', v_id::text), SQLERRM
-            USING ERRCODE = 'invalid_parameter_value',
-                  HINT = 'Use {name}, {name:uuid} or {name:int}.';
-    END;
+    v_path_params := internal.rest_path_param_spec(v_label, v_path);
 
     v_canonical_path := api.path_template_canonical(v_path);
     v_address_regexp := api.path_template_to_regex(v_canonical_path);
@@ -702,7 +793,7 @@ BEGIN
       ON t.seg = '{' || (p.param->>'name') || '}';
 
     IF api.canonical_path(v_probe) IS DISTINCT FROM v_probe OR v_path ~ '[?#]' THEN
-        RAISE EXCEPTION 'REST handler %: path % is not in canonical form', COALESCE(p_metadata->>'name', v_id::text), v_path
+        RAISE EXCEPTION 'REST handler %: path % is not in canonical form', v_label, v_path
             USING ERRCODE = 'invalid_parameter_value',
                   HINT = 'Start with /, no trailing or doubled slash, no . or .. segment, no query, no percent-encoded unreserved character.';
     END IF;
@@ -713,7 +804,7 @@ BEGIN
     IF left(v_http_method, 1) IS DISTINCT FROM '^' OR right(v_http_method, 1) IS DISTINCT FROM '$' THEN
         RAISE EXCEPTION
             'Route % httpMethod must be anchored with ^ and $, got %',
-            COALESCE(p_metadata->>'name', v_id::text), v_http_method
+            v_label, v_http_method
             USING ERRCODE = 'invalid_parameter_value';
     END IF;
 
@@ -721,73 +812,24 @@ BEGIN
     v_title := p_metadata->>'title';
     v_description := p_metadata->>'description';
     SELECT d.access, d.permissions INTO v_access, v_permissions
-    FROM internal.declared_access(p_metadata, COALESCE(v_name, v_id::text)) d;
+    FROM internal.declared_access(p_metadata, v_label) d;
     PERFORM internal.refuse_unknown_handler_keys(p_metadata,
         ARRAY['accepts', 'access', 'autoLog', 'description', 'httpMethod', 'id', 'inputSchema',
               'minTransactionIsolation', 'name', 'outputSchema', 'path', 'permissions', 'produces',
               'locationTemplate', 'noLocation', 'querySchema', 'readOnly', 'responseHeaders', 'successStatus', 'title'],
-        format('REST handler %s', COALESCE(v_name, v_id::text)));
+        format('REST handler %s', v_label));
     v_min_isolation := internal.normalize_transaction_isolation(p_metadata->>'minTransactionIsolation', true);
     v_read_only := COALESCE((p_metadata->>'readOnly')::boolean, false);
     v_auto_log := COALESCE((p_metadata->>'autoLog')::boolean, NOT v_read_only);
-    PERFORM internal.refuse_logged_read_only(v_read_only, v_auto_log, COALESCE(v_name, v_id::text));
+    PERFORM internal.refuse_logged_read_only(v_read_only, v_auto_log, v_label);
     v_input_schema := (p_metadata->'inputSchema')::api.json_schema;
     v_output_schema := (p_metadata->'outputSchema')::api.json_schema;
-    PERFORM internal.refuse_dangling_refs(COALESCE(v_name, v_id::text),
+    PERFORM internal.refuse_dangling_refs(v_label,
         jsonb_build_array(v_input_schema, v_output_schema, p_metadata->'querySchema'));
-    PERFORM internal.refuse_unenforced_keywords('REST handler ' || COALESCE(v_name, v_id::text), v_input_schema::jsonb);
-    v_success_status := COALESCE(p_metadata->'successStatus', '200');
-    IF jsonb_typeof(v_success_status) IS DISTINCT FROM 'array' THEN
-        v_success_status := jsonb_build_array(v_success_status);
-    END IF;
-    v_success_statuses := ARRAY(
-        SELECT DISTINCT s::text::int FROM jsonb_array_elements(v_success_status) s WHERE s::text ~ '^2[0-9][0-9]$');
-    IF cardinality(v_success_statuses) IS DISTINCT FROM jsonb_array_length(v_success_status)
-       OR cardinality(v_success_statuses) IS NOT DISTINCT FROM 0 THEN
-        RAISE EXCEPTION 'REST handler %: successStatus must be a 2xx status or an array of distinct 2xx statuses, got %',
-            COALESCE(v_name, v_id::text), v_success_status
-            USING ERRCODE = 'invalid_parameter_value';
-    END IF;
-    -- OpenAPI publishes only the declared statuses, so every 2xx the body
-    -- spells out, in a response call or a CASE branch, must be one of them.
-    -- A status computed at run time is not checked.
-    v_body_statuses := ARRAY(
-        SELECT DISTINCT m[1]::int
-        FROM regexp_matches(p_handler_body,
-            '(?:_response\s*\(|\mreturn\s*\(|\mrow\s*\(|\mthen\s+|\melse\s+)\s*(2[0-9][0-9])\M', 'gi') AS m
-        WHERE NOT m[1]::int = ANY (v_success_statuses)
-        ORDER BY 1);
-    IF cardinality(v_body_statuses) > 0 THEN
-        RAISE EXCEPTION 'REST handler %: the body answers % but successStatus is %',
-            COALESCE(v_name, v_id::text), array_to_string(v_body_statuses, ', '), v_success_status
-            USING ERRCODE = 'invalid_parameter_value',
-                  HINT = 'Declare every 2xx the handler sends in successStatus, as an array when there are several, so OpenAPI publishes them.';
-    END IF;
-
+    PERFORM internal.refuse_unenforced_keywords('REST handler ' || v_label, v_input_schema::jsonb);
+    v_success_statuses := internal.declared_success_statuses(v_label, p_metadata->'successStatus', p_handler_body);
     v_location_template := p_metadata->>'locationTemplate';
-    IF (p_metadata ? 'noLocation') AND (jsonb_typeof(p_metadata->'noLocation') IS DISTINCT FROM 'string'
-                                        OR btrim(p_metadata->>'noLocation') = ''
-                                        OR v_location_template IS NOT NULL
-                                        OR NOT 201 = ANY (v_success_statuses)) THEN
-        RAISE EXCEPTION 'REST handler %: noLocation is the reason a 201 names no Location: a non-empty string, on a route that answers 201, without a locationTemplate',
-            COALESCE(v_name, v_id::text)
-            USING ERRCODE = 'invalid_parameter_value';
-    END IF;
-    IF 201 = ANY (v_success_statuses) AND v_location_template IS NULL AND NOT (p_metadata ? 'noLocation') THEN
-        RAISE EXCEPTION 'REST handler %: a 201 names what it created: declare a locationTemplate, or noLocation with the reason no GET reads it',
-            COALESCE(v_name, v_id::text)
-            USING ERRCODE = 'invalid_parameter_value',
-                  HINT = 'locationTemplate: /things/{thingId}, each {name} a required top-level property of the outputSchema.';
-    END IF;
-    IF v_location_template IS NOT NULL THEN
-        v_bad_segment := internal.location_template_problem(v_location_template, v_success_statuses,
-                                                            internal.resolved_schema(v_output_schema::jsonb));
-        IF v_bad_segment IS NOT NULL THEN
-            RAISE EXCEPTION 'REST handler %: locationTemplate %: %', COALESCE(v_name, v_id::text), v_location_template, v_bad_segment
-                USING ERRCODE = 'invalid_parameter_value',
-                      HINT = 'A 201 names the created resource: /things/{thingId}, each {name} a required top-level property of the outputSchema.';
-        END IF;
-    END IF;
+    PERFORM internal.refuse_bad_location(v_label, p_metadata, v_success_statuses, v_output_schema);
 
     RAISE DEBUG 'register REST: id=%, path=%, method=%', v_id, v_path, v_http_method;
 
@@ -830,7 +872,7 @@ BEGIN
     -- shape with a common method cannot be ordered, so the second is refused.
     SELECT string_agg(
         format('%s has the shape of %s (%s)',
-            COALESCE(v_name, v_id::text),
+            v_label,
             COALESCE(r.route_name, r.handler_object_id::text),
             r.canonical_path),
         ', '
@@ -1426,3 +1468,18 @@ CREATE OR REPLACE TRIGGER tr_handler_permission_catalog_generation
 CREATE OR REPLACE TRIGGER tr_schema_component_catalog_generation
     AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON api.schema_component
     FOR EACH STATEMENT EXECUTE FUNCTION internal.bump_catalog_generation();
+
+-- ============================================================================
+-- REGISTRY COLUMN NOTES: what the run-once table files say wrong
+-- ============================================================================
+-- A run-once file takes comment edits only, and a COMMENT ON is a statement,
+-- so the corrections live here, after the files that wrote the first versions.
+
+COMMENT ON COLUMN api.handler.handler_type IS
+    'Protocol type: rest, rpc, mcp_tool, mcp_resource or mcp_prompt.';
+
+COMMENT ON COLUMN api.handler.handler_function_name IS
+    'Name of the handler function in schema api, unqualified, for display and debugging.';
+
+COMMENT ON COLUMN api.mcp_route.effect IS
+    'A tool''s effect block {effect read}, {effect write, reversible} or {effect proposal, proposes}, from its metadata (internal.mcp_tool_effect); tools/list publishes it as _meta["pgmi/effect"]. NULL for a resource or prompt.';

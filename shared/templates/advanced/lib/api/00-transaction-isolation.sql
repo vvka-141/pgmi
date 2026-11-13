@@ -53,7 +53,7 @@ DECLARE
     v_result text;
 BEGIN
     IF p_value IS NULL THEN
-        RETURN NULL;  -- NULL floor means 'no requirement': pass through, never raise
+        RETURN NULL;
     END IF;
     v_result := CASE regexp_replace(lower(btrim(p_value)), '[\s_-]+', ' ', 'g')
         WHEN 'read committed'   THEN 'read committed'

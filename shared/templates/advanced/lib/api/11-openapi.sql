@@ -163,6 +163,8 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
         'schema', jsonb_build_object('type', 'string'));
 $$;
 
+-- One statement, long because the document is one nested value: each part is
+-- a CTE over the registry, and the helpers above build the repeated pieces.
 CREATE OR REPLACE FUNCTION api.openapi_document()
 RETURNS jsonb
 LANGUAGE plpgsql STABLE
@@ -313,7 +315,7 @@ BEGIN
             'etag', v_etag,
             'cache-control', 'no-cache'
         ]);
-        v_resp.content := NULL;   -- 304 carries no body
+        v_resp.content := NULL;
         RETURN v_resp;
     END IF;
 

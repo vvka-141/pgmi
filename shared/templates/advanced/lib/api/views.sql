@@ -386,8 +386,7 @@ SELECT
     e.mcp_type,
     e.mcp_name,
 
-    COALESCE(((e.response).envelope->>'error') IS NOT NULL
-             OR (e.response).envelope->'result'->'isError' = 'true'::jsonb, false) AS is_error,
+    internal.mcp_is_error((e.response).envelope) AS is_error,
 
     e.handler_object_id,
     h.handler_function_name,
@@ -418,8 +417,7 @@ WITH exchange_base AS (
     FROM api.rpc_exchange
     UNION ALL
     SELECT 'mcp_' || mcp_type, NULL,
-           COALESCE(((response).envelope->>'error') IS NOT NULL
-                    OR (response).envelope->'result'->'isError' = 'true'::jsonb, false)
+           internal.mcp_is_error((response).envelope)
     FROM api.mcp_exchange
 )
 SELECT
@@ -468,8 +466,7 @@ WITH
     mcp_stats AS (
         SELECT
             count(*) AS total,
-            count(*) FILTER (WHERE (response).envelope->>'error' IS NOT NULL
-                                OR (response).envelope->'result'->'isError' = 'true'::jsonb) AS errors,
+            count(*) FILTER (WHERE internal.mcp_is_error((response).envelope)) AS errors,
             avg(completed_at - enqueued_at) AS avg_duration
         FROM api.mcp_exchange
     )

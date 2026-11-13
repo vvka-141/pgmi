@@ -3,7 +3,11 @@
     id="a7f01000-0009-4000-8000-000000000001"
     idempotent="true">
   <description>
-    Protocol dispatchers: REST, RPC, and MCP request invocation
+    The gateways' side in the database: how a request's session handles become
+    its caller (the trust boundary), REST, RPC and MCP dispatch, the JSON Schema
+    checks on what crosses them, the exchange log, MCP discovery, the
+    transaction policy a gateway asks for before it opens a transaction, and
+    replay of a logged exchange.
   </description>
   <sortKeys>
     <key>004/009</key>
@@ -12,7 +16,7 @@
 */
 
 -- ============================================================================
--- Request context
+-- REQUEST CONTEXT: the trust boundary, where a request's handles become its caller
 -- ============================================================================
 -- TRUST BOUNDARY (security critical):
 --
@@ -66,9 +70,7 @@ $$;
 COMMENT ON FUNCTION api.set_auth_context(extensions.hstore) IS
     'Gateway trust boundary: resolves the x-login-session and x-organization-session handles into the request context. No identity or organization is taken from a header.';
 
-DROP FUNCTION IF EXISTS internal.resolve_connection_context(text);
-
-CREATE FUNCTION internal.resolve_connection_context(p_connection text)
+CREATE OR REPLACE FUNCTION internal.resolve_connection_context(p_connection text)
 RETURNS jsonb
 LANGUAGE plpgsql AS $$
 BEGIN
@@ -89,8 +91,6 @@ $$;
 
 COMMENT ON FUNCTION internal.resolve_client_context(text, text, text) IS
     'Hook the application replaces: resolves the identity the gateway verified in an MCP client''s access token (issuer, subject, client id) into the request context, or returns why the client cannot act yet, as {code, message, ...}. The default admits no one.';
-
-DROP FUNCTION IF EXISTS internal.apply_mcp_auth_context(jsonb);
 
 CREATE OR REPLACE FUNCTION internal.resolve_mcp_caller(p_context jsonb)
 RETURNS jsonb
@@ -126,20 +126,29 @@ LANGUAGE sql IMMUTABLE AS $$
     SELECT api.mcp_error(-31001, p_refusal->>'message', p_request_id, p_refusal - 'message');
 $$;
 
--- The body never names the missing permission: the log has the truth.
+-- What every protocol tells a caller an access denial means. It never names
+-- the missing permission: the log has the truth.
+CREATE OR REPLACE FUNCTION internal.access_denial_text(p_reason text, OUT message text, OUT code text)
+LANGUAGE sql IMMUTABLE AS $$
+    SELECT CASE p_reason
+               WHEN 'unauthenticated' THEN 'Authentication required'
+               WHEN 'organization_required' THEN 'This operation needs an active organization'
+               ELSE 'You do not have access to this operation'
+           END,
+           CASE p_reason
+               WHEN 'unauthenticated' THEN 'pgmi.unauthenticated'
+               WHEN 'organization_required' THEN 'pgmi.organization_required'
+               ELSE 'pgmi.forbidden'
+           END;
+$$;
+
 CREATE OR REPLACE FUNCTION internal.access_denied_response(p_reason text)
 RETURNS api.http_response
 LANGUAGE sql IMMUTABLE AS $$
-    SELECT CASE p_reason
-        WHEN 'unauthenticated' THEN
-            api.problem_response(401, 'Unauthorized', 'Authentication required', code => 'pgmi.unauthenticated')
-        WHEN 'organization_required' THEN
-            api.problem_response(403, 'Forbidden', 'This operation needs an active organization',
-                                 code => 'pgmi.organization_required')
-        ELSE
-            api.problem_response(403, 'Forbidden', 'You do not have access to this operation',
-                                 code => 'pgmi.forbidden')
-    END;
+    SELECT api.problem_response(CASE WHEN p_reason = 'unauthenticated' THEN 401 ELSE 403 END,
+                                CASE WHEN p_reason = 'unauthenticated' THEN 'Unauthorized' ELSE 'Forbidden' END,
+                                d.message, code => d.code)
+    FROM internal.access_denial_text(p_reason) d;
 $$;
 
 -- What a handler's uncaught error tells the client, shared by the REST, RPC
@@ -205,7 +214,7 @@ COMMENT ON FUNCTION internal.sqlstate_problem(text, text, boolean) IS
     'Maps a handler''s uncaught SQLSTATE to status, title, client detail, pgmi.* problem code and JSON-RPC code. Unlisted SQLSTATEs are 500 / -32603.';
 
 -- ============================================================================
--- REST Gateway
+-- REST ROUTING: which handler serves a method and a path
 -- ============================================================================
 
 -- The routing rule: which live handler serves a method and a canonical path.
@@ -255,6 +264,10 @@ AS $$
                           OR (type = 'int' AND (value !~ '^-?[0-9]+$' OR common.try_cast(value, NULL::int) IS NULL)))
     FROM value;
 $$;
+
+-- ============================================================================
+-- RESPONSES AND THE EXCHANGE LOG: what every gateway checks, stamps, strips and records
+-- ============================================================================
 
 -- Vary members of both lists, lowercased and deduplicated in first-seen
 -- order; '*' from the handler wins, since it already varies on everything.
@@ -497,6 +510,144 @@ $$;
 COMMENT ON FUNCTION internal.apply_request_log_context(jsonb) IS
     'Hook the application replaces with internal.request_log_context(): sets the request context from what that hook stored. The framework knows no sessions, so its default refuses.';
 
+-- Exchange logging is a write, so a READ ONLY transaction skips it: skipping
+-- beats failing every correctly opened read-only request. autoLog=false holds
+-- on the failure path too: a POST /login registered unlogged would otherwise
+-- persist plaintext credentials on any constraint violation.
+CREATE OR REPLACE FUNCTION internal.log_rest_exchange(
+    p_handler uuid, p_auto_log boolean, p_request api.rest_request, p_response api.http_response)
+RETURNS void
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF p_auto_log AND NOT internal.transaction_is_read_only() THEN
+        INSERT INTO api.rest_exchange (handler_object_id, context, request, response, completed_at)
+        VALUES (p_handler, internal.request_log_context(),
+                internal.loggable(p_request), internal.loggable(p_response), now());
+    END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION internal.log_rpc_exchange(
+    p_handler uuid, p_auto_log boolean, p_request api.rpc_request, p_response api.http_response)
+RETURNS void
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF p_auto_log AND NOT internal.transaction_is_read_only() THEN
+        INSERT INTO api.rpc_exchange (handler_object_id, context, request, response, completed_at)
+        VALUES (p_handler, internal.request_log_context(),
+                internal.loggable(p_request), internal.loggable(p_response), now());
+    END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION internal.log_mcp_exchange(
+    p_handler uuid, p_mcp_type text, p_mcp_name text, p_request api.mcp_request, p_response api.mcp_response)
+RETURNS void
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF NOT internal.transaction_is_read_only() THEN
+        INSERT INTO api.mcp_exchange (handler_object_id, context, mcp_type, mcp_name, request, response)
+        VALUES (p_handler, internal.request_log_context(), p_mcp_type, p_mcp_name,
+                internal.loggable(p_request), p_response);
+    END IF;
+END;
+$$;
+
+-- The checks REST and RPC make between the access decision and the handler,
+-- in this order: the isolation floor and the read-only declaration (the
+-- gateway can only read the transaction; the caller opens it as
+-- api.*_route_policy says, see lib/api/00-transaction-isolation.sql), then the
+-- declared accepts against the request Content-Type (only when there is one)
+-- and produces against Accept. Each protocol wraps the refusal in its own
+-- envelope; all NULL when the request may run.
+CREATE OR REPLACE FUNCTION internal.route_precondition_problem(
+    p_min_isolation text,
+    p_read_only boolean,
+    p_accepts text[],
+    p_produces text[],
+    p_headers extensions.hstore,
+    OUT status integer,
+    OUT title text,
+    OUT detail text,
+    OUT code text,
+    OUT extras jsonb
+)
+LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    v_shortfall text := internal.transaction_isolation_shortfall(p_min_isolation);
+    v_content_type text;
+BEGIN
+    IF v_shortfall IS NOT NULL THEN
+        RAISE DEBUG 'route precondition: isolation too weak (need %, have %)', p_min_isolation, v_shortfall;
+        SELECT 428, 'Precondition Required',
+               format('Route requires %s isolation but current transaction uses %s.', p_min_isolation, v_shortfall),
+               'pgmi.transaction_isolation_too_weak', jsonb_build_object('requiredIsolation', p_min_isolation)
+        INTO status, title, detail, code, extras;
+        RETURN;
+    END IF;
+    IF p_read_only AND NOT internal.transaction_is_read_only() THEN
+        RAISE DEBUG 'route precondition: read-only route in a read-write transaction';
+        SELECT 428, 'Precondition Required',
+               'Route requires a READ ONLY transaction but the current transaction is read-write.',
+               'pgmi.transaction_read_only_required', jsonb_build_object('requiredReadOnly', true)
+        INTO status, title, detail, code, extras;
+        RETURN;
+    END IF;
+    v_content_type := btrim(split_part(COALESCE(p_headers->'content-type', ''), ';', 1));
+    IF v_content_type <> ''
+       AND NOT api.accept_matches(array_to_string(p_accepts, ', '), ARRAY[v_content_type]) THEN
+        SELECT 415, 'Unsupported Media Type',
+               format('Supported request content types: %s', array_to_string(p_accepts, ', ')),
+               'pgmi.unsupported_media_type'
+        INTO status, title, detail, code;
+        RETURN;
+    END IF;
+    IF NOT api.accept_matches(p_headers->'accept', p_produces) THEN
+        SELECT 406, 'Not Acceptable',
+               format('Supported content types: %s', array_to_string(p_produces, ', ')),
+               'pgmi.not_acceptable'
+        INTO status, title, detail, code;
+    END IF;
+END;
+$$;
+
+-- Whether the handler opted into $schema injection with x-include-schema: true.
+CREATE OR REPLACE FUNCTION internal.schema_injection_requested(p_response_headers jsonb)
+RETURNS boolean
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT COALESCE((
+        SELECT lower(value) = 'true'
+        FROM jsonb_each_text(p_response_headers)
+        WHERE lower(key) = 'x-include-schema'
+        LIMIT 1
+    ), false);
+$$;
+
+-- The headers of the logged copy of a failed handler's answer. Only the
+-- logged copy carries x-error-sqlstate: it is an internal diagnostic, and the
+-- sanitized body the client gets withholds the rest of the failure detail.
+CREATE OR REPLACE FUNCTION internal.handler_failure_headers(
+    p_response api.http_response, p_execution_ms numeric, p_sqlstate text)
+RETURNS extensions.hstore
+LANGUAGE sql STABLE AS $$
+    SELECT extensions.hstore(ARRAY[
+        'content-type', 'application/json; charset=utf-8',
+        'content-length', COALESCE(octet_length((p_response).content), 0)::text,
+        'x-execution-time-ms', p_execution_ms::text,
+        'x-pgmi-catalog-version', api.catalog_version(),
+        'x-error-sqlstate', p_sqlstate
+    ]);
+$$;
+
+-- ============================================================================
+-- REST GATEWAY: api.rest_invoke and its dispatcher
+-- ============================================================================
+
+-- One REST request, front to back, kept whole: the order of the checks is the
+-- contract (a stranger learns nothing before the access decision, a malformed
+-- request is a 400 whatever transaction it came in), and the handler's
+-- savepoint block must share the dispatcher's variables. Each check that is
+-- more than a line lives in a function above.
 CREATE OR REPLACE FUNCTION internal.rest_dispatch(
     p_method text,
     p_url text,
@@ -514,8 +665,7 @@ DECLARE
     v_route record;
     v_params record;
     v_path text;
-    v_content_type text;
-    v_iso_shortfall text;
+    v_precondition record;
     v_start_time timestamptz;
     v_execution_ms numeric;
     v_match_method text;
@@ -687,55 +837,12 @@ BEGIN
         END IF;
     END IF;
 
-    -- Enforce the route's transaction isolation floor. The gateway can only READ
-    -- the level; the caller must open the transaction at the required level
-    -- before the first statement (see lib/api/00-transaction-isolation.sql).
-    v_iso_shortfall := internal.transaction_isolation_shortfall(v_route.min_transaction_isolation);
-    IF v_iso_shortfall IS NOT NULL THEN
-        RAISE DEBUG 'rest_invoke: isolation too weak (need %, have %)',
-            v_route.min_transaction_isolation, v_iso_shortfall;
+    v_precondition := internal.route_precondition_problem(
+        v_route.min_transaction_isolation, v_route.read_only, v_route.accepts, v_route.produces, p_headers);
+    IF v_precondition.status IS NOT NULL THEN
         RETURN internal.finalize_rest_error(v_is_head, api.problem_response(
-            428, 'Precondition Required',
-            format('Route requires %s isolation but current transaction uses %s.',
-                   v_route.min_transaction_isolation, v_iso_shortfall),
-            code => 'pgmi.transaction_isolation_too_weak',
-            extensions => jsonb_build_object('requiredIsolation', v_route.min_transaction_isolation)
-        ), v_start_time, v_auth_extra);
-    END IF;
-
-    -- Enforce the route's read-only declaration the same way: the gateway can
-    -- only READ the access mode; the caller opens the transaction READ ONLY
-    -- (resolve-then-open via api.rest_route_policy) or is rejected fail-closed.
-    IF v_route.read_only AND NOT internal.transaction_is_read_only() THEN
-        RAISE DEBUG 'rest_invoke: read-only route in a read-write transaction';
-        RETURN internal.finalize_rest_error(v_is_head, api.problem_response(
-            428, 'Precondition Required',
-            'Route requires a READ ONLY transaction but the current transaction is read-write.',
-            code => 'pgmi.transaction_read_only_required',
-            extensions => jsonb_build_object('requiredReadOnly', true)
-        ), v_start_time, v_auth_extra);
-    END IF;
-
-    -- Enforce the handler's declared accepts against the request Content-Type.
-    -- Only when the request carries a Content-Type (a body). A handler with an
-    -- inputSchema accepts application/json by default, any other */*.
-    v_content_type := btrim(split_part(COALESCE(p_headers->'content-type', ''), ';', 1));
-    IF v_content_type <> ''
-       AND NOT api.accept_matches(array_to_string(v_route.accepts, ', '), ARRAY[v_content_type]) THEN
-        RETURN internal.finalize_rest_error(v_is_head, api.problem_response(
-            415,
-            'Unsupported Media Type',
-            format('Supported request content types: %s', array_to_string(v_route.accepts, ', ')),
-            code => 'pgmi.unsupported_media_type'
-        ), v_start_time, v_auth_extra);
-    END IF;
-
-    IF NOT api.accept_matches(p_headers->'accept', v_route.produces) THEN
-        RETURN internal.finalize_rest_error(v_is_head, api.problem_response(
-            406,
-            'Not Acceptable',
-            format('Supported content types: %s', array_to_string(v_route.produces, ', ')),
-            code => 'pgmi.not_acceptable'
+            v_precondition.status, v_precondition.title, v_precondition.detail,
+            code => v_precondition.code, extensions => v_precondition.extras
         ), v_start_time, v_auth_extra);
     END IF;
 
@@ -777,22 +884,17 @@ BEGIN
         -- value rather than corrupting the root shape. Non-JSON or malformed
         -- bodies are passed through unchanged (RAISE DEBUG, not silent swallow).
         IF v_route.output_json_schema IS NOT NULL
-           AND COALESCE((
-               SELECT lower(value) = 'true'
-               FROM jsonb_each_text(v_route.response_headers)
-               WHERE lower(key) = 'x-include-schema'
-               LIMIT 1
-           ), false) THEN
+           AND internal.schema_injection_requested(v_route.response_headers) THEN
             DECLARE
-                v_body jsonb;
+                v_answer jsonb;
                 v_merged jsonb;
             BEGIN
-                v_body := api.content_json((v_response).content);
-                IF jsonb_typeof(v_body) = 'object' THEN
-                    v_merged := v_body || jsonb_build_object('$schema', v_route.output_json_schema::jsonb);
+                v_answer := api.content_json((v_response).content);
+                IF jsonb_typeof(v_answer) = 'object' THEN
+                    v_merged := v_answer || jsonb_build_object('$schema', v_route.output_json_schema::jsonb);
                 ELSE
                     v_merged := jsonb_build_object(
-                        'data', v_body,
+                        'data', v_answer,
                         '$schema', v_route.output_json_schema::jsonb
                     );
                 END IF;
@@ -864,25 +966,9 @@ BEGIN
         -- if exchange-table grants ever loosen.
         v_response := api.problem_response(v_problem.status, v_problem.title,
             'sqlstate=' || v_sqlstate || ' detail=' || LEFT(SQLERRM, 200), code => v_problem.code);
-        v_response.headers := extensions.hstore(ARRAY[
-            'content-type', 'application/json; charset=utf-8',
-            'content-length', COALESCE(octet_length((v_response).content), 0)::text,
-            'x-execution-time-ms', v_execution_ms::text,
-            'x-pgmi-catalog-version', api.catalog_version(),
-            'x-error-sqlstate', v_sqlstate
-        ]);
-        -- autoLog=false must hold on the failure path too: v_request carries the
-        -- headers and body, so a POST /login registered autoLog=false would
-        -- otherwise persist plaintext credentials on any constraint violation.
-        IF v_route.auto_log AND NOT internal.transaction_is_read_only() THEN
-            INSERT INTO api.rest_exchange (handler_object_id, context, request, response, completed_at)
-            VALUES (v_route.object_id, internal.request_log_context(),
-                    internal.loggable(v_request), internal.loggable(v_response), now());
-        END IF;
+        v_response.headers := internal.handler_failure_headers(v_response, v_execution_ms, v_sqlstate);
+        PERFORM internal.log_rest_exchange(v_route.object_id, v_route.auto_log, v_request, v_response);
 
-        -- x-error-sqlstate stays on the logged copy only: it is an internal
-        -- diagnostic, and the sanitized body deliberately withholds the rest of
-        -- the failure detail.
         RETURN internal.finalize_rest_error(v_is_head,
             api.problem_response(v_problem.status, v_problem.title, v_problem.detail, code => v_problem.code),
             v_start_time,
@@ -893,13 +979,7 @@ BEGIN
     END;
     END;
 
-    -- Exchange logging is a write; a READ ONLY transaction cannot do it.
-    -- Skipping beats failing every correctly-opened read-only request.
-    IF v_route.auto_log AND NOT internal.transaction_is_read_only() THEN
-        INSERT INTO api.rest_exchange (handler_object_id, context, request, response, completed_at)
-        VALUES (v_route.object_id, internal.request_log_context(),
-                internal.loggable(v_request), internal.loggable(v_response), now());
-    END IF;
+    PERFORM internal.log_rest_exchange(v_route.object_id, v_route.auto_log, v_request, v_response);
 
     -- RFC 9110 §9.3.2: HEAD is identical to GET except that the body is
     -- omitted. content-length keeps the value GET would have sent, which is
@@ -989,7 +1069,7 @@ COMMENT ON FUNCTION api.rest_invoke(text, text, extensions.hstore, xml) IS
     'REST gateway overload: auto-sets content-type to application/xml when an xml body is provided.';
 
 -- ============================================================================
--- RPC Resolution
+-- RPC RESOLUTION: the handler a method name routes to
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION api.rpc_resolve(p_method_name text)
@@ -1005,7 +1085,7 @@ COMMENT ON FUNCTION api.rpc_resolve(text) IS
     'Resolves an RPC method name to its handler UUID. Returns NULL if not registered.';
 
 -- ============================================================================
--- RPC Gateway
+-- RPC GATEWAY: api.rpc_invoke and its dispatcher
 -- ============================================================================
 
 -- A JSON-RPC error envelope at an explicit HTTP status; data only when given.
@@ -1018,6 +1098,8 @@ LANGUAGE sql IMMUTABLE AS $$
         'id', p_id));
 $$;
 
+-- One JSON-RPC request, front to back, kept whole for the reasons
+-- rest_dispatch is: the check order is the contract.
 CREATE OR REPLACE FUNCTION internal.rpc_dispatch(
     p_route_id uuid,
     p_headers extensions.hstore,
@@ -1032,13 +1114,12 @@ DECLARE
     v_request api.rpc_request;
     v_response api.http_response;
     v_handler record;
-    v_route record;
     v_start_time timestamptz;
     v_execution_ms numeric;
     v_json_id jsonb;
-    v_iso_shortfall text;
     v_denial text;
-    v_content_type text;
+    v_denial_text record;
+    v_precondition record;
     v_schema jsonb;
     v_params jsonb;
     v_violation text;
@@ -1122,59 +1203,28 @@ BEGIN
     IF v_denial IS NOT NULL THEN
         RAISE DEBUG 'rpc_invoke: access denied (%)', v_denial;
         PERFORM internal.log_access_denial(v_handler.object_id, v_denial, 'RPC', v_handler.method_name);
+        v_denial_text := internal.access_denial_text(v_denial);
         IF v_denial = 'unauthenticated' THEN
             RETURN internal.finalize_error(
-                api.jsonrpc_error(-32001, 'Authentication required', v_json_id), v_start_time,
+                api.jsonrpc_error(-32001, v_denial_text.message, v_json_id), v_start_time,
                 extensions.hstore('www-authenticate', api.www_authenticate_challenge()));
         END IF;
-        RETURN internal.finalize_error(internal.rpc_error(403, -32003,
-            CASE v_denial WHEN 'organization_required' THEN 'This operation needs an active organization'
-                          ELSE 'You do not have access to this operation' END,
-            jsonb_build_object('code', CASE v_denial WHEN 'organization_required'
-                                           THEN 'pgmi.organization_required' ELSE 'pgmi.forbidden' END),
+        RETURN internal.finalize_error(internal.rpc_error(403, -32003, v_denial_text.message,
+            jsonb_build_object('code', v_denial_text.code), v_json_id), v_start_time);
+    END IF;
+
+    -- The checks rest_dispatch makes, in its order. The precise HTTP status
+    -- rides on the response while the JSON-RPC error stays in its class; the
+    -- machine token is carried in error.data.code.
+    v_precondition := internal.route_precondition_problem(
+        v_handler.min_transaction_isolation, v_handler.read_only, v_handler.accepts, v_handler.produces, p_headers);
+    IF v_precondition.status IS NOT NULL THEN
+        RETURN internal.finalize_error(internal.rpc_error(v_precondition.status, -32600, v_precondition.detail,
+            jsonb_build_object('code', v_precondition.code) || COALESCE(v_precondition.extras, '{}'::jsonb),
             v_json_id), v_start_time);
     END IF;
 
-    -- Enforce the route's transaction isolation floor (see rest_dispatch). The
-    -- precise HTTP status (428) rides on the response while the JSON-RPC error
-    -- stays in its correct class; the machine token is carried in error.data.code.
-    v_iso_shortfall := internal.transaction_isolation_shortfall(v_handler.min_transaction_isolation);
-    IF v_iso_shortfall IS NOT NULL THEN
-        RAISE DEBUG 'rpc_invoke: isolation too weak (need %, have %)',
-            v_handler.min_transaction_isolation, v_iso_shortfall;
-        RETURN internal.finalize_error(internal.rpc_error(428, -32600,
-            format('Route requires %s isolation but current transaction uses %s.',
-                   v_handler.min_transaction_isolation, v_iso_shortfall),
-            jsonb_build_object('code', 'pgmi.transaction_isolation_too_weak',
-                               'requiredIsolation', v_handler.min_transaction_isolation),
-            v_json_id), v_start_time);
-    END IF;
-
-    -- Enforce the route's read-only declaration (see rest_dispatch).
-    IF v_handler.read_only AND NOT internal.transaction_is_read_only() THEN
-        RAISE DEBUG 'rpc_invoke: read-only route in a read-write transaction';
-        RETURN internal.finalize_error(internal.rpc_error(428, -32600,
-            'Route requires a READ ONLY transaction but the current transaction is read-write.',
-            jsonb_build_object('code', 'pgmi.transaction_read_only_required', 'requiredReadOnly', true),
-            v_json_id), v_start_time);
-    END IF;
-
-    -- The declared accepts, produces and inputSchema, as rest_dispatch enforces
-    -- them; the status rides on the response, the JSON-RPC code stays in its
-    -- class. The inputSchema describes the params member.
-    v_content_type := btrim(split_part(COALESCE(p_headers->'content-type', ''), ';', 1));
-    IF v_content_type <> ''
-       AND NOT api.accept_matches(array_to_string(v_handler.accepts, ', '), ARRAY[v_content_type]) THEN
-        RETURN internal.finalize_error(internal.rpc_error(415, -32600,
-            format('Supported request content types: %s', array_to_string(v_handler.accepts, ', ')),
-            jsonb_build_object('code', 'pgmi.unsupported_media_type'), v_json_id), v_start_time);
-    END IF;
-
-    IF NOT api.accept_matches(p_headers->'accept', v_handler.produces) THEN
-        RETURN internal.finalize_error(internal.rpc_error(406, -32600,
-            format('Supported content types: %s', array_to_string(v_handler.produces, ', ')),
-            jsonb_build_object('code', 'pgmi.not_acceptable'), v_json_id), v_start_time);
-    END IF;
+    -- The inputSchema describes the params member.
 
     IF v_handler.input_json_schema IS NOT NULL THEN
         v_schema := internal.resolved_schema(v_handler.input_json_schema::jsonb);
@@ -1202,21 +1252,16 @@ BEGIN
         -- result is "Any" type. Skip for error responses (result absent) or
         -- when result is not a JSON object.
         IF v_handler.output_json_schema IS NOT NULL
-           AND COALESCE((
-               SELECT lower(value) = 'true'
-               FROM jsonb_each_text(v_handler.response_headers)
-               WHERE lower(key) = 'x-include-schema'
-               LIMIT 1
-           ), false) THEN
+           AND internal.schema_injection_requested(v_handler.response_headers) THEN
             DECLARE
-                v_body jsonb;
+                v_answer jsonb;
                 v_merged jsonb;
             BEGIN
-                v_body := api.content_json((v_response).content);
-                IF jsonb_typeof(v_body) = 'object'
-                   AND jsonb_typeof(v_body->'result') = 'object' THEN
+                v_answer := api.content_json((v_response).content);
+                IF jsonb_typeof(v_answer) = 'object'
+                   AND jsonb_typeof(v_answer->'result') = 'object' THEN
                     v_merged := jsonb_set(
-                        v_body,
+                        v_answer,
                         '{result,$schema}',
                         v_handler.output_json_schema::jsonb,
                         true
@@ -1269,21 +1314,9 @@ BEGIN
         -- the truncation rationale).
         v_response := internal.rpc_error(v_problem.status, v_problem.rpc_code,
             'sqlstate=' || v_sqlstate || ' detail=' || LEFT(SQLERRM, 200), NULL, v_json_id);
-        v_response.headers := extensions.hstore(ARRAY[
-            'content-type', 'application/json; charset=utf-8',
-            'content-length', COALESCE(octet_length((v_response).content), 0)::text,
-            'x-execution-time-ms', v_execution_ms::text,
-            'x-pgmi-catalog-version', api.catalog_version(),
-            'x-error-sqlstate', v_sqlstate
-        ]);
-        -- autoLog=false must hold on the failure path too (see rest_dispatch).
-        IF v_handler.auto_log AND NOT internal.transaction_is_read_only() THEN
-            INSERT INTO api.rpc_exchange (handler_object_id, context, request, response, completed_at)
-            VALUES (v_handler.object_id, internal.request_log_context(),
-                    internal.loggable(v_request), internal.loggable(v_response), now());
-        END IF;
+        v_response.headers := internal.handler_failure_headers(v_response, v_execution_ms, v_sqlstate);
+        PERFORM internal.log_rpc_exchange(v_handler.object_id, v_handler.auto_log, v_request, v_response);
 
-        -- x-error-sqlstate stays on the logged copy only.
         RETURN internal.finalize_error(internal.rpc_error(v_problem.status, v_problem.rpc_code,
             CASE WHEN v_problem.rpc_code = -32603 THEN 'Internal error' ELSE v_problem.detail END,
             CASE WHEN v_problem.code IS NOT NULL THEN jsonb_build_object('code', v_problem.code) END,
@@ -1291,12 +1324,7 @@ BEGIN
     END;
     END;
 
-    -- Exchange logging is a write; skip in a READ ONLY transaction (see rest_dispatch).
-    IF v_handler.auto_log AND NOT internal.transaction_is_read_only() THEN
-        INSERT INTO api.rpc_exchange (handler_object_id, context, request, response, completed_at)
-        VALUES (v_handler.object_id, internal.request_log_context(),
-                internal.loggable(v_request), internal.loggable(v_response), now());
-    END IF;
+    PERFORM internal.log_rpc_exchange(v_handler.object_id, v_handler.auto_log, v_request, v_response);
 
     RETURN v_response;
 END;
@@ -1321,21 +1349,8 @@ COMMENT ON FUNCTION api.rpc_invoke(uuid, extensions.hstore, bytea) IS
     'RPC gateway. Invokes a handler by UUID, enforces auth, maps constraint violations to JSON-RPC error codes. SECURITY DEFINER.';
 
 -- ============================================================================
--- MCP Gateway (tools/call, resources/read, prompts/get)
+-- JSON SCHEMA CHECKS: the declared schemas, enforced on what crosses the gateways
 -- ============================================================================
--- Exception handling follows MCP spec: tool execution failures return
--- result.isError=true (via api.mcp_tool_error), NOT a JSON-RPC error envelope.
---
--- An unknown tool/resource/prompt NAME returns -32602 (Invalid params): the
--- method (tools/call, resources/read, prompts/get) was found and dispatched
--- correctly — only the name/uri argument identifies nothing. The spec
--- standardizes not-found to -32602 (SEP-2164,
--- https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2164).
--- -32601 (Method not found) stays reserved for genuinely-unknown JSON-RPC
--- methods (the dispatcher ELSE branch). A protected name asked for without a
--- resolved identity gets the same -32602, so it cannot be probed for.
-
-DROP FUNCTION IF EXISTS internal.mcp_argument_errors(jsonb, jsonb);
 
 -- A schema node with its references followed, up to 8 hops: "#/$defs/<name>"
 -- is the root's definition, "#/components/schemas/<name>" the registered
@@ -1370,9 +1385,8 @@ $$;
 -- Registration refuses every other keyword, so a published schema is an
 -- enforced one; format and pattern stay hints for the body. Each problem
 -- names its path (a.b, tags[0]); a root of the wrong type names none. No
--- rows when there are none.
-DROP FUNCTION IF EXISTS internal.json_schema_violations(jsonb, jsonb);
-
+-- rows when there are none. One function: it recurses into itself for every
+-- nested schema, so each keyword is checked in one place at every depth.
 CREATE OR REPLACE FUNCTION internal.json_schema_violations(
     p_schema jsonb, p_value jsonb, p_root jsonb DEFAULT NULL, p_path text DEFAULT NULL)
 RETURNS TABLE (name text, reason text, message text)
@@ -1506,6 +1520,21 @@ LANGUAGE sql STABLE AS $$
     WHERE name IS NOT NULL
 $$;
 
+-- ============================================================================
+-- MCP GATEWAY: tools/call, resources/read and prompts/get
+-- ============================================================================
+-- Exception handling follows MCP spec: tool execution failures return
+-- result.isError=true (via api.mcp_tool_error), NOT a JSON-RPC error envelope.
+--
+-- An unknown tool/resource/prompt NAME returns -32602 (Invalid params): the
+-- method (tools/call, resources/read, prompts/get) was found and dispatched
+-- correctly — only the name/uri argument identifies nothing. The spec
+-- standardizes not-found to -32602 (SEP-2164,
+-- https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2164).
+-- -32601 (Method not found) stays reserved for genuinely-unknown JSON-RPC
+-- methods (the dispatcher ELSE branch). A protected name asked for without a
+-- resolved identity gets the same -32602, so it cannot be probed for.
+
 -- Whether a schema node declares a JSON type: its "type" is that name or a
 -- list naming it; without a type, "string" when its enum holds a string.
 CREATE OR REPLACE FUNCTION internal.mcp_schema_takes(p_schema jsonb, p_type text)
@@ -1578,8 +1607,6 @@ COMMENT ON FUNCTION internal.mcp_lenient_arguments(jsonb, jsonb, jsonb) IS
 -- a result object nor an error object is no answer at all. Success results
 -- are rebuilt through api.mcp_success, so they carry resultType and serverInfo
 -- however the handler built them.
-DROP FUNCTION IF EXISTS internal.mcp_checked_envelope(text, jsonb, jsonb);
-
 CREATE OR REPLACE FUNCTION internal.mcp_checked_envelope(
     p_mcp_type text, p_envelope jsonb, p_request_id jsonb, p_name_or_uri text)
 RETURNS api.mcp_response
@@ -1625,8 +1652,6 @@ $$;
 -- auth gate, isolation floor, exchange logging, error sanitization — lives
 -- here exactly once. Runs SECURITY INVOKER inside the SECURITY DEFINER
 -- wrappers below, inheriting their search_path and owner privileges.
-DROP FUNCTION IF EXISTS internal.mcp_dispatch(text, text, jsonb, jsonb, jsonb);
-
 CREATE OR REPLACE FUNCTION internal.mcp_dispatch(
     p_mcp_type text,
     p_name_or_uri text,
@@ -1642,6 +1667,7 @@ DECLARE
     v_handler record;
     v_iso_shortfall text;
     v_denial text;
+    v_denial_text record;
     v_invalid text;
     v_refusal jsonb;
 BEGIN
@@ -1689,19 +1715,15 @@ BEGIN
     IF v_denial IS NOT NULL THEN
         RAISE DEBUG 'mcp_dispatch: access denied (%)', v_denial;
         PERFORM internal.log_access_denial(v_handler.object_id, v_denial, 'MCP', v_handler.mcp_name);
-        RETURN CASE v_denial
-            WHEN 'unauthenticated' THEN
-                api.mcp_error(-32602,
-                    initcap(p_mcp_type) || ' not found: ' || p_name_or_uri || ' (or it requires authentication)',
-                    p_request_id,
-                    CASE WHEN p_mcp_type = 'resource' THEN jsonb_build_object('uri', p_name_or_uri) END)
-            WHEN 'organization_required' THEN
-                api.mcp_error(-31003, 'This operation needs an active organization', p_request_id,
-                              jsonb_build_object('code', 'pgmi.organization_required'))
-            ELSE
-                api.mcp_error(-31003, 'You do not have access to this operation', p_request_id,
-                              jsonb_build_object('code', 'pgmi.forbidden'))
-        END;
+        IF v_denial = 'unauthenticated' THEN
+            RETURN api.mcp_error(-32602,
+                initcap(p_mcp_type) || ' not found: ' || p_name_or_uri || ' (or it requires authentication)',
+                p_request_id,
+                CASE WHEN p_mcp_type = 'resource' THEN jsonb_build_object('uri', p_name_or_uri) END);
+        END IF;
+        v_denial_text := internal.access_denial_text(v_denial);
+        RETURN api.mcp_error(-31003, v_denial_text.message, p_request_id,
+                             jsonb_build_object('code', v_denial_text.code));
     END IF;
 
     RAISE DEBUG 'mcp_dispatch: Matched %', v_handler.mcp_name;
@@ -1767,8 +1789,7 @@ BEGIN
 
         -- An error answer changes nothing (see rest_dispatch): a protocol
         -- error, a tool's isError result, or a result the checks above rejected.
-        IF (v_response).envelope ? 'error'
-           OR (v_response).envelope->'result'->'isError' = 'true'::jsonb THEN
+        IF internal.mcp_is_error((v_response).envelope) THEN
             RAISE EXCEPTION USING ERRCODE = 'PGRBK';
         END IF;
 
@@ -1795,11 +1816,7 @@ BEGIN
             THEN api.mcp_tool_error('sqlstate=' || SQLSTATE || ' detail=' || LEFT(SQLERRM, 200), p_request_id)
             ELSE api.mcp_error(-32603, 'sqlstate=' || SQLSTATE || ' detail=' || LEFT(SQLERRM, 200), p_request_id)
         END;
-        IF NOT internal.transaction_is_read_only() THEN
-            INSERT INTO api.mcp_exchange (handler_object_id, context, mcp_type, mcp_name, request, response)
-            VALUES (v_handler.object_id, internal.request_log_context(), p_mcp_type, v_handler.mcp_name,
-                    internal.loggable(v_request), v_response);
-        END IF;
+        PERFORM internal.log_mcp_exchange(v_handler.object_id, p_mcp_type, v_handler.mcp_name, v_request, v_response);
 
         -- Bad input and constraint violations are the caller's to fix, so the
         -- model gets the same class message REST sends; SQLERRM never leaves
@@ -1812,12 +1829,7 @@ BEGIN
         END;
     END;
 
-    -- Exchange logging is a write; skip in a READ ONLY transaction (see rest_dispatch).
-    IF NOT internal.transaction_is_read_only() THEN
-        INSERT INTO api.mcp_exchange (handler_object_id, context, mcp_type, mcp_name, request, response)
-        VALUES (v_handler.object_id, internal.request_log_context(), p_mcp_type, v_handler.mcp_name,
-                internal.loggable(v_request), v_response);
-    END IF;
+    PERFORM internal.log_mcp_exchange(v_handler.object_id, p_mcp_type, v_handler.mcp_name, v_request, v_response);
 
     IF v_invalid IS NOT NULL THEN
         RETURN api.mcp_tool_error('Tool execution failed', p_request_id);
@@ -1828,8 +1840,6 @@ $$;
 
 COMMENT ON FUNCTION internal.mcp_dispatch(text, text, jsonb, jsonb, jsonb, boolean) IS
     'Shared MCP invocation path: route lookup, auth context, auth gate, isolation floor, handler EXECUTE, exchange logging, sanitized errors. Called by the api.mcp_* SECURITY DEFINER wrappers, and by api.replay_exchange with p_resolve_caller false (the logged context is applied already).';
-
-DROP FUNCTION IF EXISTS api.mcp_call_tool(text, jsonb, jsonb, text);
 
 CREATE OR REPLACE FUNCTION api.mcp_call_tool(
     p_name text,
@@ -1847,8 +1857,6 @@ $$;
 COMMENT ON FUNCTION api.mcp_call_tool(text, jsonb, jsonb, jsonb) IS
     'MCP tools/call. Resolves tool by name, applies auth context, invokes handler. Execution failures use result.isError=true per MCP spec.';
 
-DROP FUNCTION IF EXISTS api.mcp_read_resource(text, jsonb, text);
-
 CREATE OR REPLACE FUNCTION api.mcp_read_resource(
     p_uri text,
     p_context jsonb DEFAULT NULL,
@@ -1863,8 +1871,6 @@ $$;
 
 COMMENT ON FUNCTION api.mcp_read_resource(text, jsonb, jsonb) IS
     'MCP resources/read. Matches URI against registered templates; the one with the most literal characters wins.';
-
-DROP FUNCTION IF EXISTS api.mcp_get_prompt(text, jsonb, jsonb, text);
 
 CREATE OR REPLACE FUNCTION api.mcp_get_prompt(
     p_name text,
@@ -1883,7 +1889,7 @@ COMMENT ON FUNCTION api.mcp_get_prompt(text, jsonb, jsonb, jsonb) IS
     'MCP prompts/get. Resolves prompt by name, applies auth context, returns expanded messages.';
 
 -- ============================================================================
--- MCP Discovery Functions
+-- MCP DISCOVERY: the tools, resources and prompts a caller may see
 -- ============================================================================
 -- NO PAGINATION: each function returns the entire list in one call, ordered
 -- bytewise (COLLATE "C") by name or URI, so two calls agree on the order. No
@@ -2056,7 +2062,7 @@ COMMENT ON FUNCTION api.mcp_list_prompts() IS
     'MCP prompt discovery. Strips NULL fields for spec compliance (clients reject "title": null). Lists only the prompts the caller may get.';
 
 -- ============================================================================
--- Route Policy Resolution (resolve-then-open)
+-- ROUTE POLICY: the transaction a request needs, asked before it opens
 -- ============================================================================
 -- The client gateway — gateways/python/gateway.py, or the reverse proxy a deployment
 -- supplies — calls one of these BEFORE opening the dispatch transaction, then
@@ -2099,8 +2105,6 @@ $$;
 COMMENT ON FUNCTION internal.input_annotations(jsonb) IS
     'The x-* keywords of each top-level inputSchema property, as {property: {keyword: value}}; NULL when there are none. Returned by the policy functions for the gateway''s interceptors.';
 
-DROP FUNCTION IF EXISTS api.rest_route_policy(text, text, text);
-
 CREATE OR REPLACE FUNCTION api.rest_route_policy(
     p_method text,
     p_url text,
@@ -2130,8 +2134,6 @@ $$;
 COMMENT ON FUNCTION api.rest_route_policy(text, text, text) IS
     'Resolves the transaction characteristics to open with before calling api.rest_invoke: isolation = max(route floor, p_requested_isolation), read-only and DEFERRABLE from the route policy; and the handler name and inputSchema annotations the gateway''s interceptors select on. Route matching is the same internal.rest_route_lookup that rest_invoke uses, HEAD included. Zero rows when no route matches — open at the requested level (or default) and let rest_invoke answer 404.';
 
-DROP FUNCTION IF EXISTS api.rpc_route_policy(text, text);
-
 CREATE OR REPLACE FUNCTION api.rpc_route_policy(
     p_method_name text,
     p_requested_isolation text DEFAULT NULL
@@ -2158,7 +2160,7 @@ COMMENT ON FUNCTION api.rpc_route_policy(text, text) IS
     'Resolves the transaction characteristics to open with before calling api.rpc_invoke, keyed by JSON-RPC method name, with the handler name and inputSchema annotations as api.rest_route_policy returns them. Zero rows when the method is not registered.';
 
 -- ============================================================================
--- Replay
+-- REPLAY: a logged exchange run again as its caller
 -- ============================================================================
 -- Re-runs a logged REST, RPC or MCP exchange as its original caller: the logged
 -- context is applied (no credential is re-presented), the request goes through

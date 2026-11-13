@@ -42,7 +42,6 @@ $$;
 COMMENT ON FUNCTION api.header(extensions.hstore, text) IS
     'Case-insensitive header lookup. Lowercases the name before hstore lookup.';
 
--- Inline tests
 DO $$
 DECLARE
     v_json jsonb;
@@ -114,7 +113,9 @@ $$;
 COMMENT ON FUNCTION api.regexp_quote(text) IS
     'Escapes POSIX regex metacharacters so the input can be used as a literal in a regex pattern.';
 
-CREATE OR REPLACE FUNCTION api.uri_template_to_regex(p_template text)
+-- The one conversion behind api.uri_template_to_regex (MCP resources) and
+-- api.path_template_to_regex (REST routes, which capture each parameter).
+CREATE OR REPLACE FUNCTION internal.template_to_regex(p_template text, p_parameter_regex text)
 RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
     SELECT '^' || regexp_replace(
@@ -122,9 +123,15 @@ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
             regexp_replace(p_template, '\{[^}]+\}', '<<<PLACEHOLDER>>>', 'g')
         ),
         '<<<PLACEHOLDER>>>',
-        '[^/]+',
+        p_parameter_regex,
         'g'
     ) || '$';
+$$;
+
+CREATE OR REPLACE FUNCTION api.uri_template_to_regex(p_template text)
+RETURNS text
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
+    SELECT internal.template_to_regex(p_template, '[^/]+');
 $$;
 
 COMMENT ON FUNCTION api.uri_template_to_regex(text) IS
@@ -168,14 +175,7 @@ WHERE uri_regexp IS DISTINCT FROM api.uri_template_to_regex(uri_template);
 CREATE OR REPLACE FUNCTION api.path_template_to_regex(p_path text)
 RETURNS text
 LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
-    SELECT '^' || regexp_replace(
-        api.regexp_quote(
-            regexp_replace(p_path, '\{[^}]+\}', '<<<PLACEHOLDER>>>', 'g')
-        ),
-        '<<<PLACEHOLDER>>>',
-        '([^/]+)',
-        'g'
-    ) || '$';
+    SELECT internal.template_to_regex(p_path, '([^/]+)');
 $$;
 
 COMMENT ON FUNCTION api.path_template_to_regex(text) IS
@@ -389,6 +389,13 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     END;
 $$;
 
+-- A number as a query string spells it: 12, -0.5, .5, 1e3.
+CREATE OR REPLACE FUNCTION internal.is_numeric_literal(p_value text)
+RETURNS boolean
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT p_value ~ '^-?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][-+]?[0-9]{1,3})?$';
+$$;
+
 -- One query value against one scalar property schema. Enum values compare by
 -- their text form, so an integer or boolean enum accepts ?size=20 or ?on=true.
 CREATE OR REPLACE FUNCTION internal.query_value_is_valid(p_property jsonb, p_value text)
@@ -396,7 +403,7 @@ RETURNS boolean
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT CASE COALESCE(p_property->>'type', 'string')
                WHEN 'integer' THEN p_value ~ '^-?[0-9]{1,18}$'
-               WHEN 'number' THEN p_value ~ '^-?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][-+]?[0-9]{1,3})?$'
+               WHEN 'number' THEN internal.is_numeric_literal(p_value)
                WHEN 'boolean' THEN p_value IN ('true', 'false')
                ELSE CASE p_property->>'format'
                         WHEN 'uuid' THEN p_value ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
@@ -408,10 +415,10 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
        AND (NOT p_property ? 'enum'
             OR EXISTS (SELECT 1 FROM jsonb_array_elements(p_property->'enum') e WHERE e #>> '{}' = p_value))
        AND (CASE WHEN p_property ? 'minimum' AND p_property->>'type' IN ('integer', 'number')
-                      AND p_value ~ '^-?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][-+]?[0-9]{1,3})?$'
+                      AND internal.is_numeric_literal(p_value)
                  THEN p_value::numeric >= (p_property->>'minimum')::numeric ELSE true END)
        AND (CASE WHEN p_property ? 'maximum' AND p_property->>'type' IN ('integer', 'number')
-                      AND p_value ~ '^-?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][-+]?[0-9]{1,3})?$'
+                      AND internal.is_numeric_literal(p_value)
                  THEN p_value::numeric <= (p_property->>'maximum')::numeric ELSE true END);
 $$;
 
@@ -451,6 +458,7 @@ DECLARE
         "page": {"type": "integer", "minimum": 1},
         "since": {"type": "string", "format": "date"},
         "tag": {"type": "array", "items": {"type": "string"}}}}';
+    v_violations jsonb;
 BEGIN
     IF internal.query_schema_problem(v_schema) IS NOT NULL THEN
         RAISE EXCEPTION 'query schema: a valid schema was refused: %', internal.query_schema_problem(v_schema);
@@ -460,17 +468,17 @@ BEGIN
        OR internal.query_schema_problem('{"type": "object", "required": ["x"], "properties": {}}') IS NULL THEN
         RAISE EXCEPTION 'query schema: a keyword the gateway cannot enforce must be refused';
     END IF;
-    IF internal.query_schema_violations(v_schema,
-           api.query_params_multi('/r?format=csv&size=20&on=true&page=3&tag=a&tag=b&since=2026-10-31')) IS NOT NULL THEN
-        RAISE EXCEPTION 'query schema: valid values (integer and boolean enums included) were refused: %',
-            internal.query_schema_violations(v_schema, api.query_params_multi('/r?format=csv&size=20&on=true&page=3&tag=a&tag=b'));
+    v_violations := internal.query_schema_violations(v_schema,
+        api.query_params_multi('/r?format=csv&size=20&on=true&page=3&tag=a&tag=b&since=2026-10-31'));
+    IF v_violations IS NOT NULL THEN
+        RAISE EXCEPTION 'query schema: valid values (integer and boolean enums included) were refused: %', v_violations;
     END IF;
-    IF internal.query_schema_violations(v_schema, api.query_params_multi('/r?format=&size=30&on=false&page=0&since=2026-02-30'))
-       IS DISTINCT FROM '[{"name": "format", "reason": "required"}, {"name": "on", "reason": "invalid"},
-                          {"name": "page", "reason": "invalid"}, {"name": "since", "reason": "invalid"},
-                          {"name": "size", "reason": "invalid"}]'::jsonb THEN
-        RAISE EXCEPTION 'query schema: violations not reported as expected: %',
-            internal.query_schema_violations(v_schema, api.query_params_multi('/r?format=&size=30&on=false&page=0&since=2026-02-30'));
+    v_violations := internal.query_schema_violations(v_schema,
+        api.query_params_multi('/r?format=&size=30&on=false&page=0&since=2026-02-30'));
+    IF v_violations IS DISTINCT FROM '[{"name": "format", "reason": "required"}, {"name": "on", "reason": "invalid"},
+                                      {"name": "page", "reason": "invalid"}, {"name": "since", "reason": "invalid"},
+                                      {"name": "size", "reason": "invalid"}]'::jsonb THEN
+        RAISE EXCEPTION 'query schema: violations not reported as expected: %', v_violations;
     END IF;
 END $$;
 
@@ -483,6 +491,8 @@ $$;
 COMMENT ON FUNCTION api.url_path(text) IS
     'Extracts the path component from a URL by stripping the query string. A bare fragment is left in place on purpose: the http/https grammar (RFC 9110 §4.2.1) has no fragment component, so a literal "#" in a request target is malformed, and removing it would let /admin#x resolve to the route for /admin. A fragment behind a query is already gone with the query.';
 
+-- One pass of RFC 3986 normalization kept whole: each step works on what the
+-- one before left, and split apart the order would no longer be visible.
 CREATE OR REPLACE FUNCTION api.canonical_path(p_path text)
 RETURNS text
 LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE AS $$
@@ -569,7 +579,6 @@ $$;
 COMMENT ON FUNCTION api.canonical_path(text) IS
     'RFC 3986 syntax-based normalization plus pgmi policy: uppercases percent-encoding hex (§6.2.2.1), decodes unreserved characters (§6.2.2.2), removes dot-segments (§5.2.4), collapses duplicate slashes, ensures leading slash, strips trailing slash.';
 
--- Inline tests
 DO $$
 DECLARE
     v_params extensions.hstore;
@@ -671,7 +680,6 @@ BEGIN
         RAISE EXCEPTION 'uri_template_to_regex should not match unescaped dot';
     END IF;
 
-    -- Test query_params with URL encoding
     v_params := api.query_params('/api/users?name=john&age=30');
     IF v_params->'name' IS DISTINCT FROM 'john' OR v_params->'age' IS DISTINCT FROM '30' THEN
         RAISE EXCEPTION 'query_params basic failed';
@@ -855,7 +863,6 @@ $$;
 COMMENT ON FUNCTION api.invalid_param(text, text) IS
     'Builds one RFC 9457 invalid-params entry {name, reason}; aggregate several into a jsonb array for api.problem_response(..., invalid_params => ...).';
 
--- Inline tests
 DO $$
 DECLARE
     v_response api.http_response;
@@ -933,7 +940,6 @@ $$;
 COMMENT ON FUNCTION api.pagination_params(extensions.hstore, integer, integer) IS
     'Parses ?limit/?offset from a query hstore: clamps limit to [0,p_max] (default p_default) and offset to >=0; sets o_error to a 422 pgmi.invalid_pagination problem when either is present but non-integer. A route declaring api.page_query_schema never sees o_error (the dispatcher refuses first); any other caller returns o_error when its status_code is not null.';
 
--- Inline tests
 DO $$
 DECLARE
     v_page record;
@@ -1119,7 +1125,6 @@ $$;
 COMMENT ON FUNCTION api.jsonrpc_error(integer, text, jsonb, jsonb) IS
     'JSON-RPC 2.0 error response with optional error.data. Maps -32700..-32603 and -32001 to HTTP statuses, and the two refusals of a handler body: -32010 (the state refuses, 409, data.code) and -32011 (the input is invalid, 422, data.invalid-params).';
 
--- Inline tests
 DO $$
 DECLARE
     v_response api.http_response;
@@ -1254,6 +1259,14 @@ $$;
 
 COMMENT ON FUNCTION api.mcp_tool_error(text, jsonb) IS
     'Convenience wrapper: builds an MCP tool result with isError=true and the message as a text content item.';
+
+-- An MCP answer failed when it is a JSON-RPC error or a tool result with
+-- isError: the gateway rolls the handler back, and the exchange views count it.
+CREATE OR REPLACE FUNCTION internal.mcp_is_error(p_envelope jsonb)
+RETURNS boolean
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT COALESCE(p_envelope->>'error' IS NOT NULL OR p_envelope->'result'->'isError' = 'true'::jsonb, false);
+$$;
 
 CREATE OR REPLACE FUNCTION api.mcp_resource_result(
     contents jsonb,
