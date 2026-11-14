@@ -262,7 +262,13 @@ impl Reporter {
         self.write(text, false);
     }
 
+    /// Writes `text` with every control character but tab and newline shown
+    /// escaped: server messages and file names cannot drive the terminal.
     fn write(&self, text: &str, stamped: bool) {
+        self.emit(&printable(text), stamped);
+    }
+
+    fn emit(&self, text: &str, stamped: bool) {
         let mut sink = self
             .sink
             .lock()
@@ -322,8 +328,35 @@ impl Reporter {
             (false, Style::Colored) => ("✗", "\x1b[31m", "\x1b[0m"),
             (false, Style::Plain) => ("FAILED", "", ""),
         };
-        self.line(&format!("{open}{word}{close} {}", summary.text()));
+        self.emit(
+            &format!("{open}{word}{close} {}", printable(summary.text())),
+            false,
+        );
     }
+}
+
+/// `text` with each C0 control but tab and newline, DEL and each C1 control
+/// written as an escape (`\x1b`, `\r`, `\u{9b}`); borrowed when there is
+/// none.
+pub(crate) fn printable(text: &str) -> std::borrow::Cow<'_, str> {
+    let hidden = |c: char| c.is_control() && c != '\t' && c != '\n';
+    if !text.contains(hidden) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len() + 8);
+    for c in text.chars() {
+        match c {
+            '\r' => out.push_str("\\r"),
+            c if hidden(c) && (c as u32) < 0x80 => {
+                let _ = write!(out, "\\x{:02x}", c as u32);
+            }
+            c if hidden(c) => {
+                let _ = write!(out, "\\u{{{:x}}}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 /// The last line of a deploy: what it did, or how far it got.
@@ -453,6 +486,38 @@ mod tests {
             detail: detail.map(str::to_string),
             hint: hint.map(str::to_string),
         }
+    }
+
+    #[test]
+    fn printable_escapes_every_control_but_tab_and_newline() {
+        assert!(matches!(
+            printable("plain\ttext\n"),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        assert_eq!(printable("a\x1b[2Jb"), "a\\x1b[2Jb");
+        assert_eq!(printable("x\ry"), "x\\ry");
+        assert_eq!(printable("del\x7f"), "del\\x7f");
+        assert_eq!(printable("c1\u{9b}"), "c1\\u{9b}");
+        assert_eq!(printable("bell\x07"), "bell\\x07");
+    }
+
+    #[test]
+    fn the_coloured_summary_keeps_its_colours() {
+        let out = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        struct Sink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl Write for Sink {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let r = Reporter::to(Box::new(Sink(out.clone())), false, Style::Colored);
+        r.summary(&Summary::Done("db\x1b: done".into()));
+        let text = String::from_utf8(out.lock().unwrap().clone()).unwrap();
+        assert_eq!(text, "\x1b[32m✓\x1b[0m db\\x1b: done\n");
     }
 
     #[test]

@@ -1,0 +1,19 @@
+description: an error whose message and hint hold escape sequences, raised from a project file whose name holds one, is printed with each shown escaped; the --json record keeps the original text (Rust, PGMI-1002); Go prints them raw
+project:
+  files:
+    deploy.sql: |
+      SELECT pg_temp.pgmi_run_file(path) FROM pg_temp.pgmi_source_view WHERE is_sql_file;
+    "bad\e]0;title\a.sql": |
+      DO $$ BEGIN RAISE EXCEPTION USING MESSAGE = E'm\x1b[2Jx', HINT = E'h\u009by'; END $$;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --json]
+    expect:
+      exit: 13
+      rust:
+        exit: 13
+        stderr:
+          - 'm\\x1b\[2Jx'
+          - '^HINT: h\\u\{9b\}y$'
+          - 'bad\\x1b\]0;title\\x07\.sql'
+        stderr_not: ["\x1b"]
+        json: {hint: "h\u009by"}

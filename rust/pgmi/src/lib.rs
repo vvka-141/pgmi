@@ -100,7 +100,11 @@ pub fn run(args: impl IntoIterator<Item = OsString>, env: Env, export: impl Fn(&
 
 fn report(e: &Error) -> u8 {
     output::drain();
-    let _ = writeln!(std::io::stderr(), "pgmi: error: {}", e.text());
+    let _ = writeln!(
+        std::io::stderr(),
+        "pgmi: error: {}",
+        output::printable(&e.text())
+    );
     e.exit_code()
 }
 

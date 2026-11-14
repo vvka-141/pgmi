@@ -1,0 +1,12 @@
+description: a NOTICE holding terminal escape sequences (clear screen, a carriage return) is printed with them shown escaped, so it cannot rewrite the terminal or the CI log; Go prints them raw, as psql does (Rust, PGMI-1002)
+project:
+  files:
+    deploy.sql: |
+      DO $$ BEGIN RAISE NOTICE '%', E'a\x1b[2Jb\rc'; END $$;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      rust:
+        exit: 0
+        stderr: ['^a\\x1b\[2Jb\\rc$']
