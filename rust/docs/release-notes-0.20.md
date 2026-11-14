@@ -46,6 +46,9 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
 - **Server text cannot drive the terminal.** Escape sequences and other
   control characters in notices, errors and file names are shown escaped
   on stderr (`\x1b`); the `--json` record keeps the original text.
+- **Third-party licence notices ship with pgmi.** Every archive holds
+  `THIRD-PARTY-LICENSES`, and the `.deb` installs it in
+  `/usr/share/doc/pgmi/`.
 - **`--json` always ends with a record.** Every exit writes one, also an
   unreadable project `.env` (exit 10) and a runtime that cannot start (exit
   1). When the record cannot be written, a deploy that succeeded exits 1.
@@ -146,8 +149,6 @@ ticket; none loses data on its own.
   without a size cap. Accepted: the token endpoints come from the
   operator's own Google ADC configuration, and google-cloud-auth offers no
   way to pass pgmi's capped client (PGMI-994).
-- **No third-party licence notices** in the archives or the `.deb`
-  (PGMI-1003, as in Go).
 - **Release workflow details**: attestation after the release is public,
   the tap token in the clone URL, `uv` pinned by version only, no SBOM, the
   arm64 Linux and Windows binaries not run against a database, builds

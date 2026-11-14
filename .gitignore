@@ -77,3 +77,4 @@ test_*/
 
 # Rust build output
 /target/
+/THIRD-PARTY-LICENSES

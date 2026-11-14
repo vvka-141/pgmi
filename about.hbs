@@ -1,0 +1,16 @@
+Third-party licences for pgmi
+
+pgmi is licensed under MPL-2.0 (see LICENSE). The release binaries include
+the crates below, each under the licence shown with it.
+
+{{#each overview}}{{{name}}}: {{count}} crate(s)
+{{/each}}
+{{#each licenses}}
+================================================================================
+{{{name}}}
+
+Used by:
+{{#each used_by}}  {{{crate.name}}} {{crate.version}}
+{{/each}}
+{{{text}}}
+{{/each}}

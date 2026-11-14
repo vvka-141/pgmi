@@ -232,8 +232,15 @@ jobs:
           pattern: bin-*
           path: bins
           merge-multiple: true
+      - name: Third-party licence notices
+        run: |
+          cargo install --locked --features cli cargo-about@0.9.3
+          cargo about generate --locked --fail -m rust/pgmi/Cargo.toml about.hbs -o THIRD-PARTY-LICENSES
       - name: Archives and checksums
-        run: rust/release/package.sh "$VERSION" bins dist
+        run: |
+          rust/release/package.sh "$VERSION" bins dist
+          for a in dist/*.tar.gz; do tar tzf "$a" | grep -qx THIRD-PARTY-LICENSES || { echo "$a lacks THIRD-PARTY-LICENSES"; exit 1; }; done
+          for a in dist/*.zip; do unzip -Z1 "$a" | grep -qx THIRD-PARTY-LICENSES || { echo "$a lacks THIRD-PARTY-LICENSES"; exit 1; }; done
       - name: Debian packages
         run: |
           for pair in x86_64-unknown-linux-musl:amd64 aarch64-unknown-linux-musl:arm64; do
@@ -248,7 +255,7 @@ jobs:
       - name: Install the .deb and run it
         run: |
           docker run --rm -v "$PWD/dist:/d" debian:trixie-slim bash -c \
-            "dpkg -i /d/pgmi_${VERSION}_linux_amd64.deb && pgmi --version | grep -q 'pgmi ${VERSION} '"
+            "dpkg -i /d/pgmi_${VERSION}_linux_amd64.deb && pgmi --version | grep -q 'pgmi ${VERSION} ' && test -s /usr/share/doc/pgmi/THIRD-PARTY-LICENSES"
       - name: Homebrew cask
         run: rust/release/cask.sh "$VERSION" dist/checksums.txt > dist/pgmi.rb
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

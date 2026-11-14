@@ -16,3 +16,5 @@ contents:
     dst: /usr/share/doc/pgmi/LICENSE
   - src: ./README.md
     dst: /usr/share/doc/pgmi/README.md
+  - src: ./THIRD-PARTY-LICENSES
+    dst: /usr/share/doc/pgmi/THIRD-PARTY-LICENSES

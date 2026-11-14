@@ -113,10 +113,14 @@ release is a plain workflow, `.github/workflows/release-rust.yml`:
    PostgreSQL with the x86_64 binary (PGMI-985).
 3. `blackbox`: every case but those `rust/blackbox-skip.txt` names, each
    with its reason, against the static Linux binary that ships (PGMI-984).
-4. `package`: `rust/release/package.sh` writes `pgmi_<version>_<os>_<arch>`
-   archives (tar.gz, zip for Windows) with the Go release's names and
-   layout, reproducibly (fixed mtimes and owners), and `checksums.txt`;
-   nfpm (pinned image) builds the two `.deb` files from
+4. `package`: `cargo about generate` (cargo-about 0.9.3, `about.toml`,
+   `about.hbs`) writes `THIRD-PARTY-LICENSES` for every crate of the
+   release targets and fails on a licence it cannot read (PGMI-1003);
+   `rust/release/package.sh` refuses to run without it and writes
+   `pgmi_<version>_<os>_<arch>` archives (tar.gz, zip for Windows) with the
+   Go release's names and layout plus that file, reproducibly (fixed mtimes
+   and owners), and `checksums.txt`; nfpm (pinned image) builds the two
+   `.deb` files, with the notices in `/usr/share/doc/pgmi/`, from
    `rust/release/nfpm.yaml`, one is installed in Debian and run;
    `rust/release/cask.sh` writes the Homebrew cask.
 5. `publish` (only with `publish: true`): GitHub release with the notes
