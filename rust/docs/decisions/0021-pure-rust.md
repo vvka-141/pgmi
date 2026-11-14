@@ -90,6 +90,14 @@ cc and ld removed.
      owner 2026-11-14: never drop TLS silently). Work that needs no cryptography (`init`, `templates`,
      `metadata`, a deploy with `sslmode=disable` or over a Unix socket)
      runs on any CPU.
+   - **RSA keys must list the larger prime first.** graviola 0.4.5 signs
+     with CRT and computes `(m1 - m2) mod p` assuming `m2 = c^dQ mod q`
+     is below p, which holds only when p > q. A key with p < q fails its
+     own fault check (`signing failed: BadSignature`) on the messages
+     where `m2 >= p`: 0.6 % of signatures with keys from the `rsa`
+     crate, which does not order the primes (OpenSSL does). pgmi stores
+     the Google Cloud SQL ephemeral key larger prime first
+     (`google::larger_prime_first`, PGMI-1013).
    - **Fallback:** if graviola goes stale, switching provider is one line
      in `tls::provider()` and `tls::install()` (rustls-rustcrypto once it is
      production-ready, or another pure-Rust provider); the CPU check then
