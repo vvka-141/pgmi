@@ -137,6 +137,9 @@ jobs:
           export PGMI_BUILD_DATE
           cargo_home="${CARGO_HOME:-$HOME/.cargo}"
           export RUSTFLAGS="--remap-path-prefix=$cargo_home=/cargo --remap-path-prefix=$GITHUB_WORKSPACE=/pgmi"
+          case "${{ matrix.target }}" in
+            *windows-msvc) RUSTFLAGS="$RUSTFLAGS -C target-feature=+crt-static" ;;
+          esac
           cargo build --locked --release -p pgmi --target ${{ matrix.target }}
       - name: Check the binary
         run: |
@@ -145,6 +148,7 @@ jobs:
           case "${{ matrix.target }}" in
             *linux-musl) file "$bin" | grep -q 'static' ;;
             *apple-darwin) otool -L "$bin" ;;
+            *windows-msvc) ! grep -a -i -q -e 'vcruntime140' -e 'api-ms-win-crt-' "$bin" || { echo "::error::the binary needs the VC++ runtime"; exit 1; } ;;
           esac
           if command -v strings >/dev/null && strings "$bin" | grep -q -F -e "$GITHUB_WORKSPACE" -e "${CARGO_HOME:-$HOME/.cargo}"; then
             echo "::error::the binary embeds a build path"; exit 1
@@ -156,6 +160,15 @@ jobs:
               ! echo "$out" | grep -q unknown || { echo "::error::commit or build date missing"; exit 1; } ;;
           esac
           mkdir -p "out/${{ matrix.target }}" && cp "$bin" "out/${{ matrix.target }}/"
+      - name: Deploy with the Windows binary
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          Get-Service -Name postgresql* | Set-Service -Status Running
+          New-Item -ItemType Directory -Force smoke | Out-Null
+          Set-Content smoke/deploy.sql 'SELECT 1;'
+          & "target/${{ matrix.target }}/release/pgmi.exe" deploy smoke --connection 'postgresql://postgres:root@127.0.0.1:5432/postgres?sslmode=disable'
+          if ($LASTEXITCODE -ne 0) { exit 1 }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bin-${{ matrix.target }}

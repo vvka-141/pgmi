@@ -106,7 +106,11 @@ release is a plain workflow, `.github/workflows/release-rust.yml`:
    still holds one), `--version` checked where the runner can run it.
    Six targets: Linux musl and macOS for x86_64 and aarch64, Windows MSVC
    for x86_64 and aarch64 (aarch64 Windows is new to the matrix and not yet
-   proven on a runner).
+   proven on a runner). Windows links the C runtime statically
+   (`+crt-static`, also in `.cargo/config.toml`), so `pgmi.exe` needs no
+   VC++ redistributable, as Go's does not; the job fails on a
+   `vcruntime140` or `api-ms-win-crt-` import and deploys to the runner's
+   PostgreSQL with the x86_64 binary (PGMI-985).
 3. `blackbox`: every case but those `rust/blackbox-skip.txt` names, each
    with its reason, against the static Linux binary that ships (PGMI-984).
 4. `package`: `rust/release/package.sh` writes `pgmi_<version>_<os>_<arch>`

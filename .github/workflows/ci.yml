@@ -448,6 +448,17 @@ jobs:
         run: rustup toolchain install
       - name: Unit tests
         run: cargo test --locked --workspace --lib --bins
+      - name: Static C runtime and a deploy with the Windows binary
+        if: runner.os == 'Windows' && matrix.shell == 'pwsh'
+        run: |
+          cargo build --locked -p pgmi
+          $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes('target/debug/pgmi.exe'))
+          if ($text -match '(?i)vcruntime140|api-ms-win-crt-') { Write-Error 'pgmi.exe needs the VC++ runtime'; exit 1 }
+          Get-Service -Name postgresql* | Set-Service -Status Running
+          New-Item -ItemType Directory -Force smoke | Out-Null
+          Set-Content smoke/deploy.sql 'SELECT 1;'
+          & target/debug/pgmi.exe deploy smoke --connection 'postgresql://postgres:root@127.0.0.1:5432/postgres?sslmode=disable'
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
   # pgmi ships Windows and macOS binaries, so their behaviour has to be
   # exercised somewhere: path separators and drive letters in project scanning,
