@@ -29,6 +29,7 @@ pub enum Error {
     ChannelBinding,
     UnsupportedSasl,
     SaslUnfinished,
+    SessionOversized { tag: u8, len: usize, max: usize },
 }
 
 impl fmt::Display for Error {
@@ -51,6 +52,11 @@ impl fmt::Display for Error {
             Error::Scram(text) => f.write_str(text),
             Error::ChannelBinding => f.write_str("server did not use channel binding"),
             Error::UnsupportedSasl => f.write_str("unsupported SASL mechanism"),
+            Error::SessionOversized { tag, len, max } => write!(
+                f,
+                "the server announced a {len}-byte '{}' message; pgmi refuses more than {max} bytes for it",
+                char::from(*tag)
+            ),
             Error::SaslUnfinished => f.write_str(
                 "the server ended SCRAM authentication without proving it knows the password (expected AuthenticationSASLFinal)",
             ),
@@ -70,6 +76,52 @@ impl From<ScramError> for Error {
 /// startup traffic is small, and a hostile server could otherwise make the
 /// client reserve gigabytes.
 pub const STARTUP_FRAME_MAX: usize = 64 * 1024;
+/// PostgreSQL's own limit on one allocation (`MaxAllocSize`), so on a row.
+pub const DATA_FRAME_MAX: usize = 0x3fff_ffff;
+pub const SESSION_FRAME_MAX: usize = 64 * 1024 * 1024;
+
+/// Frames after sign-in: each one's announced length is checked against
+/// its type's limit before the driver sees the header (and reserves room
+/// for the body).
+#[derive(Default)]
+struct Frames {
+    header: [u8; 5],
+    have: usize,
+    remaining: usize,
+}
+
+impl Frames {
+    fn check(&mut self, bytes: &[u8]) -> Result<(), Error> {
+        let mut r = 0;
+        while r < bytes.len() {
+            if self.remaining == 0 {
+                self.header[self.have] = bytes[r];
+                self.have += 1;
+                r += 1;
+                if self.have == 5 {
+                    self.have = 0;
+                    let [tag, a, b, c, d] = self.header;
+                    let len = u32::from_be_bytes([a, b, c, d]) as usize;
+                    let body = len.checked_sub(4).ok_or(Error::Length)?;
+                    let max = if matches!(tag, b'D' | b'd') {
+                        DATA_FRAME_MAX
+                    } else {
+                        SESSION_FRAME_MAX
+                    };
+                    if body > max {
+                        return Err(Error::SessionOversized { tag, len, max });
+                    }
+                    self.remaining = body;
+                }
+                continue;
+            }
+            let take = self.remaining.min(bytes.len() - r);
+            self.remaining -= take;
+            r += take;
+        }
+        Ok(())
+    }
+}
 
 /// What the tap signs in with when the server asks for SASL.
 #[derive(Clone)]
@@ -315,6 +367,8 @@ pub(crate) struct Tap<S> {
     mode: Mode,
     startup: Option<Startup>,
     end_point: Option<Vec<u8>>,
+    frames: Frames,
+    carry: Vec<u8>,
 }
 
 /// The tap's part of authentication: whole frames until the first
@@ -449,8 +503,6 @@ impl Startup {
         }
         self.deliver.extend_from_slice(f);
         if f[0] == b'Z' {
-            parser.feed(&self.pending, shared)?;
-            self.deliver.append(&mut self.pending);
             self.finished = true;
         }
         Ok(())
@@ -512,6 +564,33 @@ impl Startup {
     }
 }
 
+impl<S: AsyncRead + Unpin> Tap<S> {
+    fn poll_session(
+        &mut self,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        if !self.carry.is_empty() {
+            let n = self.carry.len().min(buf.remaining());
+            let head: Vec<u8> = self.carry.drain(..n).collect();
+            self.frames.check(&head).map_err(io::Error::other)?;
+            self.parser
+                .feed(&head, &self.shared)
+                .map_err(io::Error::other)?;
+            buf.put_slice(&head);
+            return Poll::Ready(Ok(()));
+        }
+        let start = buf.filled().len();
+        ready!(Pin::new(&mut self.inner).poll_read(cx, buf))?;
+        let new = &buf.filled()[start..];
+        self.frames.check(new).map_err(io::Error::other)?;
+        self.parser
+            .feed(new, &self.shared)
+            .map_err(io::Error::other)?;
+        Poll::Ready(Ok(()))
+    }
+}
+
 impl<S> Tap<S> {
     pub(crate) fn socket(inner: S, shared: Arc<Shared>, start: Start) -> Self {
         let mode = match start {
@@ -526,6 +605,8 @@ impl<S> Tap<S> {
             mode,
             startup: Some(Startup::default()),
             end_point: None,
+            frames: Frames::default(),
+            carry: Vec::new(),
         }
     }
 
@@ -537,6 +618,8 @@ impl<S> Tap<S> {
             mode: Mode::Parsing,
             startup: Some(Startup::default()),
             end_point,
+            frames: Frames::default(),
+            carry: Vec::new(),
         }
     }
 }
@@ -561,7 +644,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for Tap<S> {
                     buf,
                 );
             }
+            this.carry = std::mem::take(&mut startup.pending);
             this.startup = None;
+        }
+        if this.mode == Mode::Parsing && this.startup.is_none() {
+            return this.poll_session(cx, buf);
         }
         let start = buf.filled().len();
         ready!(Pin::new(&mut this.inner).poll_read(cx, buf))?;
@@ -741,6 +828,66 @@ mod startup_tests {
             .await;
             assert_eq!(tap_error(&e), &Error::ChannelBinding);
         }
+    }
+
+    #[tokio::test]
+    async fn an_oversized_message_after_sign_in_is_refused_at_its_header() {
+        let (client, mut theirs) = tokio::io::duplex(1 << 16);
+        let shared = Shared::new(None).unwrap();
+        let mut tap = Tap::socket(client, shared, Start::Plain);
+        let mut first = auth(0, b"");
+        first.extend(frame(b'Z', b"I"));
+        first.push(b'T');
+        first.extend_from_slice(&0x7fff_fff0_u32.to_be_bytes());
+        theirs.write_all(&first).await.unwrap();
+        let mut buf = vec![0u8; 1024];
+        let mut seen = 0;
+        let e = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                match tap.read(&mut buf).await {
+                    Ok(n) => seen += n,
+                    Err(e) => break e,
+                }
+            }
+        })
+        .await
+        .expect("refused, not waited for");
+        assert_eq!(seen, 15);
+        assert_eq!(
+            tap_error(&e),
+            &Error::SessionOversized {
+                tag: b'T',
+                len: 0x7fff_fff0,
+                max: SESSION_FRAME_MAX
+            }
+        );
+    }
+
+    #[test]
+    fn session_frames_are_capped_by_type_across_any_split() {
+        let mut ok = frame(b'D', &[0; 10]);
+        ok.extend(frame(b'N', &[1; 100]));
+        for cut in 0..ok.len() {
+            let mut f = Frames::default();
+            f.check(&ok[..cut]).unwrap();
+            f.check(&ok[cut..]).unwrap();
+        }
+        let mut f = Frames::default();
+        let mut big_row = vec![b'D'];
+        big_row.extend_from_slice(
+            &u32::try_from(SESSION_FRAME_MAX + 100)
+                .unwrap()
+                .to_be_bytes(),
+        );
+        f.check(&big_row).unwrap();
+        let mut f = Frames::default();
+        let mut big_notice = vec![b'N'];
+        big_notice.extend_from_slice(
+            &u32::try_from(SESSION_FRAME_MAX + 100)
+                .unwrap()
+                .to_be_bytes(),
+        );
+        assert!(f.check(&big_notice).is_err());
     }
 
     async fn client_first(s: &mut tokio::io::DuplexStream) -> String {
