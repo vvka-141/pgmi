@@ -263,6 +263,15 @@ pub(crate) fn select(
     )))
 }
 
+/// The settings a provider needs that Go checks only once the deploy has
+/// started (building the connector), so the record names the target.
+pub(crate) fn check_started(provider: Provider, req: &Options, env: &Env) -> Result<()> {
+    if provider == Provider::Aws {
+        aws::region(req, env)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn check(provider: Provider, req: &Options, spec: &mut Spec, env: &Env) -> Result<()> {
     if let Some(t) = req.tenant_id.as_deref() {
         azure::tenant_id(t)?;
@@ -276,13 +285,10 @@ pub(crate) fn check(provider: Provider, req: &Options, spec: &mut Spec, env: &En
             }
             return Ok(());
         }
-        Provider::Aws => {
-            aws::region(req, env)?;
-        }
         Provider::Databricks => {
             databricks::settings(req, env)?;
         }
-        Provider::Azure => {}
+        Provider::Aws | Provider::Azure => {}
     }
     match spec.requested_sslmode {
         None => {

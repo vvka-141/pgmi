@@ -667,11 +667,11 @@ mistyped project path, a connection that cannot be resolved) has
 zero and false until known. `database` and `target` follow the same line: null
 until the deploy starts (a parameter source that cannot be read, a `--param`
 without `=`), set from then on (a refused parameter key or value, a missing
-`deploy.sql` included), never one without the other; `target` lists `host`,
+`deploy.sql`, `--aws` with no region included), never one without the other; `target` lists `host`,
 `port`, `database` in that order. A DETAIL, HINT or WHERE field the server
 sent empty is left out, on stderr, in `--json` and in a notice, as in Go.
 
-Cases: `deploy/json-success`, `flags/json-database-before-load`, `flags/json-record-once-deploy-starts`, `flags/compat-record`, `deploy/json-failure`, `errors/attribution`, `errors/diagnostics-secrets`, `execution/atomic-head`, `config/dotenv`. The Rust redaction: unit test `a_failure_record_redacts_detail_hint_and_where`.
+Cases: `deploy/json-success`, `flags/json-database-before-load`, `flags/json-record-once-deploy-starts`, `flags/compat-record`, `deploy/json-failure`, `errors/attribution`, `errors/diagnostics-secrets`, `execution/atomic-head`, `config/dotenv`, `cloud/aws-without-region`. The Rust redaction: unit test `a_failure_record_redacts_detail_hint_and_where`.
 
 ### Error attribution
 
@@ -1464,7 +1464,8 @@ release notes take their "Behaviour changes" section from this table.
 | Azure, AWS and Google sign-in failure text | the Go SDKs' wording, credential chain and troubleshooting links | pgmi's own sign-in chain: one line per credential tried; `connect to "<db>": ` and the exit codes unchanged | agent 2026-11-12 (PGMI-907), owner may revisit |
 | Help layout (`--help`, `help <command>`) | cobra's: `Usage:` on its own line, `Flags:` with `[=true|false]` and a type word, examples after the usage | clap's: `Usage: pgmi ...`, `Arguments:`, `Options:` with `[default: ...]`, examples last; the descriptions and examples are Go's, except `pgmi help help`, reworded without "simply", and `init --template`, whose default reads `[default: minimal; on a terminal, init asks]` | agent 2026-11-12 (PGMI-907, PGMI-908), owner may revisit |
 | Session-preparation failure | `session preparation failed: execution failed: failed to create internal tables: failed to create pgmi schema: ...; pgmi's session tables need the TEMPORARY privilege: GRANT ...` | `session preparation failed: create the session tables: ...`, the `GRANT` on its own line | agent 2026-11-12 (PGMI-907), owner may revisit |
-| Input refused before connecting | `FAILED <db>: failed after ...`, then the error (a connection option value, a client certificate without its key, AWS sign-in without a region) | the error alone; exit 10 both (a refused parameter key or value prints the FAILED line in both) | agent 2026-11-12 (PGMI-907), owner may revisit |
+| Input refused before connecting | `FAILED <db>: failed after ...`, then the error (a connection option value, a client certificate without its key) | the error alone; exit 10 both (a refused parameter key or value, and AWS sign-in without a region, print the FAILED line in both) | agent 2026-11-12 (PGMI-907), owner may revisit |
+| AWS sign-in without a region | `failed to create connector: failed to create AWS IAM token provider: AWS IAM auth requires region ...` | `AWS IAM auth requires region ...`, without Go's internal steps; exit 10 both, the `--json` record naming the target in both | owner 2026-11-14: wording only |
 | `pgmi.yaml` that is not valid YAML or has an unknown key | yaml.v3's text (`yaml: unmarshal errors: line 2: field x not found in type config.ProjectConfig`) | the line, column and parser text, naming the keys expected (`line 2 column 3: unknown field ...`); exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
 | A project path that does not exist | `failed to scan directory: failed to open directory: failed to access path: stat <path>: no such file or directory` | `project path "<path>" does not exist`; exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
 | `PGMI_MAX_FILE_SIZE` that is not a positive whole number | reported inside the first file read (`failed to read ./x.sql: PGMI_MAX_FILE_SIZE=...`) | reported alone; exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
@@ -1478,8 +1479,8 @@ release notes take their "Behaviour changes" section from this table.
 | `sslrootcert=system` with an explicit weaker sslmode | upgraded to `verify-full` | newly refused, exit 10 | owner 2026-11-11 |
 | Connection-string parse errors | echo a keyword, ADO.NET part or port | never quote the input; exit codes unchanged | owner 2026-11-11 |
 | `.pgmiignore` that exists but cannot be read | exit 1 | exit 10 | owner 2026-11-11 |
-| Project file whose name is not UTF-8 | exit 13, after the target database was created | newly refused before connecting, exit 10 | owner 2026-11-11 |
 | A project `.env` that exists but cannot be read (a directory, no permission) | WARNING, deploy goes on without it | exit 10 before connecting, naming the file: stricter on purpose, since a `.env` usually holds the connection's credentials and parameters, and deploying without them reaches the wrong server or account, or runs with defaults the project never meant (case `config/dotenv-unreadable`) | owner 2026-11-14 |
+| Project file whose name is not UTF-8 | exit 13, after the target database was created | newly refused before connecting, exit 10 | owner 2026-11-11 |
 | `sslcrl`, `sslcrldir`, `requirepeer`, `sslcertmode=require` | exit 11 (the server refuses the setting) | newly refused before connecting, exit 10 | owner 2026-11-11 |
 | `ssl_min_protocol_version`, `ssl_max_protocol_version`, `sslsni=0`, `sslcertmode=disable` | exit 11 (the server refuses the setting) | honoured; an unknown version or an empty range exit 10 | intended |
 | Client private key that group or others can read | used | newly refused, exit 10 | owner 2026-11-11 |

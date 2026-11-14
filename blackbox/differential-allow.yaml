@@ -224,11 +224,16 @@ accept:
     step: steps[0]
     field: stderr
     rust: '\Apgmi: error: Google Cloud SQL IAM auth requires --google-instance \(project:region:instance\)\n\(connection defaults\)$'
-  - row: Input refused before connecting
-    case: cases/cloud/aws-iam-token\.yaml
-    step: steps[3]
+  - row: AWS sign-in without a region
+    case: cases/cloud/aws-(iam-token|without-region)\.yaml
     field: stderr
-    rust: '\Apgmi: error: AWS IAM auth requires region \(use --aws-region or \$AWS_REGION\)$'
+    go: 'failed to create connector: failed to create AWS IAM token provider: (?=AWS IAM auth requires region)'
+    go_as: ''
+  - row: AWS sign-in without a region
+    case: cases/cloud/aws-without-region\.yaml
+    field: json
+    go: 'failed to create connector: failed to create AWS IAM token provider: (?=AWS IAM auth requires region)'
+    go_as: ''
   - row: A project `.env` that exists but cannot be read (a directory, no permission)
     case: cases/config/dotenv-unreadable\.yaml
     field: db

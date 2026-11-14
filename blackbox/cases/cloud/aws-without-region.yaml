@@ -1,0 +1,11 @@
+description: --aws with no region (no --aws-region, no AWS_REGION) is exit 10 before connecting, and the --json record names the database and target, as Go's does, since the deploy has started (owner 2026-11-14)
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}@{host}:{port}/postgres", -d, "{db}", --aws, --json]
+    env: {AWS_REGION: "", AWS_DEFAULT_REGION: ""}
+    expect:
+      exit: 10
+      stderr: ["AWS IAM auth requires region \\(use --aws-region or \\$AWS_REGION\\)"]
+      json: {status: failed, exitCode: 10, database: "{db}", target: {database: "{db}", host: "{host}"}}

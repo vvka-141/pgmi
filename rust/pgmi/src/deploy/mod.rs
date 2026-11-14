@@ -603,6 +603,9 @@ impl Steps<'_> {
             self.ctx.approver.before_connecting(&spec.target_db)?;
         }
         st.phase = Phase::Deploying;
+        if let Some((provider, options)) = &cloud {
+            cloud::check_started(*provider, options, &self.ctx.env)?;
+        }
         let project_path = request.project.display();
         self.reporter
             .verbose(&format!("Deploying to database \"{}\"", spec.target_db));
@@ -797,11 +800,11 @@ impl Steps<'_> {
         let cloud = cloud::select(&request.cloud, &request.cloud_request, env, yaml)?;
         st.overrides = overrides(&request.connection, env, yaml_connection)?;
         let mut spec = resolve::resolve(&request.connection, env, yaml_connection)?;
-        if let Some((provider, options)) = &cloud {
-            cloud::check(*provider, options, &mut spec, env)?;
-        }
         for line in resolve::unsupported_env(env)? {
             self.reporter.line(&line);
+        }
+        if let Some((provider, options)) = &cloud {
+            cloud::check(*provider, options, &mut spec, env)?;
         }
         if let Some(m) = &request.maintenance_db {
             spec.maintenance_db.clone_from(m);
