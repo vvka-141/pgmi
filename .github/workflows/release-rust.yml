@@ -194,7 +194,7 @@ jobs:
           path: ${{ runner.temp }}/bin
       - name: Build the Go reference
         run: go build -o "$RUNNER_TEMP/pgmi-go" ./cmd/pgmi
-      - name: Run the passing cases against the binary that ships
+      - name: Run every case against the binary that ships
         env:
           PGMI_BIN: ${{ runner.temp }}/bin/x86_64-unknown-linux-musl/pgmi
           PGMI_REFERENCE_BIN: ${{ runner.temp }}/pgmi-go
@@ -203,8 +203,8 @@ jobs:
           chmod +x "$PGMI_BIN"
           python -m pip install uv==0.13.6
           cd blackbox
-          mapfile -t cases < <(sed 's|.*|test_cases.py::test_case[cases/&.yaml]|' ../rust/blackbox-passing.txt)
-          uv run --locked pytest "${cases[@]}"
+          mapfile -t skip < <(sed -n 's|^\([^#[:space:]][^[:space:]]*\).*|--deselect=test_cases.py::test_case[cases/\1.yaml]|p' ../rust/blackbox-skip.txt)
+          uv run --locked pytest test_cases.py "${skip[@]}"
 
   package:
     name: Package

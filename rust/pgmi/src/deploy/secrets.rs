@@ -90,4 +90,20 @@ mod tests {
             "postgres reads app with ***"
         );
     }
+
+    #[test]
+    fn a_notice_is_redacted_in_its_message_detail_and_hint() {
+        let secrets = Secrets::default();
+        secrets.insert(&Secret::from("s3cret".to_string()));
+        let n = secrets.notice(Notice {
+            severity: crate::output::Severity::Notice,
+            message: "m s3cret".into(),
+            detail: Some("d s3cret".into()),
+            hint: Some("h s3cret".into()),
+        });
+        assert_eq!(
+            (n.message.as_str(), n.detail.as_deref(), n.hint.as_deref()),
+            ("m ***", Some("d ***"), Some("h ***"))
+        );
+    }
 }

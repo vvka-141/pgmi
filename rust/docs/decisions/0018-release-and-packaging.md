@@ -107,8 +107,8 @@ release is a plain workflow, `.github/workflows/release-rust.yml`:
    Six targets: Linux musl and macOS for x86_64 and aarch64, Windows MSVC
    for x86_64 and aarch64 (aarch64 Windows is new to the matrix and not yet
    proven on a runner).
-3. `blackbox`: the passing cases (`rust/blackbox-passing.txt`) against the
-   static Linux binary that ships.
+3. `blackbox`: every case but those `rust/blackbox-skip.txt` names, each
+   with its reason, against the static Linux binary that ships (PGMI-984).
 4. `package`: `rust/release/package.sh` writes `pgmi_<version>_<os>_<arch>`
    archives (tar.gz, zip for Windows) with the Go release's names and
    layout, reproducibly (fixed mtimes and owners), and `checksums.txt`;

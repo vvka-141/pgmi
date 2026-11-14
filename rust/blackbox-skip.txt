@@ -1,0 +1,3 @@
+# Black-box cases the Rust gates (CI and the release) skip, one per line:
+# <case>  # <why>
+# Every other case under blackbox/cases runs. Keep this list short.

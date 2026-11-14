@@ -220,13 +220,7 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
             };
             execution.failure = Some(Failure {
                 unit: i + 1,
-                unknown: if e.sql_diagnostics().is_none() {
-                    Some(Unknown::NoAnswer)
-                } else if idle && script::commits_inside(&unit.text) {
-                    Some(Unknown::CommitsInside)
-                } else {
-                    None
-                },
+                unknown: unknown_outcome(&e, idle, &unit.text),
                 blame: e
                     .sql_diagnostics()
                     .map(|d| Blame::new(d, &e.text(), &sent, &files))
@@ -249,6 +243,16 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn unknown_outcome(e: &Error, idle: bool, unit: &str) -> Option<Unknown> {
+    if e.sql_diagnostics().is_none() {
+        Some(Unknown::NoAnswer)
+    } else if idle && script::commits_inside(unit) {
+        Some(Unknown::CommitsInside)
+    } else {
+        None
+    }
 }
 
 fn unused_tests_notice(project: &Project, macros: usize) -> Option<String> {
@@ -281,6 +285,32 @@ mod tests {
     }
 
     use super::*;
+    use crate::error::SqlDiagnostics;
+
+    #[test]
+    fn a_lost_reply_or_a_lone_committing_statement_leaves_the_outcome_unknown() {
+        let answered = || {
+            Error::sql("lock busy").with_sql(SqlDiagnostics {
+                sqlstate: Some("55P03".into()),
+                ..SqlDiagnostics::default()
+            })
+        };
+        let lost = Error::sql("connection reset");
+        assert_eq!(
+            unknown_outcome(&lost, true, "SELECT 1"),
+            Some(Unknown::NoAnswer)
+        );
+        assert_eq!(
+            unknown_outcome(&lost, false, "SELECT 1"),
+            Some(Unknown::NoAnswer)
+        );
+        assert_eq!(
+            unknown_outcome(&answered(), true, "CALL p();"),
+            Some(Unknown::CommitsInside)
+        );
+        assert_eq!(unknown_outcome(&answered(), false, "CALL p();"), None);
+        assert_eq!(unknown_outcome(&answered(), true, "SELECT 1;"), None);
+    }
 
     fn project(deploy_sql: &str, tests: &[&str]) -> Project {
         Project {

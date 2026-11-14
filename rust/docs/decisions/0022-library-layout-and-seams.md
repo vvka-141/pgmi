@@ -481,8 +481,8 @@ independent Codex review of 58bad99f. What changed:
   snapshot reads them by name into two `Locale` values (target and
   `template1`) and fails closed when the role settings do not decode.
 - **Summary.** `deploy::summary` returns `output::Summary { Done, Failed }`.
-- **CI.** The `blackbox-rust` job is blocking: every case on
-  `rust/blackbox-passing.txt` passes, so one dropping off fails CI.
+- **CI.** The `blackbox-rust` job is blocking: every case passes but those
+  `rust/blackbox-skip.txt` names with a reason, so a new case gates at once.
 - **Serve back-pressure.** The reader answers through `deliver()`, which
   waits for room in the answer queue, racing the session and `DRAIN`. A full
   queue no longer means the client stopped reading; only a client that takes

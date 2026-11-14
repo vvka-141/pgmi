@@ -308,7 +308,7 @@ decided in the behaviour contract (PGMI-828), not fixed.
 Rows of the 2026-11-12 robustness review of the Rust port against Go's
 hardening history, proved with faults the runner injects: the `proxy:` plan, a second session from
 `sql:` steps, `/flaky/` fake endpoints and signals. Go's behaviour is the
-expectation; `rust/blackbox-passing.txt` lists the ones Rust matches.
+expectation; Rust runs every case but those `rust/blackbox-skip.txt` names, each with its reason.
 
 | Row | Behaviour | Coverage |
 |---|---|---|
