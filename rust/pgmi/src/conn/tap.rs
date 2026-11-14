@@ -82,20 +82,43 @@ pub const SESSION_FRAME_MAX: usize = 64 * 1024 * 1024;
 
 /// Frames after sign-in: each one's announced length is checked against
 /// its type's limit before the driver sees the header (and reserves room
-/// for the body).
+/// for the body). COPY's own messages never reach the driver, which reads
+/// deploy.sql's answers as a simple query: rows a `COPY ... TO STDOUT`
+/// sends are dropped, and a `COPY ... FROM STDIN` is answered with
+/// `CopyFail`.
 #[derive(Default)]
 struct Frames {
     header: [u8; 5],
     have: usize,
     remaining: usize,
+    hidden: bool,
+}
+
+const COPY_FAIL: &str = "COPY FROM STDIN cannot run in deploy.sql: pgmi sends no COPY data; load the rows with INSERT, or COPY FROM a file on the server";
+
+fn copy_fail() -> Vec<u8> {
+    let mut body = COPY_FAIL.as_bytes().to_vec();
+    body.push(0);
+    frame(b'f', &body)
 }
 
 impl Frames {
-    fn check(&mut self, bytes: &[u8]) -> Result<(), Error> {
-        let mut r = 0;
+    /// Compacts `bytes` to what the driver may see and returns its length,
+    /// and whether the server asked for COPY data.
+    fn pass(&mut self, bytes: &mut [u8]) -> Result<(usize, bool), Error> {
+        let (mut r, mut w, mut copy_in) = (0, 0, false);
         while r < bytes.len() {
             if self.remaining == 0 {
-                self.header[self.have] = bytes[r];
+                let b = bytes[r];
+                if self.have == 0 {
+                    self.hidden = matches!(b, b'H' | b'd' | b'c' | b'G');
+                    copy_in |= b == b'G';
+                }
+                if !self.hidden {
+                    bytes[w] = b;
+                    w += 1;
+                }
+                self.header[self.have] = b;
                 self.have += 1;
                 r += 1;
                 if self.have == 5 {
@@ -116,10 +139,14 @@ impl Frames {
                 continue;
             }
             let take = self.remaining.min(bytes.len() - r);
+            if !self.hidden {
+                bytes.copy_within(r..r + take, w);
+                w += take;
+            }
             self.remaining -= take;
             r += take;
         }
-        Ok(())
+        Ok((w, copy_in))
     }
 }
 
@@ -369,6 +396,7 @@ pub(crate) struct Tap<S> {
     end_point: Option<Vec<u8>>,
     frames: Frames,
     carry: Vec<u8>,
+    inject: Vec<u8>,
 }
 
 /// The tap's part of authentication: whole frames until the first
@@ -564,30 +592,56 @@ impl Startup {
     }
 }
 
-impl<S: AsyncRead + Unpin> Tap<S> {
+impl<S: AsyncRead + AsyncWrite + Unpin> Tap<S> {
     fn poll_session(
         &mut self,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        if !self.carry.is_empty() {
-            let n = self.carry.len().min(buf.remaining());
-            let head: Vec<u8> = self.carry.drain(..n).collect();
-            self.frames.check(&head).map_err(io::Error::other)?;
-            self.parser
-                .feed(&head, &self.shared)
-                .map_err(io::Error::other)?;
-            buf.put_slice(&head);
-            return Poll::Ready(Ok(()));
+        loop {
+            let _ = self.poll_inject(cx)?;
+            if !self.carry.is_empty() {
+                let n = self.carry.len().min(buf.remaining());
+                let mut head: Vec<u8> = self.carry.drain(..n).collect();
+                let kept = self.admit(&mut head)?;
+                buf.put_slice(&head[..kept]);
+                if kept > 0 {
+                    return Poll::Ready(Ok(()));
+                }
+                continue;
+            }
+            let start = buf.filled().len();
+            ready!(Pin::new(&mut self.inner).poll_read(cx, buf))?;
+            if buf.filled().len() == start {
+                return Poll::Ready(Ok(()));
+            }
+            let mut new = buf.filled()[start..].to_vec();
+            let kept = self.admit(&mut new)?;
+            buf.set_filled(start);
+            buf.put_slice(&new[..kept]);
+            if kept > 0 {
+                return Poll::Ready(Ok(()));
+            }
         }
-        let start = buf.filled().len();
-        ready!(Pin::new(&mut self.inner).poll_read(cx, buf))?;
-        let new = &buf.filled()[start..];
-        self.frames.check(new).map_err(io::Error::other)?;
+    }
+
+    fn admit(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        let (kept, copy_in) = self.frames.pass(bytes).map_err(io::Error::other)?;
         self.parser
-            .feed(new, &self.shared)
+            .feed(&bytes[..kept], &self.shared)
             .map_err(io::Error::other)?;
-        Poll::Ready(Ok(()))
+        if copy_in {
+            self.inject.extend(copy_fail());
+        }
+        Ok(kept)
+    }
+
+    fn poll_inject(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        while !self.inject.is_empty() {
+            let n = ready!(Pin::new(&mut self.inner).poll_write(cx, &self.inject))?;
+            self.inject.drain(..n);
+        }
+        Pin::new(&mut self.inner).poll_flush(cx)
     }
 }
 
@@ -607,6 +661,7 @@ impl<S> Tap<S> {
             end_point: None,
             frames: Frames::default(),
             carry: Vec::new(),
+            inject: Vec::new(),
         }
     }
 
@@ -620,6 +675,7 @@ impl<S> Tap<S> {
             end_point,
             frames: Frames::default(),
             carry: Vec::new(),
+            inject: Vec::new(),
         }
     }
 }
@@ -676,13 +732,15 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for Tap<S> {
     }
 }
 
-impl<S: AsyncWrite + Unpin> AsyncWrite for Tap<S> {
+impl<S: AsyncRead + AsyncWrite + Unpin> AsyncWrite for Tap<S> {
     fn poll_write(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+        let this = self.get_mut();
+        ready!(this.poll_inject(cx))?;
+        Pin::new(&mut this.inner).poll_write(cx, buf)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -864,13 +922,35 @@ mod startup_tests {
     }
 
     #[test]
+    fn copy_messages_never_reach_the_driver_and_copy_in_is_flagged() {
+        let mut all = frame(b'H', &[0, 0, 0]);
+        all.extend(frame(b'd', b"1\n"));
+        all.extend(frame(b'c', b""));
+        all.extend(frame(b'C', b"COPY 1\0"));
+        all.extend(frame(b'G', &[0, 0, 0]));
+        all.extend(frame(b'Z', b"I"));
+        let mut want = frame(b'C', b"COPY 1\0");
+        want.extend(frame(b'Z', b"I"));
+        for cut in 0..all.len() {
+            let mut f = Frames::default();
+            let (mut a, mut b) = (all[..cut].to_vec(), all[cut..].to_vec());
+            let (ka, ia) = f.pass(&mut a).unwrap();
+            let (kb, ib) = f.pass(&mut b).unwrap();
+            let mut seen = a[..ka].to_vec();
+            seen.extend_from_slice(&b[..kb]);
+            assert_eq!(seen, want, "cut at {cut}");
+            assert!(ia || ib, "cut at {cut}");
+        }
+    }
+
+    #[test]
     fn session_frames_are_capped_by_type_across_any_split() {
         let mut ok = frame(b'D', &[0; 10]);
         ok.extend(frame(b'N', &[1; 100]));
         for cut in 0..ok.len() {
             let mut f = Frames::default();
-            f.check(&ok[..cut]).unwrap();
-            f.check(&ok[cut..]).unwrap();
+            f.pass(&mut ok.clone()[..cut]).unwrap();
+            f.pass(&mut ok.clone()[cut..]).unwrap();
         }
         let mut f = Frames::default();
         let mut big_row = vec![b'D'];
@@ -879,7 +959,7 @@ mod startup_tests {
                 .unwrap()
                 .to_be_bytes(),
         );
-        f.check(&big_row).unwrap();
+        f.pass(&mut big_row).unwrap();
         let mut f = Frames::default();
         let mut big_notice = vec![b'N'];
         big_notice.extend_from_slice(
@@ -887,7 +967,7 @@ mod startup_tests {
                 .unwrap()
                 .to_be_bytes(),
         );
-        assert!(f.check(&big_notice).is_err());
+        assert!(f.pass(&mut big_notice).is_err());
     }
 
     async fn client_first(s: &mut tokio::io::DuplexStream) -> String {

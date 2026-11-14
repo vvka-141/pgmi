@@ -1,0 +1,20 @@
+description: a COPY ... TO STDOUT in deploy.sql runs and its rows are discarded, in the head and in the tail, and the deploy goes on (PGMI-987)
+project:
+  files:
+    deploy.sql: |
+      BEGIN;
+      CREATE TABLE before_copy (id int);
+      COPY (SELECT 1) TO STDOUT;
+      COMMIT;
+      COPY (SELECT g FROM generate_series(1, 1000) g) TO STDOUT;
+      CREATE TABLE after_copy (id int);
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    timeout: 30
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT to_regclass('before_copy') IS NOT NULL AND to_regclass('after_copy') IS NOT NULL
+          rows: [[true]]

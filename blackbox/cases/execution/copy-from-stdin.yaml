@@ -1,0 +1,16 @@
+description: Rust only (PGMI-987). A COPY ... FROM STDIN in deploy.sql fails at once with exit 13 and says pgmi sends no COPY data; Go waits for data until --timeout
+impl: rust
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE loaded (id int);
+      COPY loaded FROM STDIN;
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --timeout, 20s]
+    timeout: 30
+    expect:
+      exit: 13
+      stderr: ["COPY FROM STDIN cannot run in deploy\\.sql: pgmi sends no COPY data"]
+      stderr_not: ["got no answer"]
