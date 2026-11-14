@@ -763,6 +763,14 @@ attempt after an earlier one failed says `time box of <d> used up after N
 attempts; last error: ...`, a wait is never started past the deadline, and a
 signal during a wait is exit 130 at once.
 
+A `CREATE [UNIQUE] INDEX CONCURRENTLY` or `REINDEX ... CONCURRENTLY` that a
+`--timeout`, a signal or its own error stops leaves an INVALID index, which
+a later `IF NOT EXISTS` skips. The Rust binary adds `an INVALID index may be
+left behind; find it with SELECT indexrelid::regclass FROM pg_index WHERE
+NOT indisvalid, and drop it before deploying again` after the error and
+puts it in the `--json` `hint` when the server sent none; Go says nothing
+(PGMI-998).
+
 Cases: `retry/deadline-during-an-attempt`, `retry/wait-cut-at-the-deadline`, `retry/signal-during-a-wait`, `config/pgmi-yaml-timeout-too-long`, `exit-codes/16-timeout`, `errors/timeout-while-connecting`, `exit-codes/130-interrupted`, `exit-codes/130-sigterm`, `flags/timeout-forms`, `cancel/timeout-cancels`, `cancel/timeout-over-tls`, `cancel/sigint-twice`, `env/pgconnect-timeout`, `cancel/ctrl-c-json-exit-code`, `cancel/timeout-leaves-invalid-concurrent-index`, `cancel/stopped-record`, `bad-weather/frozen-server-timeout`, `bad-weather/signal-while-connecting`, `bad-weather/signal-during-connect-backoff`, `bad-weather/signal-during-session-setup`, `bad-weather/signal-in-tail`, `bad-weather/signal-at-lock-release`, `bad-weather/lock-wait-timeout`.
 
 ### Checksums

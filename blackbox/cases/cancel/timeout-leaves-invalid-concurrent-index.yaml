@@ -1,4 +1,4 @@
-description: a CREATE INDEX CONCURRENTLY cut off by --timeout exits 16 and leaves an INVALID index, as CICD.md says (drop it and deploy again)
+description: a CREATE INDEX CONCURRENTLY cut off by --timeout exits 16 and leaves an INVALID index, as CICD.md says (drop it and deploy again); a unique one that fails on duplicates leaves one too, exit 13. The Rust binary says so after the error and in the --json hint (PGMI-998); a failure of any other statement does not
 project:
   files:
     deploy.sql: |
@@ -7,6 +7,14 @@ project:
       CREATE FUNCTION slow(int) RETURNS int LANGUAGE sql IMMUTABLE AS 'SELECT $1 FROM pg_sleep(1)';
       COMMIT;
       CREATE INDEX CONCURRENTLY t_slow ON t ((slow(x)));
+    dup/deploy.sql: |
+      CREATE TABLE d (x int);
+      INSERT INTO d VALUES (1), (1);
+      COMMIT;
+      /* the index */ create unique index concurrently d_x on d (x);
+    other/deploy.sql: |
+      COMMIT;
+      CREATE INDEX t_plain ON missing_table (x);
 steps:
   - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --timeout, 3s]
     timeout: 60
@@ -15,3 +23,23 @@ steps:
       sql:
         - query: SELECT indisvalid FROM pg_index WHERE indexrelid = 'public.t_slow'::regclass
           rows: [[false]]
+      rust:
+        exit: 16
+        stderr: ["^an INVALID index may be left behind; find it with SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid, and drop it before deploying again$"]
+        sql:
+          - query: SELECT indisvalid FROM pg_index WHERE indexrelid = 'public.t_slow'::regclass
+            rows: [[false]]
+  - pgmi: [deploy, "{project}/dup", --connection, "{conn}", -d, "{db}", --json]
+    expect:
+      exit: 13
+      sql:
+        - query: SELECT indisvalid FROM pg_index WHERE indexrelid = 'public.d_x'::regclass
+          rows: [[false]]
+      rust:
+        exit: 13
+        stderr: ["^an INVALID index may be left behind; find it with SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid, and drop it before deploying again$"]
+        json: {sqlstate: "23505", hint: "an INVALID index may be left behind; find it with SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid, and drop it before deploying again"}
+  - pgmi: [deploy, "{project}/other", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 13
+      stderr_not: ["INVALID index"]

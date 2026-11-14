@@ -279,12 +279,16 @@ impl DeployRecord {
         }
         let clean = |t: &str| redact(&redact_sql_passwords(t), secrets);
         self.error = Some(clean(&e.text()));
+        let invalid = failure
+            .filter(|f| f.concurrent)
+            .map(|_| super::INVALID_INDEX.to_string());
+        self.hint.clone_from(&invalid);
         let Some(d) = e.sql_diagnostics() else {
             return;
         };
         self.sqlstate.clone_from(&d.sqlstate);
         self.detail = d.detail.as_deref().map(clean);
-        self.hint = d.hint.as_deref().map(clean);
+        self.hint = d.hint.as_deref().map(clean).or(invalid);
         self.where_ = d.where_.as_deref().map(clean);
         let Some(b) = failure.map(|f| &f.blame) else {
             return;

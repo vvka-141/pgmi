@@ -78,6 +78,27 @@ pub(crate) fn prepares(unit: &str) -> bool {
         .any(|w| w.len() >= 2 && eq(w[0], "PREPARE") && eq(w[1], "TRANSACTION"))
 }
 
+/// True when the unit builds an index concurrently, which a failure or a
+/// stop leaves behind INVALID.
+pub(crate) fn builds_concurrently(unit: &str) -> bool {
+    let bytes = unit.as_bytes();
+    statements(unit)
+        .into_iter()
+        .map(|(s, e)| words(&bytes[s..e], &lexer::tokens(&bytes[s..e])))
+        .any(|w| match w.first() {
+            Some(first) if eq(first, "CREATE") => {
+                let rest = if w.get(1).is_some_and(|u| eq(u, "UNIQUE")) {
+                    &w[2..]
+                } else {
+                    &w[1..]
+                };
+                rest.len() >= 2 && eq(rest[0], "INDEX") && eq(rest[1], "CONCURRENTLY")
+            }
+            Some(first) if eq(first, "REINDEX") => w.iter().any(|x| eq(x, "CONCURRENTLY")),
+            _ => false,
+        })
+}
+
 fn says_commit(text: &[u8]) -> bool {
     let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$';
     text.windows(6).enumerate().any(|(i, w)| {
@@ -377,6 +398,27 @@ mod tests {
             .into_iter()
             .map(|u| u.text.trim().to_string())
             .collect()
+    }
+
+    #[test]
+    fn an_index_built_concurrently_is_recognised_in_any_spelling() {
+        for unit in [
+            "CREATE INDEX CONCURRENTLY i ON t (x);",
+            "/* why */ create unique index concurrently i on t (x)",
+            "-- note\nCREATE INDEX CONCURRENTLY IF NOT EXISTS i ON t (x);",
+            "REINDEX TABLE CONCURRENTLY t;",
+            "reindex (verbose) index concurrently i;",
+        ] {
+            assert!(builds_concurrently(unit), "{unit}");
+        }
+        for unit in [
+            "CREATE INDEX i ON t (x);",
+            "CREATE INDEX concurrently_named ON t (x);",
+            "SELECT 'CREATE INDEX CONCURRENTLY';",
+            "REINDEX TABLE t;",
+        ] {
+            assert!(!builds_concurrently(unit), "{unit}");
+        }
     }
 
     #[test]

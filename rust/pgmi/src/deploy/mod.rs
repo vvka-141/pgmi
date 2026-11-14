@@ -384,7 +384,11 @@ pub(crate) struct Failure {
     unit: usize,
     blame: blame::Blame,
     unknown: Option<Unknown>,
+    /// The unit built an index concurrently: it may be left INVALID.
+    concurrent: bool,
 }
+
+pub(crate) const INVALID_INDEX: &str = "an INVALID index may be left behind; find it with SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid, and drop it before deploying again";
 
 /// Why a failed unit may have committed although it failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1392,8 +1396,13 @@ fn finish(ctx: &Context, run: &Run, result: &Result<()>, reporter: &Reporter) ->
                 )
             })
             .unwrap_or_default();
+        let invalid = st
+            .failure()
+            .filter(|f| f.concurrent)
+            .map(|_| format!("\n{INVALID_INDEX}"))
+            .unwrap_or_default();
         let text = format!(
-            "pgmi: error: {}{note}{}{first}",
+            "pgmi: error: {}{note}{}{invalid}{first}",
             e.text(),
             run.diagnostics(e)
         );
@@ -1750,6 +1759,7 @@ mod tests {
             unit,
             blame,
             unknown: None,
+            concurrent: false,
         })
     }
 
@@ -1876,6 +1886,7 @@ mod tests {
                     unit: 2,
                     blame: blame::Blame::default(),
                     unknown: Some(Unknown::NoAnswer),
+                    concurrent: false,
                 }),
             )
         };
@@ -1895,6 +1906,7 @@ mod tests {
                 unit: 1,
                 blame: blame::Blame::default(),
                 unknown: Some(Unknown::CommitsInside),
+                concurrent: false,
             }),
         );
         for after_commit in [false, true] {
@@ -1936,6 +1948,7 @@ mod tests {
                     unit: 1,
                     blame: blame::Blame::default(),
                     unknown: Some(Unknown::NoAnswer),
+                    concurrent: false,
                 }),
             }),
             ..loaded("app")
@@ -1951,6 +1964,7 @@ mod tests {
                     unit: 2,
                     blame: blame::Blame::default(),
                     unknown: Some(Unknown::NoAnswer),
+                    concurrent: false,
                 }),
             ),
             ..loaded("app")

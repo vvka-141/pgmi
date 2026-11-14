@@ -40,6 +40,9 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
 - **One unreachable host no longer uses the whole time box.** With several
   hosts and no `connect_timeout`, each host but the last gets at most its
   share of `--timeout` (and at most 30 s) before the next one is tried.
+- **A stopped `CREATE INDEX CONCURRENTLY` is named.** When one fails or
+  is stopped, pgmi says an INVALID index may be left and how to find and
+  drop it, also in the `--json` `hint`.
 - **`--json` always ends with a record.** Every exit writes one, also an
   unreadable project `.env` (exit 10) and a runtime that cannot start (exit
   1). When the record cannot be written, a deploy that succeeded exits 1.
@@ -140,9 +143,6 @@ ticket; none loses data on its own.
   without a size cap. Accepted: the token endpoints come from the
   operator's own Google ADC configuration, and google-cloud-auth offers no
   way to pass pgmi's capped client (PGMI-994).
-- **An interrupted `CREATE INDEX CONCURRENTLY`** leaves an INVALID index,
-  and the message does not say so; drop it before the next deploy
-  (PGMI-998, as in Go).
 - **SIGQUIT and SIGUSR1** end pgmi without cancelling the statement, so
   the next run may wait for the old session's lock (PGMI-999).
 - **Escape sequences** in server messages and file names reach the
