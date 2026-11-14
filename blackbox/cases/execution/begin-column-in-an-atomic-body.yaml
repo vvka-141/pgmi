@@ -1,0 +1,27 @@
+description: a column named begin inside a BEGIN ATOMIC function body does not hide the head's COMMIT - the head runs as one unit and the CREATE INDEX CONCURRENTLY after it runs on its own (PGMI-978)
+project:
+  files:
+    deploy.sql: |
+      BEGIN;
+      CREATE TABLE IF NOT EXISTS booking (id serial PRIMARY KEY, begin timestamptz NOT NULL DEFAULT now());
+      CREATE OR REPLACE FUNCTION first_booking() RETURNS timestamptz
+          LANGUAGE sql STABLE
+      BEGIN ATOMIC
+          SELECT min(b.begin) FROM booking b;
+          SELECT CASE WHEN count(*) > 0 THEN max(b.begin) END FROM booking b;
+      END;
+      INSERT INTO booking DEFAULT VALUES;
+      COMMIT;
+      CREATE INDEX CONCURRENTLY IF NOT EXISTS booking_begin ON booking (begin);
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    timeout: 60
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT count(*) FROM booking
+          rows: [[1]]
+        - query: SELECT indisvalid FROM pg_index WHERE indexrelid = 'booking_begin'::regclass
+          rows: [[true]]

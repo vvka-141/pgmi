@@ -82,7 +82,8 @@ pub(crate) fn statements(src: &str) -> Vec<(usize, usize)> {
     let toks = lexer::tokens(bytes);
     let mut out = Vec::new();
     let mut start = 0;
-    let mut atomic = 0usize;
+    let mut atomic = false;
+    let mut leading = false;
     let mut parens = 0usize;
     let mut prev_word: Option<&[u8]> = None;
     for t in &toks {
@@ -93,20 +94,24 @@ pub(crate) fn statements(src: &str) -> Vec<(usize, usize)> {
         }
         if t.kind == TokenKind::Word {
             let w = t.text(bytes);
-            if atomic == 0 {
+            if !atomic {
                 if eq(w, "ATOMIC") && prev_word.is_some_and(|p| eq(p, "BEGIN")) {
-                    atomic = 1;
+                    atomic = true;
+                    leading = true;
+                    prev_word = Some(w);
+                    continue;
                 }
-            } else if eq(w, "CASE") || eq(w, "BEGIN") {
-                atomic += 1;
-            } else if eq(w, "END") {
-                atomic -= 1;
+            } else if leading && eq(w, "END") {
+                atomic = false;
             }
             prev_word = Some(w);
         } else if !t.is_trivia() {
             prev_word = None;
         }
-        if t.kind == TokenKind::Semicolon && atomic == 0 && parens == 0 {
+        if !t.is_trivia() {
+            leading = atomic && t.kind == TokenKind::Semicolon;
+        }
+        if t.kind == TokenKind::Semicolon && !atomic && parens == 0 {
             out.push((start, t.end));
             start = t.end;
         }
@@ -410,6 +415,19 @@ mod tests {
         let t = texts(src);
         assert_eq!(t.len(), 2);
         assert!(t[0].ends_with("COMMIT;"));
+    }
+
+    #[test]
+    fn a_begin_column_or_an_empty_body_does_not_hide_the_commit() {
+        for src in [
+            "BEGIN; CREATE FUNCTION f() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT min(b.begin) FROM t b; END; COMMIT; SELECT 3;",
+            "BEGIN; CREATE FUNCTION f() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT begin FROM t; SELECT 1 AS case; END; COMMIT; SELECT 3;",
+            "BEGIN; CREATE PROCEDURE p() LANGUAGE sql BEGIN ATOMIC END; COMMIT; SELECT 3;",
+        ] {
+            let t = texts(src);
+            assert_eq!(t.len(), 2, "{src:?}");
+            assert!(t[0].ends_with("COMMIT;"), "{src:?}");
+        }
     }
 
     #[test]

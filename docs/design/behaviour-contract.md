@@ -605,7 +605,7 @@ created, before `deploy.sql`, it is exit 1. A lock held by another session is
 waited for; `lock_timeout`, a deadlock (40P01) and a serialization failure
 (40001) are exit 13 like any SQL error, and pgmi never retries them.
 
-Cases: `execution/atomic-head`, `execution/tail-autocommit`, `execution/tail-semicolon-in-parentheses`, `execution/open-transaction`, `execution/tail-block-fails`, `execution/commit-and-chain`, `bad-weather/reset-in-transaction`, `bad-weather/reset-in-tail`, `bad-weather/server-errors-mid-deploy`, `bad-weather/lock-wait`, `bad-weather/lock-timeout`, `bad-weather/deadlock`, `bad-weather/serialization-failure`.
+Cases: `execution/atomic-head`, `execution/tail-autocommit`, `execution/tail-semicolon-in-parentheses`, `execution/begin-column-in-an-atomic-body`, `execution/open-transaction`, `execution/tail-block-fails`, `execution/commit-and-chain`, `bad-weather/reset-in-transaction`, `bad-weather/reset-in-tail`, `bad-weather/server-errors-mid-deploy`, `bad-weather/lock-wait`, `bad-weather/lock-timeout`, `bad-weather/deadlock`, `bad-weather/serialization-failure`.
 
 ### Test macro
 
