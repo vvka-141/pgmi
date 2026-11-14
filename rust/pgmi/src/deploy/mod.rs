@@ -394,6 +394,9 @@ pub(crate) enum Unknown {
     /// The unit is one DO block or CALL run outside a transaction block,
     /// which can COMMIT inside.
     CommitsInside,
+    /// The unit ran PREPARE TRANSACTION: its work waits, holding its locks,
+    /// for COMMIT PREPARED or ROLLBACK PREPARED.
+    Prepared,
 }
 
 impl Failure {
@@ -405,6 +408,10 @@ impl Failure {
             ),
             Unknown::CommitsInside => format!(
                 "unit {} of {units} is a DO block or CALL, which may have committed before it failed",
+                self.unit
+            ),
+            Unknown::Prepared => format!(
+                "unit {} of {units} ran PREPARE TRANSACTION, which may have left a prepared transaction",
                 self.unit
             ),
         })
@@ -1346,6 +1353,10 @@ fn summary(p: &Progress, result: &Result<()>, elapsed: Duration) -> Option<Summa
                 notes.push(match f.unknown {
                     Some(Unknown::CommitsInside) => format!(
                         "unit {} of {} is a DO block or CALL, which may have committed before it failed; check the database",
+                        f.unit, x.units
+                    ),
+                    Some(Unknown::Prepared) => format!(
+                        "unit {} of {} ran PREPARE TRANSACTION; check pg_prepared_xacts, then COMMIT PREPARED or ROLLBACK PREPARED",
                         f.unit, x.units
                     ),
                     _ => format!(

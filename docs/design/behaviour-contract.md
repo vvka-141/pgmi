@@ -1378,7 +1378,10 @@ PGMI-970; likewise a failed unit that is one CALL, or one DO block that says
 COMMIT, run outside a transaction block, since it can commit inside itself:
 `not retried: unit U of T is a DO block or CALL, which may have committed
 before it failed`, and the summary never says `nothing committed`, owner
-2026-11-14, PGMI-977); 57P01, 57P02, 57P03; 53300; 40001, 40P01; 55P03; 25006
+2026-11-14, PGMI-977; and a failed unit that ran PREPARE TRANSACTION, whose
+work waits holding its locks: `not retried: unit U of T ran PREPARE
+TRANSACTION, which may have left a prepared transaction`, the summary
+pointing to `pg_prepared_xacts`, PGMI-991); 57P01, 57P02, 57P03; 53300; 40001, 40P01; 55P03; 25006
 only while the server reports `in_hot_standby = on` and the connection did
 not ask for a standby (`target_session_attrs` `read-only`, `standby`,
 `prefer-standby`); a cloud sign-in that still fails after its own retries

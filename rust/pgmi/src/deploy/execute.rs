@@ -250,6 +250,8 @@ fn unknown_outcome(e: &Error, idle: bool, unit: &str) -> Option<Unknown> {
         Some(Unknown::NoAnswer)
     } else if idle && script::commits_inside(unit) {
         Some(Unknown::CommitsInside)
+    } else if script::prepares(unit) {
+        Some(Unknown::Prepared)
     } else {
         None
     }
@@ -310,6 +312,14 @@ mod tests {
         );
         assert_eq!(unknown_outcome(&answered(), false, "CALL p();"), None);
         assert_eq!(unknown_outcome(&answered(), true, "SELECT 1;"), None);
+        assert_eq!(
+            unknown_outcome(
+                &answered(),
+                false,
+                "BEGIN; PREPARE TRANSACTION 'x'; SELECT 1;"
+            ),
+            Some(Unknown::Prepared)
+        );
     }
 
     fn project(deploy_sql: &str, tests: &[&str]) -> Project {

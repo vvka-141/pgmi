@@ -68,6 +68,16 @@ pub(crate) fn commits_inside(unit: &str) -> bool {
     }
 }
 
+/// True when the unit runs PREPARE TRANSACTION, which leaves its work in a
+/// prepared transaction for COMMIT PREPARED or ROLLBACK PREPARED.
+pub(crate) fn prepares(unit: &str) -> bool {
+    let bytes = unit.as_bytes();
+    statements(unit)
+        .into_iter()
+        .map(|(s, e)| words(&bytes[s..e], &lexer::tokens(&bytes[s..e])))
+        .any(|w| w.len() >= 2 && eq(w[0], "PREPARE") && eq(w[1], "TRANSACTION"))
+}
+
 fn says_commit(text: &[u8]) -> bool {
     let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$';
     text.windows(6).enumerate().any(|(i, w)| {
@@ -561,6 +571,17 @@ mod tests {
         }
         assert!(!head_commits("BEGIN; SELECT 1;"));
         assert!(!head_commits("-- COMMIT;\nSELECT 1;"));
+    }
+
+    #[test]
+    fn prepare_transaction_is_found_as_a_statement_only() {
+        assert!(prepares(
+            "BEGIN; INSERT INTO t VALUES (1); prepare  transaction 'x'; SELECT 1;"
+        ));
+        assert!(!prepares(
+            "PREPARE q AS SELECT 1; SELECT 'PREPARE TRANSACTION';"
+        ));
+        assert!(!prepares("-- PREPARE TRANSACTION 'x';\nSELECT 1;"));
     }
 
     #[test]
