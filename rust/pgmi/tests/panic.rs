@@ -25,7 +25,7 @@ fn a_panic_exits_3_and_still_prints_the_json_record() {
 
 #[test]
 fn a_panicking_serve_tool_answers_is_error_and_the_session_goes_on() {
-    use std::io::Write;
+    use std::io::{BufRead, Write};
     let dir = std::env::temp_dir().join(format!("pgmi-panic-serve-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("deploy.sql"), "SELECT 1;\n").unwrap();
@@ -46,15 +46,15 @@ fn a_panicking_serve_tool_answers_is_error_and_the_session_goes_on() {
         "{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}}"
     )
     .unwrap();
+    let mut answers: Vec<serde_json::Value> = Vec::new();
+    let mut lines = std::io::BufReader::new(child.stdout.take().unwrap()).lines();
+    while answers.len() < 2 {
+        answers.push(serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap());
+    }
     drop(stdin);
-    let out = child.wait_with_output().unwrap();
+    let status = child.wait().unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
-    assert_eq!(out.status.code(), Some(0));
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let answers: Vec<serde_json::Value> = stdout
-        .lines()
-        .map(|l| serde_json::from_str(l).unwrap())
-        .collect();
+    assert_eq!(status.code(), Some(0));
     let call = answers.iter().find(|a| a["id"] == 1).unwrap();
     assert_eq!(call["result"]["isError"], true);
     assert_eq!(call["result"]["structuredContent"]["exitCode"], 3);
