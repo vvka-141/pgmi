@@ -172,6 +172,8 @@ struct Server<T> {
     calls: Mutex<HashMap<CallId, CancellationToken>>,
     slots: Arc<Semaphore>,
     root: CancellationToken,
+    /// Cancelled at the end of input; parent of the calls that end with it.
+    input_open: CancellationToken,
     dropped: CancellationToken,
     tools: Arc<T>,
 }
@@ -248,6 +250,7 @@ pub(crate) async fn serve<T: Toolbox>(
             calls: Mutex::new(HashMap::new()),
             slots: Arc::new(Semaphore::new(MAX_CALLS)),
             root: session.clone(),
+            input_open: session.child_token(),
             dropped: dropped.clone(),
             tools,
         }),
@@ -283,11 +286,15 @@ struct Reader<T> {
 
 impl<T: Toolbox> Reader<T> {
     /// Reads until input ends or the session is cancelled, marks the input
-    /// end, then waits for every call. Dropping the server afterwards closes
+    /// end, then waits for every call. The end of input cancels the calls
+    /// that end with it: the client is shutting the server down. Dropping the server afterwards closes
     /// the answer queue, which ends the writer.
     async fn run(mut self, mut input: impl AsyncRead + Unpin, input_end: &InputEnd) -> ReadEnd {
         let end = match self.read(&mut input).await {
-            Ok(()) => ReadEnd::Eof,
+            Ok(()) => {
+                self.server.input_open.cancel();
+                ReadEnd::Eof
+            }
             Err(end) => end,
         };
         input_end.reached();
@@ -570,7 +577,11 @@ impl<T: Toolbox> Server<T> {
         let Some(key) = CallId::of(&id) else {
             return Reply::Never;
         };
-        let token = self.root.child_token();
+        let token = if self.tools.ends_with_input(&tool) {
+            self.input_open.child_token()
+        } else {
+            self.root.child_token()
+        };
         let mut calls = self.calls();
         if calls.contains_key(&key) {
             return Reply::Now(wire::error(
@@ -707,6 +718,7 @@ mod tests {
             calls: Mutex::new(HashMap::new()),
             slots: Arc::new(Semaphore::new(MAX_CALLS)),
             root: CancellationToken::new(),
+            input_open: CancellationToken::new(),
             dropped: CancellationToken::new(),
             tools: Arc::new(tools::Tools {
                 env: Env::default(),

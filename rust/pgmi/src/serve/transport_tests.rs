@@ -82,6 +82,10 @@ impl Toolbox for Fakes {
         })
     }
 
+    fn ends_with_input(&self, tool: &Fake) -> bool {
+        matches!(tool, Fake::Slow)
+    }
+
     async fn call(
         &self,
         tool: Fake,
@@ -194,6 +198,28 @@ async fn ping_is_answered_and_cancel_stops_a_slow_tool_call() {
         .await
         .unwrap();
     assert_eq!(rest, "", "a cancelled request must not be answered");
+}
+
+#[tokio::test]
+async fn the_end_of_input_cancels_a_call_that_can_commit_and_answers_the_others() {
+    let (tools, mut probes) = fakes();
+    let mut s = Running::start(tools);
+    s.send(r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"slow"}}"#)
+        .await;
+    probes.started.recv().await.unwrap();
+    s.send(r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo"}}"#)
+        .await;
+    s.input.shutdown().await.unwrap();
+    let stopped = timeout(Duration::from_secs(1), probes.stopped.recv()).await;
+    assert_eq!(stopped.unwrap(), Some("cancelled"));
+    let (ended, mut output) = s.ended_as().await;
+    assert!(matches!(ended, Ended::EndOfInput), "{ended:?}");
+    let mut rest = String::new();
+    tokio::io::AsyncReadExt::read_to_string(&mut output, &mut rest)
+        .await
+        .unwrap();
+    assert!(rest.contains(r#""id":2,"result""#), "{rest}");
+    assert!(!rest.contains(r#""id":1,"#), "{rest}");
 }
 
 #[tokio::test]

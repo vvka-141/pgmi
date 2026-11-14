@@ -26,6 +26,10 @@ pub(crate) trait Toolbox: Send + Sync + 'static {
 
     fn tool(&self, name: &str) -> Option<Self::Tool>;
 
+    /// Whether a call of `tool` is cancelled when the client closes its
+    /// input: work that can commit must not commit unseen.
+    fn ends_with_input(&self, tool: &Self::Tool) -> bool;
+
     /// Runs one call on its own task, inside [`crate::blocking::Slot::hold`];
     /// a panic becomes the call's answer. Blocking work starts through
     /// [`crate::blocking::spawn`], so it keeps the call's place until it ends.
@@ -52,6 +56,10 @@ impl Toolbox for Tools {
 
     fn tool(&self, name: &str) -> Option<Tool> {
         Tool::named(name)
+    }
+
+    fn ends_with_input(&self, tool: &Tool) -> bool {
+        matches!(tool, Tool::Deploy)
     }
 
     fn call(

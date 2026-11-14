@@ -43,6 +43,9 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   `PGMI_SERVE_ALLOW_OVERWRITE=1`. A `paramsFile` must lie inside the
   project or a directory of `PGMI_SERVE_ROOTS`. See
   [serve-allowed-hosts](switch-day/serve-allowed-hosts.md).
+- **`pgmi serve` stops a deploy whose client left.** When the MCP client
+  closes stdin, a running deploy is cancelled and rolls back what it had
+  not committed yet; other tool calls still get their answers.
 - **`pgmi serve` limits.** A request line may hold at most 16 MiB, at most 32
   tool calls run at once, and a client that leaves 1024 answers unread is
   disconnected. A file with two `<pgmi-meta>` elements in one comment is

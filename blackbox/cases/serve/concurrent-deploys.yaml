@@ -11,6 +11,8 @@ steps:
       - '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"{conn}","database":"{db}"}}}'
       - wait: 2
       - '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"{conn}","database":"{db}"}}}'
+      - {until: '"id":2,', timeout: 60}
+      - {until: '"id":3,', timeout: 60}
     timeout: 60
     expect:
       exit: 0

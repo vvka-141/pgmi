@@ -14,6 +14,9 @@ steps:
       - '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"{conn}","database":"{db}","overwrite":true}}}'
       - '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"{conn}","database":"{db}","overwrite":true,"confirmDatabaseName":"other"}}}'
       - '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"init","arguments":{"path":"{workdir}/x","bogus":1}}}'
+      - {until: '"id":2,', timeout: 60}
+      - {until: '"id":3,', timeout: 60}
+      - {until: '"id":4,', timeout: 60}
     timeout: 60
     expect:
       exit: 0

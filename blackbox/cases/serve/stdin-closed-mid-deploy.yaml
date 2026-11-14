@@ -1,0 +1,49 @@
+description: a client that closes stdin while a deploy tool call runs cancels it, as notifications/cancelled does - the atomic head rolls back, and in the psql tail what committed before stays while the running statement stops (Rust, owner 2026-11-14); Go lets the deploy finish and commit
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS committed_first (n int);
+      COMMIT;
+      CREATE TABLE in_tail (n int);
+      SELECT pg_sleep(8);
+      CREATE TABLE after_sleep (n int);
+    head/deploy.sql: |
+      CREATE TABLE in_head (n int);
+      SELECT pg_sleep(8);
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [serve]
+    stdin:
+      - '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"blackbox","version":"1"}}}'
+      - '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+      - '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}/head","connection":"{conn}","database":"{db}"}}}'
+      - wait: 3
+    timeout: 20
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT count(*) FROM pg_class WHERE relname = 'in_head'
+          rows: [[1]]
+      rust:
+        exit: 0
+        sql:
+          - query: SELECT count(*) FROM pg_class WHERE relname = 'in_head'
+            rows: [[0]]
+  - pgmi: [serve]
+    stdin:
+      - '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"blackbox","version":"1"}}}'
+      - '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+      - '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"{conn}","database":"{db}"}}}'
+      - wait: 3
+    timeout: 20
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT count(*) FROM pg_class WHERE relname IN ('committed_first', 'in_tail', 'after_sleep')
+          rows: [[3]]
+      rust:
+        exit: 0
+        sql:
+          - query: SELECT string_agg(relname, ',' ORDER BY relname) FROM pg_class WHERE relname IN ('committed_first', 'in_tail', 'after_sleep')
+            rows: [['committed_first,in_tail']]

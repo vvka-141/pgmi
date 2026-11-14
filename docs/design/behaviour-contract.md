@@ -216,6 +216,16 @@ answered during a deploy, and `notifications/cancelled` stops a running deploy,
 which rolls back. End of input exits 0. Full reference: `docs/CLI.md`
 "pgmi serve".
 
+The end of input is the client shutting the server down (MCP stdio). In
+Rust it cancels every `deploy` call still running, as `notifications/cancelled`
+does: the running statement is cancelled and the open transaction rolls
+back, so a deploy nobody waits for does not commit unseen. Work that
+committed before, such as a head whose `COMMIT` ran or an earlier
+statement of the psql tail, stays committed. Other tool calls finish and are
+answered. A script that pipes requests into `pgmi serve` must keep stdin
+open until each deploy answer arrives. Go lets the deploy finish (owner
+2026-11-14, PGMI-1012; case `serve/stdin-closed-mid-deploy`).
+
 Once input ends or SIGINT/SIGTERM arrives, serve keeps writing answers as
 long as the client takes them; a client that takes nothing for 2 s ends
 the session, running calls are cancelled and serve exits 0. A client that
@@ -289,7 +299,7 @@ deploy's error is `PASSWORD [redacted]` in the text, `message` and `error`.
 A client that reads its answers while it pipelines thousands of requests gets
 every answer in order.
 
-Cases: `serve/session`, `serve/deploy-verbose`, `serve/deploy-timeout-zero`, `serve/burst`, `serve/slow-reader-many-answers`, `serve/slow-reader-huge-answer`, `serve/deploy-tool`, `serve/cancel`, `serve/malformed`, `serve/protocol-versions`, `serve/deploy-guards`, `serve/overwrite-needs-operator-switch`, `serve/deploys-in-sequence`, `serve/concurrent-deploys`, `serve/deploy-timeout`, `serve/deploy-warning-lines`, `serve/deploy-param-key`, `serve/deploy-password-masked`.
+Cases: `serve/session`, `serve/deploy-verbose`, `serve/deploy-timeout-zero`, `serve/burst`, `serve/slow-reader-many-answers`, `serve/slow-reader-huge-answer`, `serve/deploy-tool`, `serve/cancel`, `serve/malformed`, `serve/protocol-versions`, `serve/deploy-guards`, `serve/overwrite-needs-operator-switch`, `serve/deploys-in-sequence`, `serve/concurrent-deploys`, `serve/deploy-timeout`, `serve/deploy-warning-lines`, `serve/deploy-param-key`, `serve/deploy-password-masked`, `serve/stdin-closed-mid-deploy`.
 
 ### config
 
