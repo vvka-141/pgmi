@@ -1,0 +1,33 @@
+description: a file whose <pgmi-meta> is ambiguous - two elements in one comment, or an attribute written twice - is refused by the Rust binary before connecting, exit 10, saying what is ambiguous and how to fix it; Go silently picks one (owner 2026-11-14, PGMI-993)
+project:
+  files:
+    two/deploy.sql: SELECT 1;
+    two/schema.sql: |
+      /*
+      <pgmi-meta id="5f0c6a0e-6a5c-4c4e-9d2b-1f4c8f6b1a01" idempotent="true"><sortKeys><key>10</key></sortKeys></pgmi-meta>
+      <pgmi-meta id="5f0c6a0e-6a5c-4c4e-9d2b-1f4c8f6b1a02" idempotent="true"><sortKeys><key>20</key></sortKeys></pgmi-meta>
+      */
+      SELECT 1;
+    dup/deploy.sql: SELECT 1;
+    dup/schema.sql: |
+      /*
+      <pgmi-meta id="5f0c6a0e-6a5c-4c4e-9d2b-1f4c8f6b1a03" id="5f0c6a0e-6a5c-4c4e-9d2b-1f4c8f6b1a04" idempotent="true"></pgmi-meta>
+      */
+      SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}/two", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      rust:
+        exit: 10
+        stderr:
+          - "metadata error in \\./schema\\.sql: the file holds more than one <pgmi-meta> block, so its id and sort keys are ambiguous$"
+          - "^Hint: keep one <pgmi-meta> block per file and delete the others\\.$"
+  - pgmi: [deploy, "{project}/dup", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      rust:
+        exit: 10
+        stderr:
+          - "metadata error in \\./schema\\.sql: the id attribute is written twice in <pgmi-meta>, so its value is ambiguous$"
+          - "^Hint: keep one id=\"\\.\\.\\.\" and delete the other\\.$"

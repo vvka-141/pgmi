@@ -48,8 +48,11 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   not committed yet; other tool calls still get their answers.
 - **`pgmi serve` limits.** A request line may hold at most 16 MiB, at most 32
   tool calls run at once, and a client that leaves 1024 answers unread is
-  disconnected. A file with two `<pgmi-meta>` elements in one comment is
-  refused (exit 10).
+  disconnected.
+- **Ambiguous `<pgmi-meta>` is refused.** A file with two `<pgmi-meta>`
+  blocks, also two in one comment, or an attribute written twice (two
+  `id`s) stops the deploy with exit 10 before connecting. Go silently
+  picked one. The message names the file and says to keep one.
 - **Closer to PostgreSQL.** `ÄCALL pgmi_test()` is one identifier, as
   PostgreSQL reads it, so pgmi no longer expands it. `--overwrite -d POSTGRES`
   compares database names exactly, as PostgreSQL does. The wizards' lists
@@ -127,8 +130,6 @@ ticket; none loses data on its own.
 - **A lost reply to the deploy-lock query** makes the retry find its own
   earlier session holding the lock and stop with exit 15; the takeover of
   an orphaned session matches it by pid alone (PGMI-990).
-- **Two `<pgmi-meta>` shapes Go deployed are refused** with exit 10: two
-  elements in one comment, and a duplicated `id` attribute (PGMI-993).
 - **Google sign-in's own HTTP clients** follow redirects and read a reply
   without a size cap (PGMI-994).
 - **`PGSSLCRL` and `PGSSLCRLDIR` are not checked**, as the owner decided:

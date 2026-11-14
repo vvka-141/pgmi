@@ -1124,10 +1124,14 @@ Owner-decided 2026-11-11 (PGMI-868).
 Go reads the first `<pgmi-meta>` element of a comment and ignores the rest,
 so a second element with another id or other sort keys in the same `/* */`
 is silently dropped. The Rust binary refuses it as it refuses two blocks in
-separate comments: exit 10, `Multiple metadata blocks found`, naming the
-file. A second element that is not even well-formed counts too.
+separate comments: exit 10, naming the file, saying the file holds more than
+one `<pgmi-meta>` block so its id and sort keys are ambiguous, and hinting
+to keep one. A second element that is not even well-formed counts too. An
+attribute written twice (two `id`s) is refused the same way, naming the
+attribute: Go uses the last value. There is no right answer for which one
+wins, so 0.20 keeps refusing both (owner 2026-11-14, PGMI-993).
 
-Cases: none (Go accepts it); Rust unit test
+Cases: `deploy/metadata-ambiguous`; Rust unit test
 `two_elements_in_one_comment_are_refused`.
 
 ### Known secrets are shown as ***
@@ -1523,8 +1527,8 @@ release notes take their "Behaviour changes" section from this table.
 | Windows: files under `%APPDATA%\postgresql` | read, and `pgmi config` saves the password there | unchanged | no change |
 | `min_protocol_version=3.2` or `latest` | protocol 3.2 | newly refused before connecting, exit 10 (known gap, PGMI-865) | owner 2026-11-11 |
 | SIGHUP (a closed terminal or SSH session) or a stderr reader that went away, during `deploy` | the process dies at once; the statement runs on and keeps the deploy lock | SIGHUP is handled as SIGTERM (statement cancelled, exit 130); writes to a closed pipe are dropped and the deploy goes on | PGMI-946 |
-| Two `<pgmi-meta>` elements in one comment | the first used, the rest ignored | newly refused, exit 10 | owner 2026-11-11 |
-| A `<pgmi-meta>` element with an attribute given twice (two `id`s) | the last value used | refused, exit 10 | owner 2026-11-12 (PGMI-942) |
+| Two `<pgmi-meta>` elements in one comment | the first used, the rest ignored | newly refused, exit 10, the message says the id and sort keys are ambiguous and to keep one block | owner 2026-11-11, 2026-11-14 (PGMI-993) |
+| A `<pgmi-meta>` element with an attribute given twice (two `id`s) | the last value used | refused, exit 10, naming the attribute and saying to keep one | owner 2026-11-12 (PGMI-942), 2026-11-14 (PGMI-993) |
 | `serve`: a line over 16 MiB | read | newly refused with `-32600`, session goes on | owner 2026-11-11 |
 | A `--params-file` (or `paramsFile`, or `-`) over `PGMI_MAX_FILE_SIZE` (10 MiB) | read whole | newly refused, exit 10 (`exceeds N-byte limit`) | intended |
 | A project `.env` over `PGMI_MAX_FILE_SIZE` | applied | newly refused, exit 10, naming the file | intended |

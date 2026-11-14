@@ -119,6 +119,10 @@ pub(crate) enum MetaError {
         path: String,
         bytes: usize,
     },
+    Repeated {
+        path: String,
+        name: String,
+    },
     Idempotent {
         path: String,
         value: String,
@@ -142,7 +146,11 @@ impl fmt::Display for MetaError {
             ),
             MetaError::Multiple { path } => write!(
                 f,
-                "metadata error in {path}: Multiple metadata blocks found\n\nHint: Only one <pgmi-meta> block is allowed per file. Remove duplicates."
+                "metadata error in {path}: the file holds more than one <pgmi-meta> block, so its id and sort keys are ambiguous\n\nHint: keep one <pgmi-meta> block per file and delete the others."
+            ),
+            MetaError::Repeated { path, name } => write!(
+                f,
+                "metadata error in {path}: the {name} attribute is written twice in <pgmi-meta>, so its value is ambiguous\n\nHint: keep one {name}=\"...\" and delete the other."
             ),
             MetaError::TooLarge { path, bytes } => write!(
                 f,
@@ -173,6 +181,12 @@ impl fmt::Display for MetaError {
 impl std::error::Error for MetaError {}
 
 fn xml_error(path: &str, e: &roxmltree::Error) -> MetaError {
+    if let roxmltree::Error::DuplicatedAttribute(name, _) = e {
+        return MetaError::Repeated {
+            path: path.to_string(),
+            name: name.clone(),
+        };
+    }
     let pos = e.pos();
     let text = match e {
         roxmltree::Error::UnexpectedEndOfStream => "unexpected EOF".to_string(),
@@ -631,8 +645,22 @@ mod tests {
                 matches!(&e, MetaError::Multiple { path } if path == "./duplicate.sql"),
                 "{e}"
             );
-            assert!(e.to_string().contains("Multiple metadata blocks found"));
+            assert!(e.to_string().contains("more than one <pgmi-meta> block"));
         }
+    }
+
+    #[test]
+    fn an_attribute_written_twice_is_named_with_the_fix() {
+        let content = block(
+            "id=\"7603e3af-b8d9-46a5-8c4c-7f74d39e17f9\" id=\"7603e3af-b8d9-46a5-8c4c-7f74d39e17f8\" idempotent=\"true\"",
+            "",
+        );
+        let e = parse("./twice.sql", &content).unwrap_err();
+        assert!(
+            matches!(&e, MetaError::Repeated { path, name } if path == "./twice.sql" && name == "id"),
+            "{e}"
+        );
+        assert!(e.to_string().contains("keep one id=\"...\""), "{e}");
     }
 
     #[test]
@@ -684,7 +712,7 @@ mod tests {
         let two = format!(
             "/* <pgmi-meta id=\"{ID}\" idempotent=\"true\"></pgmi-meta> <pgmi-meta id=\"{ID}\" idempotent=\"true\"></pgmi-meta> */"
         );
-        assert!(refused(&two).contains("Multiple metadata blocks"));
+        assert!(refused(&two).contains("more than one <pgmi-meta> block"));
     }
 
     #[test]

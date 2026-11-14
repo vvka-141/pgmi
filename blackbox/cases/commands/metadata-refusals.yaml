@@ -48,7 +48,7 @@ steps:
   - pgmi: [metadata, plan, "{project}/unclosed"]
     expect: {exit: 10, stderr: ["\\./a\\.sql", "unexpected EOF"]}
   - pgmi: [metadata, plan, "{project}/two-blocks"]
-    expect: {exit: 10, stderr: ["\\./a\\.sql", "Multiple metadata blocks"]}
+    expect: {exit: 10, stderr: ["\\./a\\.sql", "Multiple metadata blocks"], rust: {exit: 10, stderr: ["\\./a\\.sql", "more than one <pgmi-meta> block"]}}
   - pgmi: [metadata, plan, "{project}/dunder"]
     expect: {exit: 10, stderr: ['unsupported directory "__foo__"']}
   - pgmi: [metadata, plan, "{project}/big"]
