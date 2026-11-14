@@ -110,3 +110,49 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   schema on the deployer's `search_path` (`public` up to PostgreSQL 14 and on
   clusters upgraded from it) could have pgmi run its function with the
   deployer's rights during session set-up. **pgmi 0.14 (Go) is affected too.**
+
+## Known issues (lines for the notes)
+
+Low findings of the 2026-11-14 review that 0.20 ships with. Each has its
+ticket; none loses data on its own.
+
+- **A lost reply to the deploy-lock query** makes the retry find its own
+  earlier session holding the lock and stop with exit 15; the takeover of
+  an orphaned session matches it by pid alone (PGMI-990).
+- **Two `<pgmi-meta>` shapes Go deployed are refused** with exit 10: two
+  elements in one comment, and a duplicated `id` attribute (PGMI-993).
+- **Google sign-in's own HTTP clients** follow redirects and read a reply
+  without a size cap (PGMI-994).
+- **`PGSSLCRL` and `PGSSLCRLDIR` are not checked**, as the owner decided:
+  one stderr warning, which the `--json` record does not carry (PGMI-996).
+- **The `--json` record is missing** on two early exits: an unreadable
+  project `.env` (exit 10) and a runtime that cannot start (exit 1)
+  (PGMI-997).
+- **An interrupted `CREATE INDEX CONCURRENTLY`** leaves an INVALID index,
+  and the message does not say so; drop it before the next deploy
+  (PGMI-998, as in Go).
+- **SIGQUIT and SIGUSR1** end pgmi without cancelling the statement, so
+  the next run may wait for the old session's lock (PGMI-999).
+- **A DBA's `pg_terminate_backend` (57P01)** runs the whole deploy again,
+  like any other transient failure (PGMI-1000, awaiting the owner's
+  decision).
+- **Several hosts without `connect_timeout`**: an unreachable first host
+  can use the whole `--timeout` (PGMI-1001, as in Go and libpq).
+- **Escape sequences** in server messages and file names reach the
+  terminal unfiltered (PGMI-1002, as in Go and psql).
+- **No third-party licence notices** in the archives or the `.deb`
+  (PGMI-1003, as in Go).
+- **Release workflow details**: attestation after the release is public,
+  the tap token in the clone URL, `uv` pinned by version only, no SBOM, the
+  arm64 Linux and Windows binaries not run against a database, builds
+  reproducible only from the same checkout path, and a prebuilt native
+  library a build script links is not caught by `check-no-c.sh`
+  (PGMI-1004).
+- **`pgmi serve` details**: an unbracketed IPv6 `host:port` entry in
+  `PGMI_SERVE_HOSTS` can match another address; a withheld credential's
+  tool result names only `PGPASSWORD` (the reason is on stderr); a deploy
+  goes on and commits after the client closes stdin; a tool call can lower
+  `sslmode` for an allowed host (PGMI-1005).
+- **Upgrading from an older binary**: a project that `pgmi init` 0.20
+  scaffolded calls `pg_temp.pgmi_run_file`, which pgmi 0.14 does not
+  create, though the contract version is still 1.
