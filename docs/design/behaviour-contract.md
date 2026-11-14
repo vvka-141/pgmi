@@ -1479,6 +1479,7 @@ release notes take their "Behaviour changes" section from this table.
 | Connection-string parse errors | echo a keyword, ADO.NET part or port | never quote the input; exit codes unchanged | owner 2026-11-11 |
 | `.pgmiignore` that exists but cannot be read | exit 1 | exit 10 | owner 2026-11-11 |
 | Project file whose name is not UTF-8 | exit 13, after the target database was created | newly refused before connecting, exit 10 | owner 2026-11-11 |
+| A project `.env` that exists but cannot be read (a directory, no permission) | WARNING, deploy goes on without it | exit 10 before connecting, naming the file: stricter on purpose, since a `.env` usually holds the connection's credentials and parameters, and deploying without them reaches the wrong server or account, or runs with defaults the project never meant (case `config/dotenv-unreadable`) | owner 2026-11-14 |
 | `sslcrl`, `sslcrldir`, `requirepeer`, `sslcertmode=require` | exit 11 (the server refuses the setting) | newly refused before connecting, exit 10 | owner 2026-11-11 |
 | `ssl_min_protocol_version`, `ssl_max_protocol_version`, `sslsni=0`, `sslcertmode=disable` | exit 11 (the server refuses the setting) | honoured; an unknown version or an empty range exit 10 | intended |
 | Client private key that group or others can read | used | newly refused, exit 10 | owner 2026-11-11 |

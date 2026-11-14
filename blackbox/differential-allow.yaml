@@ -229,6 +229,10 @@ accept:
     step: steps[3]
     field: stderr
     rust: '\Apgmi: error: AWS IAM auth requires region \(use --aws-region or \$AWS_REGION\)$'
+  - row: A project `.env` that exists but cannot be read (a directory, no permission)
+    case: cases/config/dotenv-unreadable\.yaml
+    field: db
+    rust: <no database>
   - row: A parameter key in an error message
     case: cases/params/invalid-key\.yaml
     step: steps[3]

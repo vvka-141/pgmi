@@ -1,0 +1,12 @@
+description: a project .env that exists but cannot be read (here a directory) stops the Rust binary before connecting, exit 10 naming the file, where Go warns and deploys without it - stricter on purpose, since its values may hold the connection's credentials (contract row "A project .env that cannot be read", owner 2026-11-14)
+project:
+  files:
+    deploy.sql: SELECT 1;
+    .env/placeholder: ""
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      rust:
+        exit: 10
+        stderr: ["^pgmi: error: failed to read .*\\.env: is a directory$"]
