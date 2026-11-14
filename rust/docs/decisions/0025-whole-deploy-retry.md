@@ -36,7 +36,7 @@ runs against the recreated database and never drops it again or asks again.
 | Failure | Where it comes from |
 |---|---|
 | class 08 (connection exception), connection closed, reset or refused mid-run | network, restart, failover |
-| 57P01 admin_shutdown, 57P02 crash_shutdown, 57P03 cannot_connect_now | server restart or recovery |
+| 57P01 admin_shutdown, 57P02 crash_shutdown, 57P03 cannot_connect_now | server restart or recovery; a 57P01 only when the server restarted: pgmi opens a fresh session at once and compares `pg_postmaster_start_time()` with the failed session's. The same time means an administrator ended the session (`pg_terminate_backend`), which is final; a new time, or a server that cannot be reached yet, is a restart (owner 2026-11-14, PGMI-1000) |
 | 53300 too_many_connections | a full server |
 | 40001 serialization_failure, 40P01 deadlock_detected | concurrency with live traffic |
 | 55P03 lock_not_available | a `lock_timeout` or `NOWAIT` in a lock-safe deploy |

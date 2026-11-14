@@ -112,6 +112,8 @@ class Fault:
     sqlstate: str = ""
     severity: str = "FATAL"
     message: str = ""
+    value: str = ""
+    column: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,6 +248,12 @@ def _index(r: _Reader, value: Any, field: str) -> int:
     return value
 
 
+def _column(r: _Reader, value: Any, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise r.fail(field, "must be a column index (0 for the first)")
+    return value
+
+
 def _fault(r: _Reader, value: Any, field: str) -> Fault:
     value = r.mapping(value, field, {"at", "query", "do", "after", "times", "step"}, {"do"})
     if ("at" in value) == ("query" in value):
@@ -270,8 +278,21 @@ def _fault(r: _Reader, value: Any, field: str) -> Fault:
     if do in FAULT_ACTIONS:
         return replace(fault, action=do)
     shape = f"{field}.do"
-    if not isinstance(do, dict) or not {"delay", "error"} & do.keys():
-        raise r.fail(shape, "must be reset, cut-client, freeze, {delay: seconds} or {error: SQLSTATE, severity, message}")
+    if not isinstance(do, dict) or not {"delay", "error", "value"} & do.keys():
+        raise r.fail(
+            shape,
+            "must be reset, cut-client, freeze, {delay: seconds}, {error: SQLSTATE, severity, message} or {value: text, column}",
+        )
+    if "value" in do:
+        r.mapping(do, shape, {"value", "column"}, {"value"})
+        if at != "query" or fault.after is not None:
+            raise r.fail(shape, "a value rewrites a query's first row: no at, no after")
+        return replace(
+            fault,
+            action="value",
+            value=r.string(do["value"], f"{shape}.value"),
+            column=_column(r, do.get("column", 0), f"{shape}.column"),
+        )
     if "delay" in do:
         r.mapping(do, shape, {"delay"})
         if fault.after is not None:

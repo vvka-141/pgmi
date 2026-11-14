@@ -1411,7 +1411,14 @@ before it failed`, and the summary never says `nothing committed`, owner
 2026-11-14, PGMI-977; and a failed unit that ran PREPARE TRANSACTION, whose
 work waits holding its locks: `not retried: unit U of T ran PREPARE
 TRANSACTION, which may have left a prepared transaction`, the summary
-pointing to `pg_prepared_xacts`, PGMI-991); 57P01, 57P02, 57P03; 53300; 40001, 40P01; 55P03; 25006
+pointing to `pg_prepared_xacts`, PGMI-991); 57P01 only when the server
+restarted (pgmi opens a fresh session at once and compares
+`pg_postmaster_start_time()`; the same start time means an administrator
+ended the session, which is final, keeps the 57P01 and its exit code and
+says `the session was ended by an administrator and the server did not
+restart, so pgmi did not run the deploy again`; owner 2026-11-14,
+PGMI-1000, cases `retry/server-shutdown-mid-run`,
+`retry/admin-shutdown-after-restart`), 57P02, 57P03; 53300; 40001, 40P01; 55P03; 25006
 only while the server reports `in_hot_standby = on` and the connection did
 not ask for a standby (`target_session_attrs` `read-only`, `standby`,
 `prefer-standby`); a cloud sign-in that still fails after its own retries
@@ -1466,7 +1473,7 @@ release notes take their "Behaviour changes" section from this table.
 
 | Change | 0.14 (Go) | 0.20 (Rust) | Decided |
 |---|---|---|---|
-| Whole-deployment retry | the first failure ends the run | a transient failure (class 08, a lost connection, 57P01-57P03, 53300, 40001, 40P01, 55P03, 25006 on a hot standby, a sign-in or connect retry that gave up) runs the deploy again from the start inside `--timeout`, once an attempt has reached the server (a first attempt that never connects fails at once, as in Go), waiting 1 s doubling to 30 s; once a unit has committed the failure is final, as in Go, unless `retry_after_commit: true` in `pgmi.yaml` allows a rerun (owner 2026-11-12, PGMI-918); a unit whose reply was lost is never retried (owner 2026-11-13, PGMI-970); `retry: false` turns retrying off; `--json` adds `attempts` (each with its `unitsCommitted`) and `timeUsedMs` | owner 2026-11-12 (record 0025) |
+| Whole-deployment retry | the first failure ends the run | a transient failure (class 08, a lost connection, 57P01 after a server restart, 57P02, 57P03, 53300, 40001, 40P01, 55P03, 25006 on a hot standby, a sign-in or connect retry that gave up) runs the deploy again from the start inside `--timeout`, once an attempt has reached the server (a first attempt that never connects fails at once, as in Go), waiting 1 s doubling to 30 s; once a unit has committed the failure is final, as in Go, unless `retry_after_commit: true` in `pgmi.yaml` allows a rerun (owner 2026-11-12, PGMI-918); a unit whose reply was lost is never retried (owner 2026-11-13, PGMI-970); `retry: false` turns retrying off; `--json` adds `attempts` (each with its `unitsCommitted`) and `timeUsedMs` | owner 2026-11-12 (record 0025) |
 | `sslmode=verify-ca` with no `sslrootcert` (the system trust store) | any certificate a trusted CA issued, for any host name | the host name is checked too, as in `verify-full`; with an explicit root file `verify-ca` checks no name, as before | owner 2026-11-12 (PGMI-923) |
 | project `.env` that starts with a UTF-8 byte-order mark | warning, none of it applied | applied, the mark ignored | owner 2026-11-12 (PGMI-943) |
 | project `.env` setting a key that locates credentials, endpoints, proxies or trust roots: `AWS_CONFIG_FILE`, `AWS_SHARED_CREDENTIALS_FILE`, `AWS_WEB_IDENTITY_TOKEN_FILE`, `AWS_PROFILE`, `AWS_CONTAINER_*`, `AWS_ENDPOINT_URL*`, `AWS_EC2_METADATA_*`, `AZURE_AUTHORITY_HOST`, `AZURE_FEDERATED_TOKEN_FILE`, `AZURE_CONFIG_DIR`, `IDENTITY_*`, `IMDS_ENDPOINT`, `MSI_*`, `GOOGLE_APPLICATION_CREDENTIALS`, `GCE_METADATA_HOST`, `GCE_METADATA_IP`, `CLOUDSDK_*`, `DATABRICKS_CONFIG_FILE`, `DATABRICKS_CONFIG_PROFILE`, `DATABRICKS_HOST`, `PGPASSFILE`, `PGSERVICEFILE`, `PGSYSCONFDIR`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`, `SSL_CERT_*`, `*_PROXY` (any case). `PGSSLMODE` stays allowed: it locates nothing, and `pgmi.yaml` can set `sslmode` anyway | applied | refused; the rest of the file applies and the `.env applied:` line names each refused key; the operator's own environment can still set them | owner 2026-11-12 (PGMI-921, PGMI-980) |

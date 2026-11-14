@@ -38,6 +38,8 @@ class FakeServer:
                     self.seen.append((time.monotonic(), head[:1] + body))
                     if head[:1] == b"X":
                         return
+                    if head[:1] == b"Q" and b"three" in body:
+                        conn.sendall(_row(b"a", None, b"c"))
                     if head[:1] in (b"Q", b"S"):
                         conn.sendall(b"C" + struct.pack("!i", 11) + b"SELECT\0" + _ready())
             except (OSError, ConnectionError):
@@ -45,6 +47,13 @@ class FakeServer:
 
     def queries(self) -> list[bytes]:
         return [m for _, m in self.seen if m[:1] in (b"Q", b"P")]
+
+
+def _row(*cells: bytes | None) -> bytes:
+    body = struct.pack("!h", len(cells)) + b"".join(
+        struct.pack("!i", -1) if c is None else struct.pack("!i", len(c)) + c for c in cells
+    )
+    return b"D" + struct.pack("!i", len(body) + 4) + body
 
 
 def _ready(status: bytes = b"I") -> bytes:
@@ -251,3 +260,14 @@ def test_a_rule_can_name_the_step(proxy):
         assert b"C53300\0" in _message(sock)[1]
     p.step = 3
     _connect(p.port).close()
+
+
+def test_a_value_rewrites_one_cell_of_the_first_row_of_the_matched_query_only(proxy):
+    p, _ = proxy({"query": "three", "do": {"value": "zz", "column": 1}, "times": 1})
+    sock = _connect(p.port)
+    for expected in (_row(b"a", b"zz", b"c"), _row(b"a", None, b"c")):
+        sock.sendall(_query("SELECT three"))
+        kind, body = _message(sock)
+        assert kind + struct.pack("!i", len(body) + 4) + body == expected
+        assert _message(sock)[0] == b"C"
+        assert _message(sock) == (b"Z", b"I")

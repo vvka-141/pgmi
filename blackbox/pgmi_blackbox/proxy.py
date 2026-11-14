@@ -42,6 +42,7 @@ class _Conn:
     upstream: asyncio.StreamWriter | None = None
     status: bytes = b"I"
     discard_to_sync: bytes | None = None
+    rewrite: tuple[int, str] | None = None
     cut: bool = False
     tasks: list[asyncio.Task] = field(default_factory=list)
 
@@ -133,6 +134,9 @@ class Proxy:
         _, fault = hit
         if fault.action == "delay":
             await asyncio.sleep(fault.seconds)
+            return False
+        if fault.action == "value":
+            conn.rewrite = (fault.column, fault.value)
             return False
         if fault.after is not None:
             conn.tasks.append(asyncio.create_task(self._later(conn, fault)))
@@ -243,11 +247,30 @@ class Proxy:
                 await self._hold()
                 if head[:1] == b"Z":
                     conn.status = raw[5:6]
+                    conn.rewrite = None
+                if head[:1] == b"D" and conn.rewrite is not None:
+                    raw = _rewritten(raw, *conn.rewrite)
+                    conn.rewrite = None
                 if not conn.cut:
                     conn.client.write(raw)
         except (OSError, asyncio.IncompleteReadError):
             await self._hold()
             conn.client.close()
+
+
+def _rewritten(raw: bytes, column: int, value: str) -> bytes:
+    count = struct.unpack("!h", raw[5:7])[0]
+    cells, at = [], 7
+    for _ in range(count):
+        n = struct.unpack("!i", raw[at : at + 4])[0]
+        at += 4
+        cells.append(None if n < 0 else raw[at : at + n])
+        at += max(n, 0)
+    cells[column] = value.encode()
+    body = struct.pack("!h", count) + b"".join(
+        struct.pack("!i", -1) if c is None else struct.pack("!i", len(c)) + c for c in cells
+    )
+    return b"D" + struct.pack("!i", len(body) + 4) + body
 
 
 def _ready(status: bytes) -> bytes:

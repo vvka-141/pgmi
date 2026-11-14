@@ -102,26 +102,29 @@ pub(super) fn supported_server(num: &str, text: &str) -> Result<()> {
     }
 }
 
-pub(super) async fn check_server(session: &Session) -> Result<()> {
+/// Checks the server's version and returns when the server started, which
+/// tells a restart from an administrator ending the session (57P01).
+pub(super) async fn check_server(session: &Session) -> Result<String> {
     let rows = session
         .client
         .simple_query(
-            "SELECT pg_catalog.current_setting('server_version_num'), pg_catalog.current_setting('server_version')",
+            "SELECT pg_catalog.current_setting('server_version_num'), pg_catalog.current_setting('server_version'), pg_catalog.pg_postmaster_start_time()",
         )
         .await
         .map_err(|e| sql_error("read the server version", e))?;
-    let (num, text) = match first_row(&rows) {
+    let (num, text, started) = match first_row(&rows) {
         Some(r) => {
             let read = |i| {
                 r.try_get(i)
                     .map(|v| v.unwrap_or_default().to_string())
                     .map_err(|e| sql_error("read the server version", e))
             };
-            (read(0)?, read(1)?)
+            (read(0)?, read(1)?, read(2)?)
         }
         None => Default::default(),
     };
-    supported_server(&num, &text)
+    supported_server(&num, &text)?;
+    Ok(started)
 }
 
 pub(super) fn first_row(

@@ -711,11 +711,17 @@ impl Steps<'_> {
             seen.in_test = st.failure().is_some_and(|f| f.blame.phase() == "test");
             reached |= seen.connected;
             let why = if self.retry.enabled && reached && !guard.stop.is_cancelled() {
-                retry::transient(&e, seen)
+                retry::transient(&e, &seen)
             } else {
                 None
             };
             let Some(why) = why else { return Err(e) };
+            if why == retry::Transient::Server("57P01".into())
+                && let Some(before) = &seen.started
+                && self.same_server(plan, spec, before).await
+            {
+                return Err(retry::not_restarted(e));
+            }
             if let Some(reason) = not_retried(st.execution.as_ref(), self.retry.after_commit) {
                 self.reporter.line(&format!(
                     "pgmi: attempt {n} failed ({why}); not retried: {reason}"
@@ -764,7 +770,7 @@ impl Steps<'_> {
         let session = self.open(st, plan.dialer, spec).await?;
         seen.connected = true;
         let outcome = async {
-            self.settle(&session, spec).await?;
+            seen.started = Some(self.settle(&session, spec).await?);
             if !self.ctx.request.overwrite {
                 self.reporter.line(PREPARING);
             }
@@ -1124,9 +1130,25 @@ impl Steps<'_> {
             .await
     }
 
-    async fn settle(&self, session: &Session, spec: &Spec) -> Result<()> {
+    /// Whether a fresh session finds the server that started at `before`:
+    /// then a 57P01 came from an administrator, not a restart. A server that
+    /// cannot be reached yet is restarting.
+    async fn same_server(&self, plan: &Plan<'_>, spec: &Spec, before: &str) -> bool {
+        let Ok(session) = self
+            .guard
+            .connecting(plan.dialer.connect(spec, &spec.target_db))
+            .await
+        else {
+            return false;
+        };
+        let now = self.guard.running(&session, check_server(&session)).await;
+        release(&session).await;
+        now.is_ok_and(|now| now == before)
+    }
+
+    async fn settle(&self, session: &Session, spec: &Spec) -> Result<String> {
         let guard = self.guard;
-        guard.running(session, check_server(session)).await?;
+        let started = guard.running(session, check_server(session)).await?;
         guard
             .running(
                 session,
@@ -1137,7 +1159,8 @@ impl Steps<'_> {
                     &format!("{}:{}", spec.first().name, spec.first().port),
                 ),
             )
-            .await
+            .await?;
+        Ok(started)
     }
 
     async fn server_info(&self, session: &Session, spec: &Spec) -> Result<ServerInfo> {

@@ -57,15 +57,28 @@ const SERVER: [&str; 7] = [
 ];
 
 /// What the failed attempt saw besides its error.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub(super) struct Seen {
     pub(super) in_test: bool,
     pub(super) hot_standby: bool,
     pub(super) connected: bool,
+    /// When the server of the attempt's session started.
+    pub(super) started: Option<String>,
+}
+
+/// A 57P01 from a server that did not restart: an administrator ended the
+/// session on purpose, so the deploy does not run again.
+pub(super) fn not_restarted(e: Error) -> Error {
+    let kind = e.kind();
+    let text = format!(
+        "{}; the session was ended by an administrator and the server did not restart, so pgmi did not run the deploy again",
+        e.text()
+    );
+    e.reworded(kind, text)
 }
 
 /// Why `e` is worth another attempt, or `None` when it is final.
-pub(super) fn transient(e: &Error, seen: Seen) -> Option<Transient> {
+pub(super) fn transient(e: &Error, seen: &Seen) -> Option<Transient> {
     if seen.in_test || !matches!(e.kind(), Kind::Sql | Kind::Connection) {
         return None;
     }
@@ -194,6 +207,20 @@ mod tests {
     }
 
     #[test]
+    fn an_administrators_shutdown_keeps_its_sqlstate_and_code_and_says_why_it_is_final() {
+        let e = not_restarted(coded(Kind::Sql, "57P01"));
+        assert_eq!(e.kind(), Kind::Sql);
+        assert_eq!(
+            e.sql_diagnostics().and_then(|d| d.sqlstate.as_deref()),
+            Some("57P01")
+        );
+        assert!(
+            e.text()
+                .contains("ended by an administrator and the server did not restart")
+        );
+    }
+
+    #[test]
     fn the_transient_table_retries_these_server_errors() {
         for code in [
             "08000", "08006", "08P01", "57P01", "57P02", "57P03", "53300", "40001", "40P01",
@@ -201,7 +228,7 @@ mod tests {
         ] {
             for kind in [Kind::Sql, Kind::Connection] {
                 assert_eq!(
-                    transient(&coded(kind, code), Seen::default()),
+                    transient(&coded(kind, code), &Seen::default()),
                     Some(Transient::Server(code.into())),
                     "{code}"
                 );
@@ -216,12 +243,12 @@ mod tests {
             "XX000", "25P02",
         ] {
             assert_eq!(
-                transient(&coded(Kind::Sql, code), Seen::default()),
+                transient(&coded(Kind::Sql, code), &Seen::default()),
                 None,
                 "{code}"
             );
             assert_eq!(
-                transient(&coded(Kind::Connection, code), Seen::default()),
+                transient(&coded(Kind::Connection, code), &Seen::default()),
                 None,
                 "{code}"
             );
@@ -231,11 +258,11 @@ mod tests {
     #[test]
     fn read_only_is_retried_only_on_a_hot_standby() {
         let e = coded(Kind::Sql, "25006");
-        assert_eq!(transient(&e, Seen::default()), None);
+        assert_eq!(transient(&e, &Seen::default()), None);
         assert_eq!(
             transient(
                 &e,
-                Seen {
+                &Seen {
                     hot_standby: true,
                     ..Seen::default()
                 }
@@ -250,13 +277,14 @@ mod tests {
             in_test: true,
             hot_standby: true,
             connected: true,
+            started: None,
         };
         for code in ["40P01", "40001", "08006", "57P01"] {
-            assert_eq!(transient(&coded(Kind::Sql, code), seen), None, "{code}");
+            assert_eq!(transient(&coded(Kind::Sql, code), &seen), None, "{code}");
         }
         let lost = Error::connection("execute deploy.sql")
             .with_source(std::io::Error::from(std::io::ErrorKind::ConnectionReset));
-        assert_eq!(transient(&lost, seen), None);
+        assert_eq!(transient(&lost, &seen), None);
     }
 
     #[test]
@@ -271,7 +299,7 @@ mod tests {
             Kind::Internal,
         ] {
             assert_eq!(
-                transient(&coded(kind, "40P01"), Seen::default()),
+                transient(&coded(kind, "40P01"), &Seen::default()),
                 None,
                 "{kind:?}"
             );
@@ -288,19 +316,19 @@ mod tests {
         ] {
             let e = Error::connection("execute deploy.sql").with_source(std::io::Error::from(kind));
             assert_eq!(
-                transient(&e, Seen::default()),
+                transient(&e, &Seen::default()),
                 Some(Transient::ConnectionLost),
                 "{kind:?}"
             );
         }
         let other = Error::connection("execute deploy.sql")
             .with_source(std::io::Error::other("require_auth refused md5"));
-        assert_eq!(transient(&other, Seen::default()), None);
+        assert_eq!(transient(&other, &Seen::default()), None);
         let wrapped = Error::connection("execute deploy.sql")
             .with_source(std::io::Error::from(std::io::ErrorKind::ConnectionReset))
             .reworded(Kind::Connection, "lost");
         assert_eq!(
-            transient(&wrapped, Seen::default()),
+            transient(&wrapped, &Seen::default()),
             Some(Transient::ConnectionLost)
         );
     }
@@ -317,9 +345,9 @@ mod tests {
                 Kind::Connection,
                 "connect to \"d\": failed to acquire a token",
             );
-        assert_eq!(transient(&e, Seen::default()), Some(Transient::SignIn));
+        assert_eq!(transient(&e, &Seen::default()), Some(Transient::SignIn));
         assert_eq!(
-            transient(&Error::connection("401 Unauthorized"), Seen::default()),
+            transient(&Error::connection("401 Unauthorized"), &Seen::default()),
             None
         );
     }

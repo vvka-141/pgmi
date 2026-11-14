@@ -1,4 +1,4 @@
-description: Rust only (contract "Whole-deployment retry"). A server that ends the session with FATAL 57P01 (admin shutdown), 57P02 (crash shutdown) or 57P03 (cannot connect now) while the head runs is a transient failure; the deploy runs again from the start and succeeds, the head committed once
+description: Rust only (contract "Whole-deployment retry"). A server that ends the session with FATAL 57P02 (crash shutdown) or 57P03 (cannot connect now) while the head runs is a transient failure; the deploy runs again from the start and succeeds, the head committed once. A 57P01 (admin shutdown) whose server did not restart (the proxy injects it; the server's start time is unchanged) is an administrator's pg_terminate_backend, so it is final and nothing runs again (owner 2026-11-14, PGMI-1000)
 impl: rust
 proxy:
   - {query: head_sleep, do: {error: "57P01"}, after: 0.5, times: 1, step: 1}
@@ -19,11 +19,14 @@ steps:
   - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
     timeout: 30
     expect:
-      exit: 0
-      stderr: ["^pgmi: attempt 1 failed \\(57P01 admin shutdown\\); retrying in"]
+      exit: 13
+      stderr:
+        - "terminating connection due to administrator command"
+        - "the session was ended by an administrator and the server did not restart, so pgmi did not run the deploy again"
+      stderr_not: ["retrying in"]
       sql:
-        - query: SELECT count(*) FROM marker
-          rows: [[1]]
+        - query: SELECT count(*) FROM pg_class WHERE relname = 'marker'
+          rows: [[0]]
   - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
     delay: 1
     timeout: 30
@@ -32,7 +35,7 @@ steps:
       stderr: ["^pgmi: attempt 1 failed \\(57P02 crash shutdown\\); retrying in"]
       sql:
         - query: SELECT count(*) FROM marker
-          rows: [[2]]
+          rows: [[1]]
   - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
     delay: 1
     timeout: 30
@@ -41,4 +44,4 @@ steps:
       stderr: ["^pgmi: attempt 1 failed \\(57P03 cannot connect now\\); retrying in"]
       sql:
         - query: SELECT count(*) FROM marker
-          rows: [[3]]
+          rows: [[2]]

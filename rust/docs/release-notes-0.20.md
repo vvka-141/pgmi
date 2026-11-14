@@ -107,7 +107,9 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   serialization failure, a lock timeout, a failover to a standby, a sign-in
   endpoint that stays down) runs the deploy again from the start, exactly
   like a redeploy, waiting 1 s doubling to 30 s, until it succeeds or the
-  time box ends. A failing test or any other SQL error is never retried.
+  time box ends. A failing test or any other SQL error is never retried,
+  and neither is a session an administrator ended with
+  `pg_terminate_backend` while the server kept running.
   Once a unit has committed, a failure is final as in Go unless
   `retry_after_commit: true` in `pgmi.yaml` allows a rerun. A connection
   lost while a statement of deploy.sql runs is never retried: whether it
@@ -141,9 +143,6 @@ ticket; none loses data on its own.
   (PGMI-998, as in Go).
 - **SIGQUIT and SIGUSR1** end pgmi without cancelling the statement, so
   the next run may wait for the old session's lock (PGMI-999).
-- **A DBA's `pg_terminate_backend` (57P01)** runs the whole deploy again,
-  like any other transient failure (PGMI-1000, awaiting the owner's
-  decision).
 - **Several hosts without `connect_timeout`**: an unreachable first host
   can use the whole `--timeout` (PGMI-1001, as in Go and libpq).
 - **Escape sequences** in server messages and file names reach the
