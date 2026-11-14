@@ -470,7 +470,11 @@ libpq-style: `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`,
 included), `PGMINPROTOCOLVERSION` and `PGMAXPROTOCOLVERSION`; `PGHOSTADDR` is ignored.
 `PGSSLCRL`, `PGSSLCRLDIR` and `PGREQUIREPEER` are not supported: each one set
 is ignored with `WARNING: <var> is set, but pgmi does not support it: ...;
-continuing without it` (Go ignores them silently). Each variable is read as its connection-string key
+continuing without it`, also in the `--json` record's `warnings`, except
+that `PGSSLCRL` or `PGSSLCRLDIR` under `sslmode=verify-ca` or `verify-full`
+is refused before connecting, exit 10: those modes promise a check pgmi
+cannot make (owner 2026-11-14, PGMI-996, case `env/ignored-variables`). Go
+ignores them silently. Each variable is read as its connection-string key
 and refused the same way (exit 10 before connecting); `PGSSLCERTMODE` set but
 empty is refused too. `~/.pgpass` (or `PGPASSFILE`) supplies a missing password, wildcards
 allowed; a file readable by group or others is ignored with a WARNING. Several
@@ -691,7 +695,8 @@ When the record cannot be written (stdout on a full disk), Rust says so on
 stderr and exits 1 if the deploy itself succeeded; Go exits 0 (PGMI-997,
 Rust test `a_json_record_that_cannot_be_written_is_not_exit_0`). The Rust
 record has a `warnings` array, left out when empty, for warnings pgmi
-itself gives (a TLS fallback on an older CPU); Go has none. Rust also
+itself gives (a TLS fallback on an older CPU, an unsupported libpq
+variable); Go has none. Rust also
 writes the record on its two earliest exits: a project `.env` it cannot read
 (exit 10) and a runtime that cannot start because the system refuses a
 thread (exit 1); Go warns and deploys past the first (case
@@ -1472,7 +1477,7 @@ release notes take their "Behaviour changes" section from this table.
 | Azure tenant id outside letters, digits, `.` and `-` | refused at sign-in, exit 11 | refused before connecting, exit 10 | agent 2026-11-12 (PGMI-910) |
 | A cloud sign-in endpoint that answers a redirect (pgmi's own sign-in client: Azure managed identity, Databricks, AWS, Google Cloud SQL) | followed, https to http included, and the target's answer used | not followed: the redirect is the answer, so the sign-in fails naming its status | PGMI-931 |
 | `sslnegotiation=direct` to a TLS server that selects no ALPN protocol | the startup and the password are sent | refused after the handshake, before the startup message, exit 11 (libpq 17 refuses too) | PGMI-932 |
-| `PGSSLCRL`, `PGSSLCRLDIR` or `PGREQUIREPEER` set and non-empty | ignored silently | ignored with a WARNING naming the variable and what pgmi does not check, then the deploy goes on (the connection-string keys `sslcrl`, `sslcrldir`, `requirepeer` stay refused, exit 10); `PGHOSTADDR` stays ignored, as in Go | owner 2026-11-14 |
+| `PGSSLCRL`, `PGSSLCRLDIR` or `PGREQUIREPEER` set and non-empty | ignored silently | ignored with a WARNING naming the variable and what pgmi does not check (also in `--json` `warnings`), then the deploy goes on; `PGSSLCRL` or `PGSSLCRLDIR` under `sslmode=verify-ca` or `verify-full` is refused, exit 10 (PGMI-996) (the connection-string keys `sslcrl`, `sslcrldir`, `requirepeer` stay refused, exit 10); `PGHOSTADDR` stays ignored, as in Go | owner 2026-11-14 |
 | A `.env` value that grows past 1 MiB as its variables expand (`V=$V$V` line after line) | expanded until memory runs out | refused, exit 10, naming the line and the key | PGMI-948 |
 | A cloud sign-in answer larger than 1 MiB | read whole into memory | refused after 1 MiB, not retried; the sign-in fails | PGMI-930 |
 | Google sign-in without Application Default Credentials | exit 1 | exit 11 | intended |

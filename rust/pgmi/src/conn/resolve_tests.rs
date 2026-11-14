@@ -122,7 +122,28 @@ fn pghostaddr_is_ignored_as_in_go() {
     let env = Env::from_pairs(&[("PGHOSTADDR", "10.0.0.5")]);
     let spec = resolve(&conn("host=h dbname=d"), &env, None).unwrap();
     assert_eq!((spec.first().name.as_str(), spec.first().addr), ("h", None));
-    assert!(unsupported_env(&env).unwrap().is_empty());
+    assert!(unsupported_env(&env, SslMode::Prefer).unwrap().is_empty());
+}
+
+#[test]
+fn a_revocation_list_under_a_verifying_sslmode_is_refused() {
+    for var in ["PGSSLCRL", "PGSSLCRLDIR"] {
+        let env = Env::from_pairs(&[(var, "/etc/crl")]);
+        for mode in [SslMode::VerifyCa, SslMode::VerifyFull] {
+            let e = unsupported_env(&env, mode).unwrap_err();
+            assert!(
+                matches!(e, ResolveError::Revocation { var: v, mode: m } if v == var && m == mode),
+                "{e}"
+            );
+            assert!(e.to_string().contains(&format!("unset {var}")), "{e}");
+        }
+        assert_eq!(unsupported_env(&env, SslMode::Require).unwrap().len(), 1);
+    }
+    let peer = Env::from_pairs(&[("PGREQUIREPEER", "postgres")]);
+    assert_eq!(
+        unsupported_env(&peer, SslMode::VerifyFull).unwrap().len(),
+        1
+    );
 }
 
 #[test]
@@ -134,7 +155,7 @@ fn unsupported_libpq_variables_are_ignored_with_a_warning_each() {
     ]);
     resolve(&conn("host=h dbname=d"), &env, None).unwrap();
     assert_eq!(
-        unsupported_env(&env).unwrap(),
+        unsupported_env(&env, SslMode::Prefer).unwrap(),
         [
             "WARNING: PGSSLCRL is set, but pgmi does not support it: certificate revocation lists are not checked; continuing without it",
             "WARNING: PGSSLCRLDIR is set, but pgmi does not support it: certificate revocation lists are not checked; continuing without it",
@@ -142,7 +163,7 @@ fn unsupported_libpq_variables_are_ignored_with_a_warning_each() {
         ]
     );
     assert!(
-        unsupported_env(&Env::from_pairs(&[("PGSSLCRL", "")]))
+        unsupported_env(&Env::from_pairs(&[("PGSSLCRL", "")]), SslMode::VerifyFull)
             .unwrap()
             .is_empty()
     );

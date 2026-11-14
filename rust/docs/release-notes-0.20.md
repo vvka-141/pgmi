@@ -33,6 +33,10 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
 - **Secrets stay out of the output.** The connection password and every
   sign-in token are shown as `***` wherever pgmi prints them: notices,
   errors, `--json` and `pgmi serve` answers.
+- **Revocation lists are never dropped quietly.** pgmi does not check
+  `PGSSLCRL` or `PGSSLCRLDIR`. Under `sslmode=verify-ca` or `verify-full`
+  it refuses them (exit 10); under other modes it warns on stderr and in
+  the `--json` record's `warnings`.
 - **`--json` always ends with a record.** Every exit writes one, also an
   unreadable project `.env` (exit 10) and a runtime that cannot start (exit
   1). When the record cannot be written, a deploy that succeeded exits 1.
@@ -132,8 +136,6 @@ ticket; none loses data on its own.
   an orphaned session matches it by pid alone (PGMI-990).
 - **Google sign-in's own HTTP clients** follow redirects and read a reply
   without a size cap (PGMI-994).
-- **`PGSSLCRL` and `PGSSLCRLDIR` are not checked**, as the owner decided:
-  one stderr warning, which the `--json` record does not carry (PGMI-996).
 - **An interrupted `CREATE INDEX CONCURRENTLY`** leaves an INVALID index,
   and the message does not say so; drop it before the next deploy
   (PGMI-998, as in Go).

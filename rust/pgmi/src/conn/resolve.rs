@@ -272,6 +272,7 @@ impl serde::Serialize for SslMode {
 pub(crate) enum ResolveError {
     Env(Error),
     ServiceEnv,
+    Revocation { var: &'static str, mode: SslMode },
     InvalidSslmodeFlag(String),
     ConnectionWith(Vec<&'static str>, Option<SslMode>),
     FlagWithEnvString { flag: &'static str, source: Source },
@@ -298,6 +299,11 @@ impl fmt::Display for ResolveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ResolveError::Env(e) => f.write_str(&e.text()),
+            ResolveError::Revocation { var, mode } => write!(
+                f,
+                "{var} is set, but pgmi cannot check certificate revocation lists, so sslmode={} cannot refuse a revoked server certificate; unset {var} to connect without revocation checks",
+                mode.as_str()
+            ),
             ResolveError::ServiceEnv => f.write_str(
                 "PGSERVICE is set: service files (service=, PGSERVICE) are not supported: give host, port and dbname in the connection string, flags or PGHOST/PGPORT/PGDATABASE",
             ),
@@ -532,10 +538,15 @@ const UNSUPPORTED_ENV: [(&str, &str); 3] = [
 ];
 
 /// One WARNING line per libpq variable pgmi does not support that is set.
-pub(crate) fn unsupported_env(env: &Env) -> Result<Vec<String>> {
+/// A revocation list under `verify-ca` or `verify-full` is refused: those
+/// modes promise a check pgmi cannot make.
+pub(crate) fn unsupported_env(env: &Env, mode: SslMode) -> Result<Vec<String>> {
     let mut lines = Vec::new();
     for (var, what) in UNSUPPORTED_ENV {
         if env.non_empty(var)?.is_some() {
+            if var != "PGREQUIREPEER" && matches!(mode, SslMode::VerifyCa | SslMode::VerifyFull) {
+                return Err(ResolveError::Revocation { var, mode });
+            }
             lines.push(format!(
                 "WARNING: {var} is set, but pgmi does not support it: {what}; continuing without it"
             ));

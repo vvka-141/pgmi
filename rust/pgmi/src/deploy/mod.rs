@@ -624,7 +624,7 @@ impl Steps<'_> {
         log: &Arc<Mutex<NoticeLog>>,
     ) -> Result<()> {
         let request = &self.ctx.request;
-        let Target { mut spec, cloud } = self.target(st, yaml)?;
+        let Target { mut spec, cloud } = self.target(st, yaml, log)?;
         self.report_provenance(st, &spec, cloud.as_ref().map(|(p, _)| *p))?;
         let params = self
             .params(yaml.map(ProjectConfig::param_values).unwrap_or_default())
@@ -828,18 +828,26 @@ impl Steps<'_> {
         })
     }
 
-    fn target(&self, st: &mut Progress, yaml: Option<&ProjectConfig>) -> Result<Target> {
+    fn target(
+        &self,
+        st: &mut Progress,
+        yaml: Option<&ProjectConfig>,
+        log: &Arc<Mutex<NoticeLog>>,
+    ) -> Result<Target> {
         let (request, env) = (&self.ctx.request, &self.ctx.env);
         let yaml_connection = yaml.map(|y| &y.connection);
         st.connection_source = Some(resolve::source(&request.connection, env, yaml_connection)?);
         let cloud = cloud::select(&request.cloud, &request.cloud_request, env, yaml)?;
         st.overrides = overrides(&request.connection, env, yaml_connection)?;
         let mut spec = resolve::resolve(&request.connection, env, yaml_connection)?;
-        for line in resolve::unsupported_env(env)? {
-            self.reporter.line(&line);
-        }
         if let Some((provider, options)) = &cloud {
             cloud::check(*provider, options, &mut spec, env)?;
+        }
+        for line in resolve::unsupported_env(env, spec.sslmode())? {
+            self.reporter.line(&line);
+            log.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .warn(line);
         }
         if let Some(m) = &request.maintenance_db {
             spec.maintenance_db.clone_from(m);
