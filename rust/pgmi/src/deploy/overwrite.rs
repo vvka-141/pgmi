@@ -403,14 +403,15 @@ fn restore_sql(db: &str, s: &Snapshot) -> Vec<(String, String)> {
 /// could still find it held. A session that does not answer within
 /// `CLEANUP` is closed instead.
 pub(crate) async fn unlock(maintenance: &Session, db: &str) {
-    let sql = format!(
-        "SELECT pg_catalog.pg_advisory_unlock(pg_catalog.hashtextextended('pgmi.overwrite.{}', 0))",
-        db.replace('\'', "''")
+    let params = [(
+        &db as &(dyn tokio_postgres::types::ToSql + Sync),
+        Type::TEXT,
+    )];
+    let unlocked = maintenance.client.query_typed(
+        "SELECT pg_catalog.pg_advisory_unlock(pg_catalog.hashtextextended('pgmi.overwrite.' || $1, 0))",
+        &params,
     );
-    if !matches!(
-        tokio::time::timeout(CLEANUP, maintenance.client.batch_execute(&sql)).await,
-        Ok(Ok(()))
-    ) {
+    if !matches!(tokio::time::timeout(CLEANUP, unlocked).await, Ok(Ok(_))) {
         maintenance.disconnect();
     }
 }
@@ -508,18 +509,21 @@ mod tests {
 
     #[tokio::test]
     async fn unlock_releases_the_claim_on_the_same_key() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::io::AsyncReadExt;
         let (listener, port) = crate::conn::dial::fake::listen().await;
         let server = tokio::spawn(async move {
             let mut s = crate::conn::dial::fake::signed_in(&listener).await.unwrap();
-            assert_eq!(s.read_u8().await.unwrap(), b'Q');
-            let len = s.read_u32().await.unwrap();
-            let mut body = vec![0; usize::try_from(len).unwrap() - 4];
-            s.read_exact(&mut body).await.unwrap();
-            s.write_all(b"C\0\0\0\x0dSELECT 1\0Z\0\0\0\x05I")
-                .await
-                .unwrap();
-            String::from_utf8(body).unwrap()
+            let mut sent = Vec::new();
+            loop {
+                let tag = s.read_u8().await.unwrap();
+                let len = s.read_u32().await.unwrap();
+                let mut body = vec![0; usize::try_from(len).unwrap() - 4];
+                s.read_exact(&mut body).await.unwrap();
+                sent.push((tag, String::from_utf8_lossy(&body).into_owned()));
+                if tag == b'S' {
+                    return sent;
+                }
+            }
         });
         let spec = crate::conn::dial::fake::spec_for(&format!(
             "host=127.0.0.1 port={port} user=u dbname=d sslmode=disable"
@@ -528,12 +532,16 @@ mod tests {
             .connect(&spec, "d")
             .await
             .unwrap();
-        unlock(&session, "o'app").await;
-        let sql = server.await.unwrap();
-        assert_eq!(
-            sql.trim_end_matches('\0'),
-            "SELECT pg_catalog.pg_advisory_unlock(pg_catalog.hashtextextended('pgmi.overwrite.o''app', 0))"
+        unlock(&session, "o'app\\").await;
+        let sent = server.await.unwrap();
+        let parse = &sent.iter().find(|(t, _)| *t == b'P').unwrap().1;
+        assert!(
+            parse.contains("pg_catalog.hashtextextended('pgmi.overwrite.' || $1, 0)"),
+            "{parse}"
         );
+        assert!(!parse.contains("o'app"), "{parse}");
+        let bind = &sent.iter().find(|(t, _)| *t == b'B').unwrap().1;
+        assert!(bind.contains("o'app\\"), "{bind}");
     }
 
     #[test]
