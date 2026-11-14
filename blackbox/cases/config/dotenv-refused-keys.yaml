@@ -1,7 +1,7 @@
-description: a project .env may not set keys that locate credentials, endpoints, proxies or trust roots (owner 2026-11-12, PGMI-921); Go applies them, Rust refuses them, applies the rest and names the refused keys on the applied line; the operator's own environment still sets them (contract "Behaviour changes in 0.20")
+description: a project .env may not set keys that locate credentials, endpoints, proxies or trust roots (owner 2026-11-12, PGMI-921; PG trust and credential files and cloud profiles, PGMI-980); Go applies them, Rust refuses them, applies the rest and names the refused keys on the applied line; the operator's own environment still sets them (contract "Behaviour changes in 0.20")
 project:
   files:
-    .env: "PGMI_PARAM_GREETING=hello\nSSL_CERT_FILE=./not-a-ca.pem\nhttps_proxy=http://127.0.0.1:9\n"
+    .env: "PGMI_PARAM_GREETING=hello\nSSL_CERT_FILE=./not-a-ca.pem\nhttps_proxy=http://127.0.0.1:9\nPGPASSFILE=./none\nAWS_PROFILE=other\n"
     deploy.sql: |
       DO $$ BEGIN
         IF current_setting('pgmi.greeting', true) IS DISTINCT FROM 'hello' THEN
@@ -14,4 +14,4 @@ steps:
       exit: 0
       stderr: ["\\.env applied: .*PGMI_PARAM_GREETING"]
       rust:
-        stderr: ["\\.env applied: PGMI_PARAM_GREETING; refused: SSL_CERT_FILE, https_proxy \\(a project \\.env may not locate credentials"]
+        stderr: ["\\.env applied: PGMI_PARAM_GREETING; refused: AWS_PROFILE, PGPASSFILE, SSL_CERT_FILE, https_proxy \\(a project \\.env may not locate credentials"]

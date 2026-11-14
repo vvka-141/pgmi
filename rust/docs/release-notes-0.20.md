@@ -77,7 +77,8 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   explicit root file `verify-ca` is unchanged.
 - **A project `.env` cannot redirect credentials.** Keys that locate
   credentials, endpoints, proxies or trust roots (`AWS_CONFIG_FILE`,
-  `SSL_CERT_FILE`, `HTTPS_PROXY` and the rest listed in the behaviour
+  `AWS_PROFILE`, `PGSSLROOTCERT`, `PGPASSFILE`, `SSL_CERT_FILE`,
+  `HTTPS_PROXY` and the rest listed in the behaviour
   contract) are refused when a checked-out project sets them; the
   `.env applied:` line names them. Set them in the environment pgmi runs in.
 - **`pg_temp.pgmi_run_file(path)` in every deploy session.** deploy.sql can

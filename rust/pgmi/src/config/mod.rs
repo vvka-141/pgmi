@@ -49,20 +49,33 @@ pub(crate) struct Dotenv {
 /// Keys a checked-out project may not set: they locate credentials,
 /// endpoints, proxies or trust roots, which only the operator decides.
 /// The behaviour contract lists the same keys.
-const REFUSED_EXACT: [&str; 9] = [
+const REFUSED_EXACT: [&str; 21] = [
     "AWS_CONFIG_FILE",
     "AWS_SHARED_CREDENTIALS_FILE",
     "AWS_WEB_IDENTITY_TOKEN_FILE",
+    "AWS_PROFILE",
     "AZURE_AUTHORITY_HOST",
     "AZURE_FEDERATED_TOKEN_FILE",
+    "AZURE_CONFIG_DIR",
     "GOOGLE_APPLICATION_CREDENTIALS",
+    "GCE_METADATA_HOST",
+    "GCE_METADATA_IP",
     "DATABRICKS_CONFIG_FILE",
+    "DATABRICKS_CONFIG_PROFILE",
     "DATABRICKS_HOST",
+    "IMDS_ENDPOINT",
+    "PGPASSFILE",
+    "PGSERVICEFILE",
+    "PGSYSCONFDIR",
+    "PGSSLROOTCERT",
+    "PGSSLCERT",
+    "PGSSLKEY",
     "SSL_CERT_DIR",
 ];
-const REFUSED_PREFIXES: [&str; 6] = [
+const REFUSED_PREFIXES: [&str; 7] = [
     "AWS_CONTAINER_",
     "AWS_ENDPOINT_URL",
+    "AWS_EC2_METADATA_",
     "IDENTITY_",
     "MSI_",
     "CLOUDSDK_",
