@@ -37,6 +37,9 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   `PGSSLCRL` or `PGSSLCRLDIR`. Under `sslmode=verify-ca` or `verify-full`
   it refuses them (exit 10); under other modes it warns on stderr and in
   the `--json` record's `warnings`.
+- **One unreachable host no longer uses the whole time box.** With several
+  hosts and no `connect_timeout`, each host but the last gets at most its
+  share of `--timeout` (and at most 30 s) before the next one is tried.
 - **`--json` always ends with a record.** Every exit writes one, also an
   unreadable project `.env` (exit 10) and a runtime that cannot start (exit
   1). When the record cannot be written, a deploy that succeeded exits 1.
@@ -143,8 +146,6 @@ ticket; none loses data on its own.
   (PGMI-998, as in Go).
 - **SIGQUIT and SIGUSR1** end pgmi without cancelling the statement, so
   the next run may wait for the old session's lock (PGMI-999).
-- **Several hosts without `connect_timeout`**: an unreachable first host
-  can use the whole `--timeout` (PGMI-1001, as in Go and libpq).
 - **Escape sequences** in server messages and file names reach the
   terminal unfiltered (PGMI-1002, as in Go and psql).
 - **No third-party licence notices** in the archives or the `.deb`

@@ -976,6 +976,7 @@ pub(crate) async fn test(s: Settings, env: Env) -> TestResult {
         log: std::sync::Arc::new(|_| {}),
         warn: std::sync::Arc::new(|_| {}),
         secret: std::sync::Arc::new(|_| {}),
+        deadline: None,
     };
     let work = async {
         let session = dialer

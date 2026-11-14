@@ -497,6 +497,11 @@ before the host lookup and the sign-in token, so a stalled host is given up
 and the next one tried; a round whose hosts all ran out of it is not
 retried, as in Go (PGMI-933, which reverses PGMI-907), and a value above 9223372036 (the longest Go
 duration, which Go wraps around) is refused before connecting, exit 10.
+Without `connect_timeout`, each of several hosts but the last gets a share
+of what is left of `--timeout`: min(remaining / hosts left, 30 s). A host
+that accepts the connection and then answers nothing is given up and the
+next host is tried, where Go and libpq wait on it until the time box ends
+(owner 2026-11-14, PGMI-1001, case `connection/black-holed-first-host`).
 A refusal ends with its next step: a missing maintenance database says what
 it is and to name an existing one (the connection string's database or
 `connection.maintenance_database`); 53300 that the server is at
@@ -1572,6 +1577,7 @@ release notes take their "Behaviour changes" section from this table.
 | Unknown connection-string option written after a password | named in the refusal | not named (it may be the password's rest); exit 10 both | owner 2026-11-11 (never quote the input) |
 | `connect_timeout` above 9223372036 seconds | wrapped around (a negative or short timeout) | newly refused before connecting, exit 10 | intended |
 | `connect_timeout` with a stalled host lookup or sign-in | waits for it (pgx counts only the connection) | counted per attempt; the next host is tried | intended |
+| Several hosts, no `connect_timeout`, a first host that answers nothing | waits on it until `--timeout` ends, exit 11 | each host but the last gets min(remaining time / hosts left, 30 s), then the next is tried | owner 2026-11-14 (PGMI-1001) |
 | `PGPORT` listing several ports | refused, exit 10 | accepted, one per `PGHOST` entry | owner 2026-11-10 |
 | `PGPORT` with spaces around the number (`" 5432 "`) | refused, exit 10 | accepted, as libpq does | owner 2026-11-11 |
 | `keepalives*`, `load_balance_hosts`, `gssencmode=disable`/`prefer`, `gssdelegation=0`, `sslcompression=0` | exit 11 (the server refuses the setting) | honoured | owner 2026-11-11 |

@@ -1,0 +1,18 @@
+description: with several hosts and no connect_timeout, a first host that accepts the TCP connection and then answers nothing (the proxy freezes) gets only its share of --timeout (min(remaining / hosts left, 30 s)), so the next host is tried and the deploy succeeds; Go and libpq wait on the first host until the time box ends, exit 11 (owner 2026-11-14, PGMI-1001)
+proxy:
+  - {at: accept, do: freeze}
+project:
+  files:
+    deploy.sql: CREATE TABLE marker (n int);
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{proxy_port},{host}:{port}/{db}?sslmode=disable", --timeout, 12s]
+    timeout: 30
+    expect:
+      exit: 11
+      rust:
+        exit: 0
+        sql:
+          - query: SELECT count(*) FROM pg_class WHERE relname = 'marker'
+            rows: [[1]]

@@ -483,6 +483,25 @@ fn sslmode_of(mode: SslMode) -> PgSslMode {
     }
 }
 
+const HOST_SHARE: Duration = Duration::from_secs(30);
+
+/// How long one of several hosts may take when `connect_timeout` is not
+/// set: its share of what is left of the time box, at most 30 s, so one
+/// unreachable host cannot use it all. The last host has no cap.
+fn host_share(
+    connect_timeout: Option<Duration>,
+    remaining: Option<Duration>,
+    hosts_left: usize,
+) -> Option<Duration> {
+    if connect_timeout.is_some() || hosts_left <= 1 {
+        return None;
+    }
+    let even = remaining.map_or(HOST_SHARE, |r| {
+        r / u32::try_from(hosts_left).unwrap_or(u32::MAX)
+    });
+    Some(even.min(HOST_SHARE))
+}
+
 /// When a step started now under `connect_timeout` must end; `None` when
 /// there is no timeout or the deadline lies beyond the clock.
 fn deadline(timeout: Option<Duration>) -> Option<Instant> {
@@ -837,6 +856,8 @@ pub(crate) struct Dialer {
     /// A `WARNING:` line about the run itself; `--json` carries it too.
     pub(crate) warn: LogSink,
     pub(crate) secret: SecretSink,
+    /// The end of the run's time box, which several hosts share.
+    pub(crate) deadline: Option<Instant>,
 }
 
 impl Dialer {
@@ -909,9 +930,28 @@ impl Dialer {
             };
             let mut endpoints: Vec<_> = spec.hosts.endpoints().collect();
             balance(&mut endpoints, spec.load_balance_hosts);
-            for endpoint in &endpoints {
-                if let Some(session) = round.endpoint(endpoint, &mut failed).await {
-                    return Ok(session);
+            let hosts = endpoints.len();
+            for (i, endpoint) in endpoints.iter().enumerate() {
+                let remaining = self
+                    .deadline
+                    .map(|d| d.saturating_duration_since(Instant::now()));
+                let share = host_share(spec.connect_timeout, remaining, hosts - i);
+                let tried = by(
+                    share.and_then(|s| Instant::now().checked_add(s)),
+                    round.endpoint(endpoint, &mut failed),
+                )
+                .await;
+                match tried {
+                    Some(Some(session)) => return Ok(session),
+                    Some(None) => {}
+                    None => failed.push(Failed::At {
+                        host: endpoint.name.clone(),
+                        addr: endpoint
+                            .addr
+                            .map_or_else(|| endpoint.name.clone(), |a| a.to_string()),
+                        port: endpoint.port,
+                        failure: DialFailure::Timeout,
+                    }),
                 }
             }
         }
@@ -1274,6 +1314,7 @@ pub(crate) mod fake {
             log: Arc::new(|_| {}),
             warn: Arc::new(|_| {}),
             secret: Arc::new(|_| {}),
+            deadline: None,
         }
     }
 
@@ -1351,6 +1392,16 @@ mod tests {
 
     fn sqlstate(e: &Error) -> Option<&str> {
         e.sql_diagnostics().and_then(|d| d.sqlstate.as_deref())
+    }
+
+    #[test]
+    fn each_of_several_hosts_gets_a_bounded_share_of_the_time_box() {
+        let s = Duration::from_secs;
+        assert_eq!(host_share(None, Some(s(12)), 2), Some(s(6)));
+        assert_eq!(host_share(None, Some(s(300)), 2), Some(s(30)));
+        assert_eq!(host_share(None, None, 3), Some(s(30)));
+        assert_eq!(host_share(None, Some(s(12)), 1), None);
+        assert_eq!(host_share(Some(s(5)), Some(s(12)), 2), None);
     }
 
     #[test]

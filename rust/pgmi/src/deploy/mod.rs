@@ -989,6 +989,7 @@ impl Steps<'_> {
                     .warn(line);
             }),
             secret: Arc::new(move |secret: &Secret| found.insert(secret)),
+            deadline: Some(self.guard.deadline),
         }
     }
 
