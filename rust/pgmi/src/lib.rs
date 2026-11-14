@@ -102,11 +102,24 @@ fn report(e: &Error) -> u8 {
     e.exit_code()
 }
 
+const WORKERS: usize = 2;
+
 /// The one tokio runtime of a run (record 0003). Built only after the
 /// project `.env` is exported, because `export` must run while pgmi has a
 /// single thread (record 0016).
 fn runtime() -> error::Result<tokio::runtime::Runtime> {
+    let probes: Vec<_> = (0..=WORKERS)
+        .map(|_| std::thread::Builder::new().spawn(|| ()))
+        .collect();
+    for probe in probes {
+        let _ = probe
+            .map_err(|e| {
+                Error::general("start the runtime: the system refused a new thread").with_source(e)
+            })?
+            .join();
+    }
     tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(WORKERS)
         .enable_all()
         .build()
         .map_err(|e| Error::general("start the runtime").with_source(e))

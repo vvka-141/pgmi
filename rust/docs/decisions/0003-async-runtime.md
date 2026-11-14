@@ -33,7 +33,12 @@ Option 3: `tokio` with features `rt-multi-thread`, `net`, `io-util`,
 - `main` and `pgmi::run` are synchronous. `main` builds the environment
   snapshot; `run` parses arguments and exports the project `.env` through
   `main`'s closure (record 0016) while only one thread exists, then builds
-  the runtime and `block_on`s the command.
+  the runtime and `block_on`s the command. The runtime has two workers,
+  not one per core: pgmi drives
+  one session, and a container pids limit on a many-core host otherwise
+  made tokio panic while starting and hang. Before building it, pgmi starts
+  three threads to check it may; if the system refuses, it exits 1 at once
+  (PGMI-986).
 - Cancellation is one `tokio_util::sync::CancellationToken` per deploy,
   fired by `--timeout`, SIGINT/SIGTERM (`tokio::signal`) or MCP
   `notifications/cancelled`. The deploy `select!`s on it and sends the
