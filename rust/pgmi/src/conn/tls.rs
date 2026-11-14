@@ -145,16 +145,31 @@ impl Verifier {
             return None;
         };
         let bad = |e: CertificateError| Some(Err(rustls::Error::InvalidCertificate(e)));
-        if !(self.roots.iter().any(|r| r.as_ref() == ee.as_ref()) || self.signed_by_root(&cert, ee))
-        {
-            return bad(CertificateError::UnknownIssuer);
-        }
-        let validity = tbs.validity();
+        let issuer = if self.roots.iter().any(|r| r.as_ref() == ee.as_ref()) {
+            None
+        } else {
+            match self.root_of(&cert, ee) {
+                Some(root) => Some(root),
+                None => return bad(CertificateError::UnknownIssuer),
+            }
+        };
         let at = now.as_secs();
-        if at < validity.not_before.to_unix_duration().as_secs()
-            || at > validity.not_after.to_unix_duration().as_secs()
+        let current = |v: &x509_cert::time::Validity| {
+            at >= v.not_before.to_unix_duration().as_secs()
+                && at <= v.not_after.to_unix_duration().as_secs()
+        };
+        if !current(tbs.validity())
+            || issuer
+                .as_ref()
+                .is_some_and(|r| !current(r.tbs_certificate().validity()))
         {
             return bad(CertificateError::Expired);
+        }
+        if issuer
+            .as_ref()
+            .is_some_and(|r| !within_constraints(r, &cert))
+        {
+            return bad(CertificateError::NotValidForName);
         }
         const SERVER_AUTH: &str = "1.3.6.1.5.5.7.3.1";
         const ANY: &str = "2.5.29.37.0";
@@ -184,43 +199,150 @@ impl Verifier {
         })
     }
 
-    fn signed_by_root(&self, cert: &x509_cert::Certificate, ee: &CertificateDer<'_>) -> bool {
+    /// webpki takes a root for its subject and key alone; Go also refuses
+    /// one whose dates do not hold. False only when every root that signed
+    /// the chain's last certificate is outside its validity.
+    fn anchor_current(
+        &self,
+        ee: &CertificateDer<'_>,
+        im: &[CertificateDer<'_>],
+        now: UnixTime,
+    ) -> bool {
         use x509_cert::der::{Decode, Encode};
-        let Some((tbs, sig_alg, signature)) = signed_parts(ee.as_ref()) else {
-            return false;
+        let top = im.last().unwrap_or(ee);
+        let Some((tbs, sig_alg, signature)) = signed_parts(top.as_ref()) else {
+            return true;
         };
-        let Ok(issuer) = cert.tbs_certificate().issuer().to_der() else {
-            return false;
+        let Some(issuer) = x509_cert::Certificate::from_der(top.as_ref())
+            .ok()
+            .and_then(|c| c.tbs_certificate().issuer().to_der().ok())
+        else {
+            return true;
         };
-        self.roots.iter().any(|r| {
-            let Ok(root) = x509_cert::Certificate::from_der(r.as_ref()) else {
-                return false;
-            };
-            let rt = root.tbs_certificate();
-            if rt.subject().to_der().ok().as_deref() != Some(issuer.as_slice()) {
-                return false;
-            }
-            let spki = rt.subject_public_key_info();
-            let Some(key_alg) = spki
-                .algorithm
-                .to_der()
-                .ok()
-                .and_then(|d| der_item(&d).map(|(_, body, _)| body.to_vec()))
-            else {
-                return false;
-            };
-            let key = spki.subject_public_key.raw_bytes();
-            self.provider
-                .signature_verification_algorithms
-                .all
-                .iter()
-                .any(|alg| {
-                    alg.public_key_alg_id().as_ref() == key_alg.as_slice()
-                        && alg.signature_alg_id().as_ref() == sig_alg
-                        && alg.verify_signature(key, tbs, signature).is_ok()
-                })
+        let at = now.as_secs();
+        let mut signers = self.roots.iter().filter_map(|r| {
+            let root = x509_cert::Certificate::from_der(r.as_ref()).ok()?;
+            self.signed(&root, &issuer, tbs, sig_alg, signature)
+                .then_some(root)
+        });
+        let mut any = false;
+        let current = signers.any(|root| {
+            any = true;
+            let v = root.tbs_certificate().validity();
+            at >= v.not_before.to_unix_duration().as_secs()
+                && at <= v.not_after.to_unix_duration().as_secs()
+        });
+        current || !any
+    }
+
+    fn root_of(
+        &self,
+        cert: &x509_cert::Certificate,
+        ee: &CertificateDer<'_>,
+    ) -> Option<x509_cert::Certificate> {
+        use x509_cert::der::{Decode, Encode};
+        let (tbs, sig_alg, signature) = signed_parts(ee.as_ref())?;
+        let issuer = cert.tbs_certificate().issuer().to_der().ok()?;
+        self.roots.iter().find_map(|r| {
+            let root = x509_cert::Certificate::from_der(r.as_ref()).ok()?;
+            self.signed(&root, &issuer, tbs, sig_alg, signature)
+                .then_some(root)
         })
     }
+
+    fn signed(
+        &self,
+        root: &x509_cert::Certificate,
+        issuer: &[u8],
+        tbs: &[u8],
+        sig_alg: &[u8],
+        signature: &[u8],
+    ) -> bool {
+        use x509_cert::der::Encode;
+        let rt = root.tbs_certificate();
+        if rt.subject().to_der().ok().as_deref() != Some(issuer) {
+            return false;
+        }
+        let spki = rt.subject_public_key_info();
+        let Some(key_alg) = spki
+            .algorithm
+            .to_der()
+            .ok()
+            .and_then(|d| der_item(&d).map(|(_, body, _)| body.to_vec()))
+        else {
+            return false;
+        };
+        let key = spki.subject_public_key.raw_bytes();
+        self.provider
+            .signature_verification_algorithms
+            .all
+            .iter()
+            .any(|alg| {
+                alg.public_key_alg_id().as_ref() == key_alg.as_slice()
+                    && alg.signature_alg_id().as_ref() == sig_alg
+                    && alg.verify_signature(key, tbs, signature).is_ok()
+            })
+    }
+}
+
+/// Whether the root's name constraints allow every DNS name and IP address
+/// the certificate it signed carries. A constraint of any other type, or one
+/// that does not decode, allows nothing.
+fn within_constraints(root: &x509_cert::Certificate, cert: &x509_cert::Certificate) -> bool {
+    use x509_cert::ext::pkix::name::GeneralName;
+    use x509_cert::ext::pkix::{NameConstraints, SubjectAltName};
+    let constraints = match root.tbs_certificate().get_extension::<NameConstraints>() {
+        Ok(None) => return true,
+        Ok(Some((_, c))) => c,
+        Err(_) => return false,
+    };
+    let names = match cert.tbs_certificate().get_extension::<SubjectAltName>() {
+        Ok(Some((_, SubjectAltName(names)))) => names,
+        Ok(None) => Vec::new(),
+        Err(_) => return false,
+    };
+    let fits = |base: &GeneralName, name: &GeneralName| match (base, name) {
+        (GeneralName::DnsName(c), GeneralName::DnsName(n)) => dns_within(c.as_ref(), n.as_ref()),
+        (GeneralName::IpAddress(c), GeneralName::IpAddress(n)) => {
+            ip_within(c.as_bytes(), n.as_bytes())
+        }
+        _ => false,
+    };
+    let same_type =
+        |a: &GeneralName, b: &GeneralName| std::mem::discriminant(a) == std::mem::discriminant(b);
+    let permitted = constraints.permitted_subtrees.unwrap_or_default();
+    let excluded = constraints.excluded_subtrees.unwrap_or_default();
+    let known = |g: &GeneralName| matches!(g, GeneralName::DnsName(_) | GeneralName::IpAddress(_));
+    if !permitted.iter().chain(&excluded).all(|t| known(&t.base)) {
+        return false;
+    }
+    names.iter().all(|n| {
+        let allowed = !permitted.iter().any(|t| same_type(&t.base, n))
+            || permitted.iter().any(|t| fits(&t.base, n));
+        allowed && !excluded.iter().any(|t| fits(&t.base, n))
+    })
+}
+
+fn dns_within(constraint: &str, name: &str) -> bool {
+    let (c, n) = (constraint.to_ascii_lowercase(), name.to_ascii_lowercase());
+    if c.is_empty() {
+        return true;
+    }
+    if c.starts_with('.') {
+        return n.ends_with(&c);
+    }
+    n == c || n.ends_with(&format!(".{c}"))
+}
+
+fn ip_within(constraint: &[u8], ip: &[u8]) -> bool {
+    let half = constraint.len() / 2;
+    let (net, mask) = constraint.split_at(half);
+    ip.len() == half
+        && ip
+            .iter()
+            .zip(net)
+            .zip(mask)
+            .all(|((i, n), m)| i & m == n & m)
 }
 
 /// The signed bytes (the whole tbsCertificate), the signature algorithm's
@@ -260,7 +382,15 @@ impl ServerCertVerifier for Verifier {
         let Some(chain) = &self.chain else {
             return Ok(ServerCertVerified::assertion());
         };
-        let result = chain.verify_server_cert(ee, im, name, ocsp, now);
+        let result = chain
+            .verify_server_cert(ee, im, name, ocsp, now)
+            .and_then(|ok| {
+                if self.anchor_current(ee, im, now) {
+                    Ok(ok)
+                } else {
+                    Err(rustls::Error::InvalidCertificate(CertificateError::Expired))
+                }
+            });
         if result.is_err()
             && let Some(verdict) = self.ca_leaf(ee, name, now)
         {
@@ -868,6 +998,7 @@ mod tests {
     }
 
     const IN_2030: u64 = 525_960;
+    const IN_2040: u64 = 613_620;
 
     #[test]
     fn a_self_signed_ca_certificate_is_its_own_root_as_go_trusts_it() {
@@ -918,6 +1049,46 @@ mod tests {
                 CertificateError::UnknownIssuer
             ))
         );
+    }
+
+    #[test]
+    fn a_ca_server_certificate_obeys_its_roots_name_constraints_and_validity() {
+        let constrained = include_bytes!("testdata/nc-root.crt");
+        assert_eq!(
+            verdict_on(
+                &verifying(constrained, Names::Check),
+                include_bytes!("testdata/nc-leaf.crt"),
+                "db.example",
+                IN_2030
+            ),
+            Err(rustls::Error::InvalidCertificate(
+                CertificateError::NotValidForName
+            ))
+        );
+        let short = include_bytes!("testdata/short-root.crt");
+        for leaf in [
+            &include_bytes!("testdata/short-leaf.crt")[..],
+            &include_bytes!("testdata/short-plain-leaf.crt")[..],
+        ] {
+            verdict_on(&verifying(short, Names::Check), leaf, "db.example", IN_2030).unwrap();
+            assert_eq!(
+                verdict_on(&verifying(short, Names::Check), leaf, "db.example", IN_2040),
+                Err(rustls::Error::InvalidCertificate(CertificateError::Expired))
+            );
+        }
+    }
+
+    #[test]
+    fn name_constraints_match_as_rfc_5280_reads_them() {
+        assert!(dns_within("example.com", "example.com"));
+        assert!(dns_within("example.com", "db.Example.com"));
+        assert!(!dns_within("example.com", "badexample.com"));
+        assert!(dns_within(".example.com", "db.example.com"));
+        assert!(!dns_within(".example.com", "example.com"));
+        assert!(dns_within("", "anything"));
+        assert!(ip_within(&[10, 0, 0, 0, 255, 0, 0, 0], &[10, 1, 2, 3]));
+        assert!(!ip_within(&[10, 0, 0, 0, 255, 0, 0, 0], &[11, 1, 2, 3]));
+        assert!(!ip_within(&[10, 0, 0, 0, 255, 0, 0, 0], &[0; 16]));
     }
 
     fn verdict(v: &Verifier, host: &str) -> std::result::Result<(), rustls::Error> {
