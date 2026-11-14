@@ -848,9 +848,16 @@ impl Dialer {
         spec.require_auth
             .policy()
             .map_err(|e| Error::config(e.to_string()))?;
-        if spec.sslmode() != SslMode::Disable {
-            super::tls::require_cpu()?;
+        let missing = super::tls::missing_cpu();
+        let plain = without_tls(spec, &missing)?;
+        if plain.is_some() {
+            (self.log)(format!(
+                "This CPU lacks {} needed for TLS; sslmode={} connects without it",
+                missing.join(", "),
+                spec.sslmode().as_str()
+            ));
         }
+        let spec = plain.as_ref().unwrap_or(spec);
         let tls = if needs_tls(spec) {
             let owned = spec.clone();
             let built = crate::blocking::spawn(move || tls::config(&owned))
@@ -1013,6 +1020,23 @@ impl Round<'_> {
         }
         .run()
         .await
+    }
+}
+
+/// On a CPU the TLS library cannot run on, `allow` and `prefer` connect
+/// without TLS, as libpq built without SSL does; a mode that needs TLS is
+/// refused.
+fn without_tls(spec: &Spec, missing: &[&str]) -> Result<Option<Spec>> {
+    if missing.is_empty() || !needs_tls(spec) {
+        return Ok(None);
+    }
+    match spec.sslmode() {
+        SslMode::Allow | SslMode::Prefer => {
+            let mut plain = spec.clone();
+            plain.requested_sslmode = Some(SslMode::Disable);
+            Ok(Some(plain))
+        }
+        _ => Err(super::tls::cpu_error(missing)),
     }
 }
 
@@ -1320,6 +1344,32 @@ mod tests {
 
     fn sqlstate(e: &Error) -> Option<&str> {
         e.sql_diagnostics().and_then(|d| d.sqlstate.as_deref())
+    }
+
+    #[test]
+    fn a_cpu_without_the_tls_features_connects_without_tls_only_where_tls_is_optional() {
+        let old = ["avx2", "adx"];
+        for mode in ["allow", "prefer"] {
+            let spec = spec_for(&format!("postgresql://u@db.example/app?sslmode={mode}"));
+            let plain = without_tls(&spec, &old).unwrap().expect("plaintext");
+            assert_eq!(plain.sslmode(), SslMode::Disable, "{mode}");
+            assert!(without_tls(&spec, &[]).unwrap().is_none(), "{mode}");
+        }
+        for mode in ["require", "verify-ca", "verify-full"] {
+            let spec = spec_for(&format!("postgresql://u@db.example/app?sslmode={mode}"));
+            let e = without_tls(&spec, &old).unwrap_err();
+            assert_eq!(e.exit_code(), 10, "{mode}");
+            assert!(e.text().starts_with("this CPU lacks avx2, adx"), "{mode}");
+        }
+        for conn in [
+            "postgresql://u@/app?host=/run/postgresql&sslmode=require",
+            "postgresql://u@db.example/app?sslmode=disable",
+        ] {
+            assert!(
+                without_tls(&spec_for(conn), &old).unwrap().is_none(),
+                "{conn}"
+            );
+        }
     }
 
     #[test]

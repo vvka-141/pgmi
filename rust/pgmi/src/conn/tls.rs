@@ -80,16 +80,24 @@ fn missing_cpu_features(has: impl Fn(&str) -> bool) -> Vec<&'static str> {
     CPU_FEATURES.iter().copied().filter(|f| !has(f)).collect()
 }
 
+pub(crate) fn missing_cpu() -> Vec<&'static str> {
+    missing_cpu_features(cpu_has)
+}
+
 pub(crate) fn require_cpu() -> Result<()> {
-    let missing = missing_cpu_features(cpu_has);
+    let missing = missing_cpu();
     if missing.is_empty() {
         return Ok(());
     }
-    Err(Error::config(format!(
+    Err(cpu_error(&missing))
+}
+
+pub(crate) fn cpu_error(missing: &[&str]) -> Error {
+    Error::config(format!(
         "this CPU lacks {} needed for TLS and cloud sign-in; pgmi needs a CPU with {} (x86-64 from about 2014 on, or arm64 with the crypto extensions)",
         missing.join(", "),
         CPU_FEATURES.join(", ")
-    )))
+    ))
 }
 
 #[derive(Debug, PartialEq, Eq)]

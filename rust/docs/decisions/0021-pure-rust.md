@@ -82,10 +82,12 @@ cc and ld removed.
      `avx2`, `bmi1`, `bmi2`, `adx` (Intel Broadwell, AMD Zen and later,
      about 2014 on). arm64: `neon`, `aes`, `pmull`, `sha2` (Apple silicon,
      Graviton, Raspberry Pi 5; not Raspberry Pi 4). graviola itself panics
-     on a CPU without them, so pgmi checks first (`tls::require_cpu`)
-     before any TLS connection and any cloud sign-in, and refuses with
-     exit 10 naming the missing features. Work that needs no cryptography
-     (`init`, `templates`, `metadata`, a deploy with `sslmode=disable`)
+     on a CPU without them, so pgmi checks first: a TLS connection that
+     `sslmode` requires and any cloud sign-in are refused with exit 10
+     naming the missing features (`tls::require_cpu`), while `allow` and
+     `prefer` connect without TLS, as libpq built without SSL does
+     (PGMI-979). Work that needs no cryptography (`init`, `templates`,
+     `metadata`, a deploy with `sslmode=disable` or over a Unix socket)
      runs on any CPU.
    - **Fallback:** if graviola goes stale, switching provider is one line
      in `tls::provider()` and `tls::install()` (rustls-rustcrypto once it is

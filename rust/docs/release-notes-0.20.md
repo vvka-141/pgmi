@@ -10,9 +10,11 @@ Rust-only requirements live here.
   It needs, on x86-64: AES-NI, PCLMULQDQ, SSSE3, AVX, AVX2, BMI1, BMI2 and
   ADX (Intel Broadwell, AMD Zen and later, about 2014 on); on arm64: NEON,
   AES, PMULL and SHA2 (Apple silicon, AWS Graviton, Raspberry Pi 5; not
-  Raspberry Pi 4). On a CPU without them, a connection that uses TLS and
-  any cloud sign-in stop with exit 10 and name the missing features;
-  commands that need no encryption run as before.
+  Raspberry Pi 4). On a CPU without them, `sslmode=require`, `verify-ca`,
+  `verify-full` and any cloud sign-in stop with exit 10 and name the missing
+  features; `allow` and `prefer` (the default) connect without TLS, as a
+  libpq built without SSL does, and Unix sockets and commands that need no
+  encryption run as before. Install pages list this CPU floor.
 
 ## Behaviour changes
 
