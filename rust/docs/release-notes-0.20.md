@@ -154,12 +154,9 @@ ticket; none loses data on its own.
   without a size cap. Accepted: the token endpoints come from the
   operator's own Google ADC configuration, and google-cloud-auth offers no
   way to pass pgmi's capped client (PGMI-994).
-- **Release workflow details**: attestation after the release is public,
-  the tap token in the clone URL, `uv` pinned by version only, no SBOM, the
-  arm64 Linux and Windows binaries not run against a database, builds
-  reproducible only from the same checkout path, and a prebuilt native
-  library a build script links is not caught by `check-no-c.sh`
-  (PGMI-1004).
+- **The Windows arm64 binary** is run on a `windows-11-arm` runner, but
+  deployed only if that runner has PostgreSQL; otherwise the release
+  workflow warns that only `--version` ran (PGMI-1004).
 - **`pgmi serve` details**: an unbracketed IPv6 `host:port` entry in
   `PGMI_SERVE_HOSTS` can match another address; a withheld credential's
   tool result names only `PGPASSWORD` (the reason is on stderr); a deploy
