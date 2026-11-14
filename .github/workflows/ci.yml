@@ -454,7 +454,7 @@ jobs:
           cargo build --locked -p pgmi
           $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes('target/debug/pgmi.exe'))
           if ($text -match '(?i)vcruntime140|api-ms-win-crt-') { Write-Error 'pgmi.exe needs the VC++ runtime'; exit 1 }
-          Get-Service -Name postgresql* | Set-Service -Status Running
+          & "$env:PGBIN\pg_ctl.exe" start -D "$env:PGDATA" -w
           New-Item -ItemType Directory -Force smoke | Out-Null
           Set-Content smoke/deploy.sql 'SELECT 1;'
           & target/debug/pgmi.exe deploy smoke --connection 'postgresql://postgres:root@127.0.0.1:5432/postgres?sslmode=disable'
