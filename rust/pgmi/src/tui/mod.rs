@@ -79,6 +79,7 @@ pub(crate) fn interactive(env: &Env) -> bool {
 }
 
 pub(crate) fn confirm(message: &str) -> bool {
+    crate::output::drain();
     let _ = write!(std::io::stderr(), "{message} [Y/n]: ");
     let mut line = String::new();
     match std::io::stdin().lock().read_line(&mut line) {
@@ -143,6 +144,7 @@ fn opened<T>(
 
 impl Screen {
     pub(crate) fn open() -> Result<Self> {
+        crate::output::drain();
         static HOOK: Once = Once::new();
         HOOK.call_once(|| std::panic::set_hook(restoring(std::panic::take_hook(), leave)));
         let (terminal, restore) = opened(terminal::enable_raw_mode, leave, || {

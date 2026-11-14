@@ -184,8 +184,8 @@ pub(super) fn spawn_signals(stop: Stop, reporter: Arc<Reporter>) {
     let again = reporter.clone();
     tokio::spawn(crate::signals::first_stops_second_exits(
         move || {
-            reporter.line(INTERRUPTED);
             stop.signal();
+            reporter.line(INTERRUPTED);
         },
         move || again.line(INTERRUPTED_AGAIN),
     ));

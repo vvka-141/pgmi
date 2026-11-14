@@ -91,6 +91,7 @@ pub(crate) fn run(
     };
     let reporter = Reporter::new(verbose, env);
     scaffold(&target, template, None, &|n| reporter.verbose(n))?;
+    crate::output::drain();
     let _ = writeln!(
         std::io::stderr(),
         "Wrote {} ({template} template).",

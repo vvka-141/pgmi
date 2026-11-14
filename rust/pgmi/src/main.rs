@@ -9,6 +9,7 @@ fn main() -> ExitCode {
     let code =
         std::panic::catch_unwind(|| pgmi::run(std::env::args_os(), pgmi::Env::snapshot(), export))
             .unwrap_or(pgmi::PANIC_EXIT_CODE);
+    pgmi::drain();
     ExitCode::from(code)
 }
 

@@ -11,6 +11,7 @@ use std::io::Write;
 use crate::error::{Error, Result};
 
 pub(crate) fn stdout(text: &str) -> Result<()> {
+    crate::output::drain();
     std::io::stdout()
         .lock()
         .write_all(text.as_bytes())
@@ -18,6 +19,7 @@ pub(crate) fn stdout(text: &str) -> Result<()> {
 }
 
 pub(crate) fn stderr(text: &str) {
+    crate::output::drain();
     let _ = std::io::stderr().lock().write_all(text.as_bytes());
 }
 

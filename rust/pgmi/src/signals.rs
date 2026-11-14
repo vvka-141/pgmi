@@ -40,5 +40,6 @@ pub(crate) async fn first_stops_second_exits(first: impl FnOnce(), second: impl 
         }
     }
     second();
+    crate::output::drain();
     std::process::exit(i32::from(Kind::Interrupted.exit_code()));
 }

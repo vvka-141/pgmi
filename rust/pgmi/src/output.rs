@@ -1,8 +1,8 @@
 use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::io::{IsTerminal, Write};
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value, json};
 
@@ -88,6 +88,142 @@ fn style(env: &Env) -> Style {
     }
 }
 
+/// pgmi's stderr: lines go to a bounded queue that one thread writes out,
+/// so a stderr that stops reading never stalls the task that drives the
+/// connection, a cancel, or the exit. What does not fit in a full queue is
+/// dropped, and a line says how much once there is room again.
+struct Spool {
+    state: Mutex<Queued>,
+    changed: Condvar,
+}
+
+#[derive(Default)]
+struct Queued {
+    chunks: VecDeque<Vec<u8>>,
+    bytes: usize,
+    writing: bool,
+    written: u64,
+    dropped: u64,
+}
+
+const SPOOL_BYTES: usize = 4 << 20;
+
+fn spool() -> Option<&'static Spool> {
+    static SPOOL: OnceLock<Option<&'static Spool>> = OnceLock::new();
+    *SPOOL.get_or_init(|| {
+        let spool: &'static Spool = Box::leak(Box::new(Spool {
+            state: Mutex::new(Queued::default()),
+            changed: Condvar::new(),
+        }));
+        std::thread::Builder::new()
+            .name("pgmi-stderr".into())
+            .spawn(move || spool.write_out())
+            .ok()
+            .map(|_| spool)
+    })
+}
+
+impl Spool {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Queued> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn push(&self, chunk: &[u8]) {
+        let mut q = self.lock();
+        if q.bytes >= SPOOL_BYTES {
+            q.dropped += 1;
+            return;
+        }
+        if q.dropped > 0 {
+            let note = format!(
+                "pgmi: {} line(s) of output dropped: stderr was not being read\n",
+                q.dropped
+            );
+            q.dropped = 0;
+            q.bytes += note.len();
+            q.chunks.push_back(note.into_bytes());
+        }
+        q.bytes += chunk.len();
+        q.chunks.push_back(chunk.to_vec());
+        self.changed.notify_all();
+    }
+
+    fn write_out(&self) {
+        loop {
+            let chunk = {
+                let mut q = self.lock();
+                while q.chunks.is_empty() {
+                    q = self
+                        .changed
+                        .wait(q)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                }
+                let chunk = q.chunks.pop_front().unwrap_or_default();
+                q.bytes -= chunk.len();
+                q.writing = true;
+                self.changed.notify_all();
+                chunk
+            };
+            let mut err = std::io::stderr().lock();
+            let _ = err.write_all(&chunk);
+            let _ = err.flush();
+            drop(err);
+            let mut q = self.lock();
+            q.writing = false;
+            q.written += 1;
+            self.changed.notify_all();
+        }
+    }
+
+    fn drain(&self) {
+        let mut q = self.lock();
+        while !q.chunks.is_empty() || q.writing {
+            let before = q.written;
+            let (next, waited) = self
+                .changed
+                .wait_timeout(q, Duration::from_secs(1))
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            q = next;
+            if waited.timed_out() && q.written == before {
+                return;
+            }
+        }
+    }
+}
+
+/// stderr through the spool, or directly when no writer thread could start.
+struct Stderr;
+
+impl Write for Stderr {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match spool() {
+            Some(s) => {
+                s.push(buf);
+                Ok(buf.len())
+            }
+            None => std::io::stderr().write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match spool() {
+            Some(_) => Ok(()),
+            None => std::io::stderr().flush(),
+        }
+    }
+}
+
+/// Waits until every queued line is written, or until stderr has taken
+/// nothing for a second. Called before pgmi writes to stderr directly and
+/// before it exits.
+pub fn drain() {
+    if let Some(s) = spool() {
+        s.drain();
+    }
+}
+
 /// Writes pgmi's own lines to one sink (stderr in production), one whole
 /// line at a time even when several deploys share it.
 pub(crate) struct Reporter {
@@ -100,7 +236,7 @@ pub(crate) struct Reporter {
 
 impl Reporter {
     pub(crate) fn new(verbose: bool, env: &Env) -> Arc<Self> {
-        Arc::new(Self::to(Box::new(std::io::stderr()), verbose, style(env)))
+        Arc::new(Self::to(Box::new(Stderr), verbose, style(env)))
     }
 
     /// For `serve`: `[VERBOSE]` lines, but notices without the elapsed
@@ -108,7 +244,7 @@ impl Reporter {
     pub(crate) fn unstamped(verbose: bool, env: &Env) -> Arc<Self> {
         Arc::new(Reporter {
             stamped: false,
-            ..Self::to(Box::new(std::io::stderr()), verbose, style(env))
+            ..Self::to(Box::new(Stderr), verbose, style(env))
         })
     }
 

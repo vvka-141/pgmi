@@ -35,6 +35,7 @@ use cli::{Cli, Command, Parsed};
 pub use env::Env;
 pub use error::install_panic_hook;
 use error::{Error, Kind};
+pub use output::drain;
 
 pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -98,6 +99,7 @@ pub fn run(args: impl IntoIterator<Item = OsString>, env: Env, export: impl Fn(&
 }
 
 fn report(e: &Error) -> u8 {
+    output::drain();
     let _ = writeln!(std::io::stderr(), "pgmi: error: {}", e.text());
     e.exit_code()
 }

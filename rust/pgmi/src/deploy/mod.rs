@@ -1299,6 +1299,7 @@ fn finish(ctx: &Context, run: &Run, result: &Result<()>, reporter: &Reporter) ->
         if let Some(n) = note.filter(|_| !st.reached(Phase::Deploying)) {
             record.note_error(&n);
         }
+        crate::output::drain();
         let mut out = std::io::stdout().lock();
         let text = serde_json::to_string_pretty(&record).unwrap_or_default();
         let _ = writeln!(out, "{text}");
