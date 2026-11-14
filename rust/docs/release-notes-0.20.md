@@ -13,7 +13,9 @@ Rust-only requirements live here.
   Raspberry Pi 4). On a CPU without them, `sslmode=require`, `verify-ca`,
   `verify-full` and any cloud sign-in stop with exit 10 and name the missing
   features; `allow` and `prefer` (the default) connect without TLS, as a
-  libpq built without SSL does, and Unix sockets and commands that need no
+  libpq built without SSL does, with a `WARNING:` on stderr and in the
+  `--json` record's `warnings` that names the cause and says to set
+  `sslmode=require` to refuse instead. Unix sockets and commands that need no
   encryption run as before. Install pages list this CPU floor.
 
 ## Behaviour changes

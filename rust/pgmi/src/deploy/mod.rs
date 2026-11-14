@@ -541,6 +541,10 @@ impl Run {
 
     pub(crate) fn record(&self, ctx: &Context, result: &Result<()>) -> DeployRecord {
         let secrets = self.secrets();
+        let (notices, warnings) = {
+            let log = self.log();
+            (log.finish(), log.own_warnings())
+        };
         DeployRecord::new(
             &self.st,
             result,
@@ -548,7 +552,8 @@ impl Run {
                 dotenv_keys: &ctx.dotenv_keys,
                 started: self.started,
                 elapsed: self.t0.elapsed(),
-                notices: Some(self.log().finish()),
+                notices: Some(notices),
+                warnings,
                 secrets: &secrets,
             },
         )
@@ -950,6 +955,7 @@ impl Steps<'_> {
         let line_reporter = self.reporter.clone();
         let line_secrets = self.secrets.clone();
         let found = self.secrets.clone();
+        let (warn_reporter, warned) = (self.reporter.clone(), log.clone());
         Dialer {
             notices: Arc::new(move |n: Notice| {
                 let n = secrets.notice(n);
@@ -960,6 +966,13 @@ impl Steps<'_> {
             }),
             log: Arc::new(move |line: String| {
                 line_reporter.line(&redact(&line, &line_secrets.list()));
+            }),
+            warn: Arc::new(move |line: String| {
+                warn_reporter.line(&line);
+                warned
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .warn(line);
             }),
             secret: Arc::new(move |secret: &Secret| found.insert(secret)),
         }
@@ -2080,6 +2093,22 @@ mod tests {
             where_: Some("w".into()),
             ..crate::error::SqlDiagnostics::default()
         })
+    }
+
+    #[test]
+    fn the_record_carries_pgmis_own_warnings_and_omits_the_key_without_any() {
+        assert!(
+            record_of(Progress::default(), &Ok(()))
+                .get("warnings")
+                .is_none()
+        );
+        let run = Run::start();
+        run.log().warn("WARNING: plaintext".into());
+        let record = serde_json::to_value(run.record(&context(), &Ok(()))).unwrap();
+        assert_eq!(
+            record["warnings"],
+            serde_json::json!(["WARNING: plaintext"])
+        );
     }
 
     fn record_of(p: Progress, result: &Result<()>) -> Value {

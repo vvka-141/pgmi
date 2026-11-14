@@ -85,8 +85,9 @@ cc and ld removed.
      on a CPU without them, so pgmi checks first: a TLS connection that
      `sslmode` requires and any cloud sign-in are refused with exit 10
      naming the missing features (`tls::require_cpu`), while `allow` and
-     `prefer` connect without TLS, as libpq built without SSL does
-     (PGMI-979). Work that needs no cryptography (`init`, `templates`,
+     `prefer` connect without TLS, as libpq built without SSL does, and
+     warn on stderr and in the `--json` record's `warnings` (PGMI-979,
+     owner 2026-11-14: never drop TLS silently). Work that needs no cryptography (`init`, `templates`,
      `metadata`, a deploy with `sslmode=disable` or over a Unix socket)
      runs on any CPU.
    - **Fallback:** if graviola goes stale, switching provider is one line

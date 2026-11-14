@@ -346,6 +346,7 @@ pub(crate) struct NoticeLog {
     head: Vec<Notice>,
     warnings: Vec<Notice>,
     tail: VecDeque<Notice>,
+    own: Vec<String>,
     dropped: u64,
     pub(crate) total: u64,
     pub(crate) warning_total: u64,
@@ -356,6 +357,15 @@ const WARNINGS: usize = 200;
 const TAIL: usize = 150;
 
 impl NoticeLog {
+    /// A warning pgmi itself gave, not the server.
+    pub(crate) fn warn(&mut self, line: String) {
+        self.own.push(line);
+    }
+
+    pub(crate) fn own_warnings(&self) -> Vec<String> {
+        self.own.clone()
+    }
+
     pub(crate) fn push(&mut self, n: &Notice) {
         self.total += 1;
         if n.severity == Severity::Warning {

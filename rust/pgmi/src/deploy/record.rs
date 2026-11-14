@@ -82,6 +82,8 @@ pub(crate) struct DeployRecord {
     tls: Option<Tls>,
     #[serde(skip_serializing_if = "Option::is_none")]
     units_committed: Option<usize>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
     #[serde(rename = "where", skip_serializing_if = "Option::is_none")]
     where_: Option<String>,
 }
@@ -134,6 +136,7 @@ pub(crate) struct Facts<'a> {
     pub(crate) started: SystemTime,
     pub(crate) elapsed: Duration,
     pub(crate) notices: Option<(Value, Option<u64>)>,
+    pub(crate) warnings: Vec<String>,
     pub(crate) secrets: &'a [crate::error::Secret],
 }
 
@@ -229,6 +232,7 @@ impl DeployRecord {
             time_used_ms: p.time_used.map(millis),
             tls: p.server.as_ref().map(|s| s.tls.clone()),
             units_committed: execution.map(|x| x.committed),
+            warnings: facts.warnings,
             where_: None,
         };
         if let Err(e) = result {

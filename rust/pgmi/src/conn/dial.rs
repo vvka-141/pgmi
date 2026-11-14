@@ -834,6 +834,8 @@ async fn matches_attrs(
 pub(crate) struct Dialer {
     pub(crate) notices: NoticeSink,
     pub(crate) log: LogSink,
+    /// A `WARNING:` line about the run itself; `--json` carries it too.
+    pub(crate) warn: LogSink,
     pub(crate) secret: SecretSink,
 }
 
@@ -851,11 +853,7 @@ impl Dialer {
         let missing = super::tls::missing_cpu();
         let plain = without_tls(spec, &missing)?;
         if plain.is_some() {
-            (self.log)(format!(
-                "This CPU lacks {} needed for TLS; sslmode={} connects without it",
-                missing.join(", "),
-                spec.sslmode().as_str()
-            ));
+            (self.warn)(plaintext_warning(&missing, spec.sslmode()));
         }
         let spec = plain.as_ref().unwrap_or(spec);
         let tls = if needs_tls(spec) {
@@ -1026,6 +1024,14 @@ impl Round<'_> {
 /// On a CPU the TLS library cannot run on, `allow` and `prefer` connect
 /// without TLS, as libpq built without SSL does; a mode that needs TLS is
 /// refused.
+fn plaintext_warning(missing: &[&str], mode: SslMode) -> String {
+    format!(
+        "WARNING: this CPU lacks {}, which pgmi's TLS needs, so sslmode={} connects without TLS and the connection is not encrypted; set sslmode=require to refuse instead",
+        missing.join(", "),
+        mode.as_str()
+    )
+}
+
 fn without_tls(spec: &Spec, missing: &[&str]) -> Result<Option<Spec>> {
     if missing.is_empty() || !needs_tls(spec) {
         return Ok(None);
@@ -1266,6 +1272,7 @@ pub(crate) mod fake {
         Dialer {
             notices: Arc::new(|_| {}),
             log: Arc::new(|_| {}),
+            warn: Arc::new(|_| {}),
             secret: Arc::new(|_| {}),
         }
     }
@@ -1344,6 +1351,20 @@ mod tests {
 
     fn sqlstate(e: &Error) -> Option<&str> {
         e.sql_diagnostics().and_then(|d| d.sqlstate.as_deref())
+    }
+
+    #[test]
+    fn a_plaintext_fallback_warns_with_the_missing_features_and_the_way_to_insist() {
+        let w = plaintext_warning(&["avx2", "adx"], SslMode::Prefer);
+        assert!(w.starts_with("WARNING: "), "{w}");
+        for part in [
+            "avx2, adx",
+            "sslmode=prefer",
+            "not encrypted",
+            "sslmode=require",
+        ] {
+            assert!(w.contains(part), "{part}: {w}");
+        }
     }
 
     #[test]
