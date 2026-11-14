@@ -175,6 +175,77 @@ jobs:
           path: out/
           retention-days: 7
 
+  reproducible:
+    name: Same binary from two checkout paths
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: a
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: elsewhere/b
+      - name: Build both and compare
+        env:
+          CC: /bin/false
+          CXX: /bin/false
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
+        run: |
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          for d in a elsewhere/b; do
+            (cd "$d" && rustup toolchain install && rustup target add x86_64-unknown-linux-musl &&
+              PGMI_COMMIT="${GITHUB_SHA:0:8}" PGMI_BUILD_DATE="$(git log -1 --format=%cI)" \
+              RUSTFLAGS="--remap-path-prefix=$cargo_home=/cargo --remap-path-prefix=$PWD=/pgmi" \
+              cargo build --locked --release -p pgmi --target x86_64-unknown-linux-musl)
+          done
+          cmp a/target/x86_64-unknown-linux-musl/release/pgmi elsewhere/b/target/x86_64-unknown-linux-musl/release/pgmi
+
+  arm64:
+    name: Run ${{ matrix.target }} on arm64
+    needs: [verify, build]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl}
+          - {os: windows-11-arm, target: aarch64-pc-windows-msvc}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bin-${{ matrix.target }}
+          path: bin
+      - name: Version
+        run: |
+          bin=bin/${{ matrix.target }}/pgmi; [ -f "$bin" ] || bin="$bin.exe"
+          chmod +x "$bin"
+          out="$("$bin" --version)"; echo "$out"
+          echo "$out" | grep -q "pgmi ${{ needs.verify.outputs.version }} " || { echo "::error::wrong version"; exit 1; }
+      - name: Deploy on Linux
+        if: runner.os == 'Linux'
+        run: |
+          docker run -d --name pg -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:18
+          for _ in $(seq 60); do docker exec pg pg_isready -U postgres >/dev/null 2>&1 && break; sleep 1; done
+          mkdir -p smoke && echo 'SELECT 1;' > smoke/deploy.sql
+          bin/${{ matrix.target }}/pgmi deploy smoke --connection 'postgresql://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable'
+      - name: Deploy on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not $env:PGBIN -or -not (Test-Path "$env:PGBIN\pg_ctl.exe")) {
+            Write-Output "::warning::no PostgreSQL on this runner; the Windows arm64 binary ran --version only"
+            exit 0
+          }
+          & "$env:PGBIN\pg_ctl.exe" start -D "$env:PGDATA" -w
+          New-Item -ItemType Directory -Force smoke | Out-Null
+          Set-Content smoke/deploy.sql 'SELECT 1;'
+          & "bin/${{ matrix.target }}/pgmi.exe" deploy smoke --connection 'postgresql://postgres:root@127.0.0.1:5432/postgres?sslmode=disable'
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
   blackbox:
     name: Black-box suite on the built binary
     needs: build
@@ -214,14 +285,14 @@ jobs:
           PGMI_IMPL: rust
         run: |
           chmod +x "$PGMI_BIN"
-          python -m pip install uv==0.13.6
+          python -m pip install --require-hashes -r blackbox/uv-requirements.txt
           cd blackbox
           mapfile -t skip < <(sed -n 's|^\([^#[:space:]][^[:space:]]*\).*|--deselect=test_cases.py::test_case[cases/\1.yaml]|p' ../rust/blackbox-skip.txt)
           uv run --locked pytest test_cases.py "${skip[@]}"
 
   package:
     name: Package
-    needs: [verify, build, blackbox]
+    needs: [verify, build, reproducible, arm64, blackbox]
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.verify.outputs.version }}
@@ -251,6 +322,11 @@ jobs:
               goreleaser/nfpm@sha256:929e1056ba69bf1da57791e851d210e9d6d4f528fede53a55bd43cf85674450c \
               package --config rust/release/nfpm.yaml --packager deb --target "dist/pgmi_${VERSION}_linux_${arch}.deb"
           done
+      - name: SBOM
+        run: |
+          cargo install --locked cargo-cyclonedx@0.5.9
+          cargo cyclonedx --manifest-path rust/pgmi/Cargo.toml -f json --target all --spec-version 1.5 --override-filename pgmi-sbom -q
+          mv rust/pgmi/pgmi-sbom.json "dist/pgmi_${VERSION}_sbom.cdx.json"
           (cd dist && sha256sum pgmi_* | sort -k2 > checksums.txt && cat checksums.txt)
       - name: Install the .deb and run it
         run: |
@@ -288,19 +364,25 @@ jobs:
         run: |
           ./scripts/release-notes.sh "$TAG" > notes.md
           pre=""; [[ "$VERSION" == *-* ]] && pre="--prerelease"
-          gh release create "$TAG" --target "$GITHUB_SHA" --title "pgmi $TAG" --notes-file notes.md $pre \
+          gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "pgmi $TAG" --notes-file notes.md $pre \
             dist/pgmi_* dist/checksums.txt
       - name: Attest build provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-checksums: dist/checksums.txt
+      - name: Make the release public
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$TAG" --draft=false
       - name: Homebrew tap
         if: ${{ !contains(needs.verify.outputs.version, '-') }}
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/vvka-141/homebrew-pgmi.git" tap
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TAP_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          git -c "http.https://github.com/.extraheader=$auth" clone https://github.com/vvka-141/homebrew-pgmi.git tap
           cp dist/pgmi.rb tap/Casks/pgmi.rb
           cd tap
           git -c user.name=pgmi-bot -c user.email=bot@pgmi.dev commit -am "pgmi $VERSION"
-          git push
+          git -c "http.https://github.com/.extraheader=$auth" push

@@ -111,8 +111,16 @@ release is a plain workflow, `.github/workflows/release-rust.yml`:
    VC++ redistributable, as Go's does not; the job fails on a
    `vcruntime140` or `api-ms-win-crt-` import and deploys to the runner's
    PostgreSQL with the x86_64 binary (PGMI-985).
-3. `blackbox`: every case but those `rust/blackbox-skip.txt` names, each
-   with its reason, against the static Linux binary that ships (PGMI-984).
+   `reproducible`: the x86_64 Linux binary built from two checkouts at
+   different paths must be byte-identical (PGMI-1004; checked by hand in
+   Docker first, identical).
+3. `arm64`: the built aarch64 Linux and Windows binaries run on
+   `ubuntu-24.04-arm` and `windows-11-arm` runners: `--version`, and a
+   one-file deploy to a local PostgreSQL (on Windows only where the runner
+   has one; otherwise a warning says only `--version` ran) (PGMI-1004).
+   `blackbox`: every case but those `rust/blackbox-skip.txt` names, each
+   with its reason, against the static Linux binary that ships (PGMI-984);
+   `uv` is installed from `blackbox/uv-requirements.txt` by hash.
 4. `package`: `cargo about generate` (cargo-about 0.9.3, `about.toml`,
    `about.hbs`) writes `THIRD-PARTY-LICENSES` for every crate of the
    release targets and fails on a licence it cannot read (PGMI-1003);
@@ -122,10 +130,15 @@ release is a plain workflow, `.github/workflows/release-rust.yml`:
    and owners), and `checksums.txt`; nfpm (pinned image) builds the two
    `.deb` files, with the notices in `/usr/share/doc/pgmi/`, from
    `rust/release/nfpm.yaml`, one is installed in Debian and run;
-   `rust/release/cask.sh` writes the Homebrew cask.
-5. `publish` (only with `publish: true`): GitHub release with the notes
-   from `RELEASES.md`, attestation of `checksums.txt`, cask pushed to the
-   tap for stable versions.
+   `rust/release/cask.sh` writes the Homebrew cask; cargo-cyclonedx 0.5.9
+   writes the CycloneDX SBOM `pgmi_<version>_sbom.cdx.json`, which
+   `checksums.txt` lists.
+5. `publish` (only with `publish: true`): a draft GitHub release with the
+   notes from `RELEASES.md`, attestation of every file in `checksums.txt`,
+   then the release made public, so nothing is public unattested; cask
+   pushed to the tap for stable versions, the token passed as an HTTP
+   header, never in the clone URL (PGMI-1004). `cargo deny` also refuses a
+   build-time crate that ships a prebuilt executable (`[bans.build]`).
 
 Until switch day the workflow runs only by hand; the v* tag still triggers
 the Go release. Switch day (PGMI-835) moves the tag trigger here and drops

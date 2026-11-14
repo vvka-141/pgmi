@@ -133,7 +133,7 @@ jobs:
         env:
           PGMI_BIN: ${{ runner.temp }}/pgmi
         run: |
-          python -m pip install uv==0.13.6
+          python -m pip install --require-hashes -r blackbox/uv-requirements.txt
           cd blackbox && uv run --locked pytest
 
   # The Rust binary against every case but those in rust/blackbox-skip.txt,
@@ -185,7 +185,7 @@ jobs:
           PGMI_REFERENCE_BIN: ${{ runner.temp }}/pgmi-go
           PGMI_IMPL: rust
         run: |
-          python -m pip install uv==0.13.6
+          python -m pip install --require-hashes -r blackbox/uv-requirements.txt
           cd blackbox
           mapfile -t skip < <(sed -n 's|^\([^#[:space:]][^[:space:]]*\).*|--deselect=test_cases.py::test_case[cases/\1.yaml]|p' ../rust/blackbox-skip.txt)
           uv run --locked pytest test_cases.py "${skip[@]}"
@@ -231,7 +231,7 @@ jobs:
         env:
           PGMI_BIN: ${{ runner.temp }}/pgmi-go
         run: |
-          python -m pip install uv==0.13.6
+          python -m pip install --require-hashes -r blackbox/uv-requirements.txt
           cd blackbox && uv run --locked pytest -k bad-weather test_cases.py
 
       - name: Rust
@@ -282,7 +282,7 @@ jobs:
           PGMI_BIN: ${{ runner.temp }}/pgmi-go
           PGMI_BIN_OTHER: ${{ github.workspace }}/target/release/pgmi
         run: |
-          python -m pip install uv==0.13.6
+          python -m pip install --require-hashes -r blackbox/uv-requirements.txt
           cd blackbox && uv run --locked pytest test_differential.py
 
   rust:

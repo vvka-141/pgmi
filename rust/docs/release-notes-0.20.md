@@ -25,6 +25,11 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
 
 ## Lines for the notes (decided changes, one line each)
 
+- **Every download can be checked.** The release is made public only after
+  GitHub has attested its files, and ships a CycloneDX SBOM. Check a file
+  with `gh attestation verify <file> --repo vvka-141/pgmi`. See
+  [verify-download](switch-day/verify-download.md).
+
 - **Templates on managed clouds.** `pgmi init` no longer writes `sslmode:
   prefer`, so a new project works with `--azure`, `--aws`, `--google` and
   `--databricks` as it is. An older project that still has the line gets an

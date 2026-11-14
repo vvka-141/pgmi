@@ -25,6 +25,10 @@ Line numbers are from main on 2026-11-11; re-check them on the day.
   (PGMI-915): document `PGMI_SERVE_HOSTS` in CLI.md (the `serve` section and
   the env table) with the text staged in `switch-day/serve-allowed-hosts.md`.
 
+- Checking a download with `gh attestation verify`, and the SBOM: the
+  install pages and install scripts, with the text staged in
+  `switch-day/verify-download.md` (PGMI-1004).
+
 ## Go internals named in the docs (wording, not behaviour)
 
 - CLI.md:806: "pgmi uses the jackc/pgx driver"; rewrite without pgx.
