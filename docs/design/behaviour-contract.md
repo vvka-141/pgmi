@@ -677,6 +677,10 @@ without `=`), set from then on (a refused parameter key or value, a missing
 `port`, `database` in that order. A DETAIL, HINT or WHERE field the server
 sent empty is left out, on stderr, in `--json` and in a notice, as in Go.
 
+When the record cannot be written (stdout on a full disk), Rust says so on
+stderr and exits 1 if the deploy itself succeeded; Go exits 0 (PGMI-997,
+Rust test `a_json_record_that_cannot_be_written_is_not_exit_0`).
+
 Cases: `deploy/json-success`, `flags/json-database-before-load`, `flags/json-record-once-deploy-starts`, `flags/compat-record`, `deploy/json-failure`, `errors/attribution`, `errors/diagnostics-secrets`, `execution/atomic-head`, `config/dotenv`, `cloud/aws-without-region`. The Rust redaction: unit test `a_failure_record_redacts_detail_hint_and_where`.
 
 ### Error attribution

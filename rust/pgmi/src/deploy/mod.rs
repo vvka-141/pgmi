@@ -1309,7 +1309,14 @@ fn finish(ctx: &Context, run: &Run, result: &Result<()>, reporter: &Reporter) ->
         crate::output::drain();
         let mut out = std::io::stdout().lock();
         let text = serde_json::to_string_pretty(&record).unwrap_or_default();
-        let _ = writeln!(out, "{text}");
+        if let Err(e) = writeln!(out, "{text}").and_then(|()| out.flush()) {
+            reporter.line(&format!(
+                "pgmi: error: could not write the --json record: {e}"
+            ));
+            if code == 0 {
+                return Kind::General.exit_code();
+            }
+        }
     }
     code
 }
