@@ -35,10 +35,10 @@ use crate::output::{Notice, NoticeLog, Reporter, Summary, seconds};
 use crate::project::{metadata, walk};
 use crate::vfs::OsFs;
 
-use allowed::restrict_to_allowed;
-pub(crate) use allowed::ServeHosts;
 #[cfg(test)]
 pub(crate) use allowed::AllowedHost;
+pub(crate) use allowed::ServeHosts;
+use allowed::restrict_to_allowed;
 pub(crate) use approve::{Approver, ConfirmedName, Terminal};
 pub(crate) use blame::redact_sql_passwords;
 use guard::{Guard, deadline, limit, spawn_signals};
