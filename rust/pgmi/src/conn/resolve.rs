@@ -291,7 +291,6 @@ pub(crate) enum ResolveError {
     ConnectTimeoutRange(String),
     HostaddrCount { addrs: usize, hosts: usize },
     NotSupported { setting: String, why: &'static str },
-    UnsupportedEnv(&'static str, &'static str),
     Unhandled(String),
 }
 
@@ -370,9 +369,6 @@ impl fmt::Display for ResolveError {
             ),
             ResolveError::NotSupported { setting, why } => {
                 write!(f, "{setting} is not supported: {why}")
-            }
-            ResolveError::UnsupportedEnv(var, instead) => {
-                write!(f, "{var} is set, and pgmi does not support it: {instead}")
             }
             ResolveError::Unhandled(k) => write!(
                 f,
@@ -523,16 +519,30 @@ pub(super) const ENV_DEFAULTS: &[(&str, &str)] = &[
     ("PGCLIENTENCODING", "client_encoding"),
 ];
 
-const UNSUPPORTED_ENV: [(&str, &str); 2] = [
+const UNSUPPORTED_ENV: [(&str, &str); 3] = [
+    ("PGSSLCRL", "certificate revocation lists are not checked"),
     (
         "PGSSLCRLDIR",
-        "certificate revocation lists are not checked; unset it",
+        "certificate revocation lists are not checked",
     ),
     (
         "PGREQUIREPEER",
-        "the server's operating-system user is not checked; unset it",
+        "the server's operating-system user is not checked",
     ),
 ];
+
+/// One WARNING line per libpq variable pgmi does not support that is set.
+pub(crate) fn unsupported_env(env: &Env) -> Result<Vec<String>> {
+    let mut lines = Vec::new();
+    for (var, what) in UNSUPPORTED_ENV {
+        if env.non_empty(var)?.is_some() {
+            lines.push(format!(
+                "WARNING: {var} is set, but pgmi does not support it: {what}; continuing without it"
+            ));
+        }
+    }
+    Ok(lines)
+}
 
 pub(crate) fn resolve(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) -> Result<Spec> {
     if let Some(v) = &flags.invalid_sslmode {
@@ -540,11 +550,6 @@ pub(crate) fn resolve(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) -
     }
     if env.non_empty("PGSERVICE")?.is_some() {
         return Err(ResolveError::ServiceEnv);
-    }
-    for (var, instead) in UNSUPPORTED_ENV {
-        if env.non_empty(var)?.is_some() {
-            return Err(ResolveError::UnsupportedEnv(var, instead));
-        }
     }
     let granular: Vec<&'static str> = [
         (flags.host.is_some(), "-h"),

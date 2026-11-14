@@ -457,8 +457,10 @@ libpq-style: `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`,
 `PGAPPNAME` (default `application_name` is `pgmi`), `PGCONNECT_TIMEOUT`,
 `PGPASSFILE`, `PGOPTIONS`, `PGTZ`, `PGTARGETSESSIONATTRS`, `PGCHANNELBINDING`,
 `PGREQUIREAUTH`, the `PGSSL*` variables (`PGSSLSNI` and `PGSSLCERTMODE`
-included), `PGMINPROTOCOLVERSION` and `PGMAXPROTOCOLVERSION`; `PGHOSTADDR` and
-`PGSSLCRL` are ignored. Each variable is read as its connection-string key
+included), `PGMINPROTOCOLVERSION` and `PGMAXPROTOCOLVERSION`; `PGHOSTADDR` is ignored.
+`PGSSLCRL`, `PGSSLCRLDIR` and `PGREQUIREPEER` are not supported: each one set
+is ignored with `WARNING: <var> is set, but pgmi does not support it: ...;
+continuing without it` (Go ignores them silently). Each variable is read as its connection-string key
 and refused the same way (exit 10 before connecting); `PGSSLCERTMODE` set but
 empty is refused too. `~/.pgpass` (or `PGPASSFILE`) supplies a missing password, wildcards
 allowed; a file readable by group or others is ignored with a WARNING. Several
@@ -1431,7 +1433,7 @@ release notes take their "Behaviour changes" section from this table.
 | Azure tenant id outside letters, digits, `.` and `-` | refused at sign-in, exit 11 | refused before connecting, exit 10 | agent 2026-11-12 (PGMI-910) |
 | A cloud sign-in endpoint that answers a redirect (pgmi's own sign-in client: Azure managed identity, Databricks, AWS, Google Cloud SQL) | followed, https to http included, and the target's answer used | not followed: the redirect is the answer, so the sign-in fails naming its status | PGMI-931 |
 | `sslnegotiation=direct` to a TLS server that selects no ALPN protocol | the startup and the password are sent | refused after the handshake, before the startup message, exit 11 (libpq 17 refuses too) | PGMI-932 |
-| `PGSSLCRLDIR` or `PGREQUIREPEER` set and non-empty | ignored | refused before connecting, exit 10, naming the variable (the connection-string keys `sslcrl`, `sslcrldir`, `requirepeer` were already refused); `PGSSLCRL` and `PGHOSTADDR` stay ignored, as in Go (owner 2026-11-13, PGMI-973) | PGMI-934 |
+| `PGSSLCRL`, `PGSSLCRLDIR` or `PGREQUIREPEER` set and non-empty | ignored silently | ignored with a WARNING naming the variable and what pgmi does not check, then the deploy goes on (the connection-string keys `sslcrl`, `sslcrldir`, `requirepeer` stay refused, exit 10); `PGHOSTADDR` stays ignored, as in Go | owner 2026-11-14 |
 | A `.env` value that grows past 1 MiB as its variables expand (`V=$V$V` line after line) | expanded until memory runs out | refused, exit 10, naming the line and the key | PGMI-948 |
 | A cloud sign-in answer larger than 1 MiB | read whole into memory | refused after 1 MiB, not retried; the sign-in fails | PGMI-930 |
 | Google sign-in without Application Default Credentials | exit 1 | exit 11 | intended |

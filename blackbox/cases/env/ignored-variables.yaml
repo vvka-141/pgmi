@@ -1,4 +1,4 @@
-description: PGHOSTADDR and PGSSLCRL are ignored, as in Go; pointing them somewhere useless changes nothing (owner 2026-11-13, PGMI-973)
+description: PGHOSTADDR is ignored, as in Go. PGSSLCRL, PGSSLCRLDIR and PGREQUIREPEER, which pgmi does not support, are ignored too and the deploy goes on; the Rust binary prints a WARNING naming each one that is set (owner 2026-11-14), Go says nothing
 project:
   files:
     deploy.sql: SELECT 1;
@@ -7,5 +7,16 @@ steps:
     env:
       PGHOSTADDR: 10.255.255.1
       PGSSLCRL: /no/such/file.crl
+      PGSSLCRLDIR: /no/such/dir
+      PGREQUIREPEER: nobody
     expect:
       exit: 0
+      stderr_not: ["PGHOSTADDR"]
+      rust:
+        stderr:
+          - "^WARNING: PGSSLCRL is set, but pgmi does not support it: certificate revocation lists are not checked; continuing without it$"
+          - "^WARNING: PGSSLCRLDIR is set, but pgmi does not support it: certificate revocation lists are not checked; continuing without it$"
+          - "^WARNING: PGREQUIREPEER is set, but pgmi does not support it: the server's operating-system user is not checked; continuing without it$"
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    env: {PGSSLCRL: ""}
+    expect: {exit: 0, stderr_not: ["WARNING"]}

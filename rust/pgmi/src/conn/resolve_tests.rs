@@ -118,26 +118,34 @@ fn refusals() {
 }
 
 #[test]
-fn pghostaddr_and_pgsslcrl_are_ignored_as_in_go() {
-    let env = Env::from_pairs(&[("PGHOSTADDR", "10.0.0.5"), ("PGSSLCRL", "/etc/crl.pem")]);
+fn pghostaddr_is_ignored_as_in_go() {
+    let env = Env::from_pairs(&[("PGHOSTADDR", "10.0.0.5")]);
     let spec = resolve(&conn("host=h dbname=d"), &env, None).unwrap();
     assert_eq!((spec.first().name.as_str(), spec.first().addr), ("h", None));
+    assert!(unsupported_env(&env).unwrap().is_empty());
 }
 
 #[test]
-fn libpq_variables_pgmi_does_not_honour_are_refused_not_ignored() {
-    for (var, value) in [("PGSSLCRLDIR", "/etc/crl"), ("PGREQUIREPEER", "postgres")] {
-        let env = Env::from_pairs(&[(var, value)]);
-        let e = refused(resolve(&flags(), &env, None));
-        assert!(e.to_string().starts_with(&format!("{var} is set")), "{e}");
-        assert_eq!(Error::from(e).exit_code(), 10, "{var}");
-        resolve(
-            &conn("host=h dbname=d"),
-            &Env::from_pairs(&[(var, "")]),
-            None,
-        )
-        .unwrap();
-    }
+fn unsupported_libpq_variables_are_ignored_with_a_warning_each() {
+    let env = Env::from_pairs(&[
+        ("PGSSLCRL", "/etc/crl.pem"),
+        ("PGSSLCRLDIR", "/etc/crl"),
+        ("PGREQUIREPEER", "postgres"),
+    ]);
+    resolve(&conn("host=h dbname=d"), &env, None).unwrap();
+    assert_eq!(
+        unsupported_env(&env).unwrap(),
+        [
+            "WARNING: PGSSLCRL is set, but pgmi does not support it: certificate revocation lists are not checked; continuing without it",
+            "WARNING: PGSSLCRLDIR is set, but pgmi does not support it: certificate revocation lists are not checked; continuing without it",
+            "WARNING: PGREQUIREPEER is set, but pgmi does not support it: the server's operating-system user is not checked; continuing without it",
+        ]
+    );
+    assert!(
+        unsupported_env(&Env::from_pairs(&[("PGSSLCRL", "")]))
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]

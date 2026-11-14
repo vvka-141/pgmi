@@ -800,6 +800,9 @@ impl Steps<'_> {
         if let Some((provider, options)) = &cloud {
             cloud::check(*provider, options, &mut spec, env)?;
         }
+        for line in resolve::unsupported_env(env)? {
+            self.reporter.line(&line);
+        }
         if let Some(m) = &request.maintenance_db {
             spec.maintenance_db.clone_from(m);
         }
