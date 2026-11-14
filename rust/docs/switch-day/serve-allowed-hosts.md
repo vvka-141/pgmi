@@ -23,6 +23,13 @@ refused (exit 12, before connecting) unless the operator starts `pgmi serve`
 with `PGMI_SERVE_ALLOW_OVERWRITE=1`. With it, the call must still repeat the
 database name in `confirmDatabaseName`.
 
+A `paramsFile` of a deploy tool call must lie inside the project, or inside
+a directory of `PGMI_SERVE_ROOTS`, a comma-separated list read when `pgmi
+serve` starts; any other file is refused with exit 10 before connecting, so
+a call cannot load an arbitrary `KEY=VALUE` file into the session. When
+`PGMI_SERVE_ROOTS` is set, the project path must lie inside one of its
+directories too.
+
 ```json
 {"mcpServers": {"pgmi": {"command": "pgmi", "args": ["serve"],
   "env": {"PGMI_SERVE_HOSTS": "db.internal,staging.example.com:6432"}}}}

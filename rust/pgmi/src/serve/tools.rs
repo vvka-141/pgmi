@@ -1,5 +1,5 @@
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use serde_json::value::{RawValue, to_raw_value};
@@ -411,6 +411,46 @@ fn path_argument(
 }
 
 /// The servers the operator's own credentials may go to: the `host:port`s
+/// Keeps a tool call's project and params files where the operator allows:
+/// a params file inside the project, or inside a directory of the
+/// comma-separated `PGMI_SERVE_ROOTS`; when that is set, the project too.
+fn confine(project: &Path, params_files: &[String], env: &Env) -> Result<(), Error> {
+    let real = |p: &Path, what: &str| {
+        p.canonicalize()
+            .map_err(|e| Error::config(format!("{what} {:?}: {e}", p.display().to_string())))
+    };
+    let roots = env
+        .non_empty("PGMI_SERVE_ROOTS")?
+        .map(|v| {
+            v.split(',')
+                .map(str::trim)
+                .filter(|r| !r.is_empty())
+                .map(|r| real(Path::new(r), "PGMI_SERVE_ROOTS entry"))
+                .collect::<Result<Vec<_>, Error>>()
+        })
+        .transpose()?;
+    let project = real(project, "project path")?;
+    if let Some(roots) = &roots
+        && !roots.iter().any(|r| project.starts_with(r))
+    {
+        return Err(Error::config(format!(
+            "project path {:?} is outside PGMI_SERVE_ROOTS, the directories the operator allows",
+            project.display().to_string()
+        )));
+    }
+    for f in params_files {
+        let file = real(Path::new(f), "params file")?;
+        let inside =
+            file.starts_with(&project) || roots.iter().flatten().any(|r| file.starts_with(r));
+        if !inside {
+            return Err(Error::config(format!(
+                "params file {f:?} is outside the project and PGMI_SERVE_ROOTS; the operator allows more directories by starting pgmi serve with PGMI_SERVE_ROOTS"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// its environment resolves to, and the comma-separated `PGMI_SERVE_HOSTS`
 /// (`host` for any port, or `host:port`).
 fn operator_hosts(env: &Env) -> Result<Vec<String>, Error> {
@@ -516,6 +556,7 @@ fn deploy_context(
             path.display().to_string()
         )));
     }
+    confine(&path, &params_files, env)?;
     let timeout = match timeout {
         None => None,
         Some(t) => Some(
@@ -774,21 +815,48 @@ mod tests {
     }
 
     #[test]
+    fn a_params_file_outside_the_project_and_the_roots_is_refused() {
+        let project = crate::testdir::TempDir::new("serve-confine-project");
+        let other = crate::testdir::TempDir::new("serve-confine-other");
+        std::fs::write(other.join("p.env"), "K=v\n").unwrap();
+        let outside = other.join("p.env").display().to_string();
+        let call = |env: &Env| {
+            let a = json!({"path": project.path(), "paramsFile": outside});
+            deploy_context(Some(&raw(&a.to_string())), env, false).map(drop)
+        };
+        let e = call(&Env::default()).unwrap_err();
+        assert_eq!(e.exit_code(), 10);
+        assert!(e.text().contains("outside the project"), "{}", e.text());
+        let roots = format!("{},{}", project.path().display(), other.path().display());
+        call(&Env::from_pairs(&[("PGMI_SERVE_ROOTS", &roots)])).unwrap();
+        let only_other = other.path().display().to_string();
+        let e = call(&Env::from_pairs(&[("PGMI_SERVE_ROOTS", &only_other)])).unwrap_err();
+        assert!(e.text().contains("project path"), "{}", e.text());
+    }
+
+    #[test]
     fn deploy_arguments_map_to_flags() {
+        let dir = crate::testdir::TempDir::new("serve-deploy-arguments");
+        let files: Vec<String> = ["a", "b"]
+            .iter()
+            .map(|f| {
+                std::fs::write(dir.join(f), "K=v\n").unwrap();
+                dir.join(f).display().to_string()
+            })
+            .collect();
+        let call = json!({"path": dir.path(), "database": "-d", "timeout": "2s", "params": {"k": "v"}, "paramsFile": files, "overwrite": true, "confirmDatabaseName": "-d"});
         let ctx = deploy_context(
-            Some(&raw(
-                "{\"path\":\"/\",\"database\":\"-d\",\"timeout\":\"2s\",\"params\":{\"k\":\"v\"},\"paramsFile\":[\"a\",\"b\"],\"overwrite\":true,\"confirmDatabaseName\":\"-d\"}",
-            )),
+            Some(&raw(&call.to_string())),
             &Env::from_pairs(&[("PGMI_SERVE_ALLOW_OVERWRITE", "1")]),
             false,
         )
         .unwrap();
         let r = &ctx.request;
-        assert_eq!(r.project, std::path::Path::new("/"));
+        assert_eq!(r.project, dir.path());
         assert_eq!(r.connection.database.as_deref(), Some("-d"));
         assert_eq!(r.timeout, Some(std::time::Duration::from_secs(2)));
         assert_eq!(r.params, [Param::Pair("k".into(), "v".into())]);
-        assert_eq!(r.params_files, ["a", "b"]);
+        assert_eq!(r.params_files, files);
         assert!(r.overwrite && !r.force && !r.json && r.compat.is_none() && r.cloud.is_empty());
         assert_eq!(ctx.stdin, Stdin::Unavailable);
         ctx.approver.before_connecting("-d").unwrap();

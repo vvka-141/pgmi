@@ -1,0 +1,39 @@
+description: Rust only (PGMI-989). The serve deploy tool reads a paramsFile only inside the project or a directory the operator named in PGMI_SERVE_ROOTS; one elsewhere is refused before connecting (exit 10) and its values never reach the session
+impl: rust
+home:
+  secrets.env: "SECRET=from-home\n"
+project:
+  files:
+    params.env: "GREETING=hello\n"
+    deploy.sql: |
+      DO $$ BEGIN
+        IF current_setting('pgmi.secret', true) IS NOT NULL THEN RAISE EXCEPTION 'a file outside the project was loaded'; END IF;
+        IF current_setting('pgmi.greeting', true) IS DISTINCT FROM 'hello' THEN RAISE EXCEPTION 'the project params file was not loaded'; END IF;
+      END $$;
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [serve]
+    stdin:
+      - '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"blackbox","version":"1"}}}'
+      - '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"{conn}","database":"{db}","paramsFile":["{project}/params.env","{home}/secrets.env"]}}}'
+      - {until: '"id":2,', timeout: 30}
+      - '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"{conn}","database":"{db}","paramsFile":"{project}/params.env"}}}'
+      - {until: '"id":3,', timeout: 30}
+    timeout: 60
+    expect:
+      exit: 0
+      stdout:
+        - '(?m)^{"jsonrpc":"2.0","id":2,"result":{.*outside the project.*PGMI_SERVE_ROOTS.*"exitCode":10.*"isError":true}}$'
+        - '(?m)^{"jsonrpc":"2.0","id":3,"result":{.*"exitCode":0.*}}$'
+  - pgmi: [serve]
+    env: {PGMI_SERVE_ROOTS: "{project},{home}"}
+    stdin:
+      - '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"blackbox","version":"1"}}}'
+      - '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"{conn}","database":"{db}","paramsFile":["{project}/params.env","{home}/secrets.env"]}}}'
+      - {until: '"id":2,', timeout: 30}
+    timeout: 60
+    expect:
+      exit: 0
+      stdout:
+        - '(?m)^{"jsonrpc":"2.0","id":2,"result":{.*a file outside the project was loaded.*"exitCode":13.*"isError":true}}$'

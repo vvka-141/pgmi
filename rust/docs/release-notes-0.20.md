@@ -35,7 +35,8 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   operator's password, password file and cloud sign-in go only to its own
   server and those in `PGMI_SERVE_HOSTS`, and a tool call may drop a
   database (`overwrite`) only when `pgmi serve` runs with
-  `PGMI_SERVE_ALLOW_OVERWRITE=1`. See
+  `PGMI_SERVE_ALLOW_OVERWRITE=1`. A `paramsFile` must lie inside the
+  project or a directory of `PGMI_SERVE_ROOTS`. See
   [serve-allowed-hosts](switch-day/serve-allowed-hosts.md).
 - **`pgmi serve` limits.** A request line may hold at most 16 MiB, at most 32
   tool calls run at once, and a client that leaves 1024 answers unread is
