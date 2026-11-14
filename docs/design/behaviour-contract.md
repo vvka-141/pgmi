@@ -1554,6 +1554,7 @@ release notes take their "Behaviour changes" section from this table.
 | Windows: files under `%APPDATA%\postgresql` | read, and `pgmi config` saves the password there | unchanged | no change |
 | `min_protocol_version=3.2` or `latest` | protocol 3.2 | newly refused before connecting, exit 10 (known gap, PGMI-865) | owner 2026-11-11 |
 | SIGHUP (a closed terminal or SSH session) or a stderr reader that went away, during `deploy` | the process dies at once; the statement runs on and keeps the deploy lock | SIGHUP is handled as SIGTERM (statement cancelled, exit 130); writes to a closed pipe are dropped and the deploy goes on | PGMI-946 |
+| SIGQUIT (Ctrl-\\), SIGUSR1 or SIGUSR2 during `deploy` or `serve` | SIGQUIT ends the process at once; the statement runs on and keeps the deploy lock, so the next run may exit 15 (SIGUSR1 and SIGUSR2: not handled by pgmi) | handled as SIGTERM: the first stops the work and cancels the statement, the second exits at once, exit 130 (case `exit-codes/130-other-signals`) | PGMI-999 |
 | Two `<pgmi-meta>` elements in one comment | the first used, the rest ignored | newly refused, exit 10, the message says the id and sort keys are ambiguous and to keep one block | owner 2026-11-11, 2026-11-14 (PGMI-993) |
 | A `<pgmi-meta>` element with an attribute given twice (two `id`s) | the last value used | refused, exit 10, naming the attribute and saying to keep one | owner 2026-11-12 (PGMI-942), 2026-11-14 (PGMI-993) |
 | `serve`: a line over 16 MiB | read | newly refused with `-32600`, session goes on | owner 2026-11-11 |

@@ -143,8 +143,6 @@ ticket; none loses data on its own.
   without a size cap. Accepted: the token endpoints come from the
   operator's own Google ADC configuration, and google-cloud-auth offers no
   way to pass pgmi's capped client (PGMI-994).
-- **SIGQUIT and SIGUSR1** end pgmi without cancelling the statement, so
-  the next run may wait for the old session's lock (PGMI-999).
 - **Escape sequences** in server messages and file names reach the
   terminal unfiltered (PGMI-1002, as in Go and psql).
 - **No third-party licence notices** in the archives or the `.deb`
