@@ -1439,9 +1439,11 @@ the first attempt; its own failure is final, and a retry never drops again
 or asks again.
 
 A retry whose deploy lock is held by an earlier attempt's own server
-session (pgmi recorded that backend's pid when it took the lock; the
-connection was cut and the server has not noticed) ends that session with
-`pg_terminate_backend`, printing `pgmi: the deploy lock is held by this
+session (pgmi records each session's pid and `backend_start` before it asks
+for the lock, so a lost answer to that question still leaves the session
+known as its own; the connection was cut and the server has not noticed)
+ends that session with `pg_terminate_backend`, only while that pid still has
+the recorded start time, so a reused pid is never ended (PGMI-990), printing `pgmi: the deploy lock is held by this
 deploy's earlier session (pid N), which the server has not noticed is
 gone; ending it`, and waits up to 10 s for the lock (PGMI-919). If the role
 may not end it, or the lock stays held, the attempt fails with exit 15 and
@@ -1466,7 +1468,7 @@ and `timeUsedMs`, present once an attempt started. SIGINT or SIGTERM during
 an attempt or a wait is exit 130 at once. `retry: false` in `pgmi.yaml`
 turns it off; there is no flag.
 
-Cases: `retry/connection-lost-mid-run`, `retry/server-shutdown-mid-run`, `retry/connect-gave-up`, `retry/concurrency-errors`, `retry/read-only-on-a-standby`, `retry/sign-in-unavailable`, `retry/deadline-during-an-attempt`, `retry/wait-cut-at-the-deadline`, `retry/signal-during-a-wait`, `retry/failing-test-not-retried`, `retry/retry-false`, `retry/no-retry-after-commit`, `retry/commit-inside-a-do-block`, `retry/commit-inside-a-call`, `retry/orphaned-session-holds-lock`, `retry/no-time-box-five-attempts`, `exit-codes/11-connection-failed`. The table of transient failures, the backoff and the messages: the Rust unit tests of `deploy::retry`, `retry/lost-reply-never-retried`.
+Cases: `retry/connection-lost-mid-run`, `retry/server-shutdown-mid-run`, `retry/connect-gave-up`, `retry/concurrency-errors`, `retry/read-only-on-a-standby`, `retry/sign-in-unavailable`, `retry/deadline-during-an-attempt`, `retry/wait-cut-at-the-deadline`, `retry/signal-during-a-wait`, `retry/failing-test-not-retried`, `retry/retry-false`, `retry/no-retry-after-commit`, `retry/commit-inside-a-do-block`, `retry/commit-inside-a-call`, `retry/orphaned-session-holds-lock`, `retry/lost-lock-reply`, `retry/no-time-box-five-attempts`, `exit-codes/11-connection-failed`. The table of transient failures, the backoff and the messages: the Rust unit tests of `deploy::retry`, `retry/lost-reply-never-retried`.
 
 ## Behaviour changes in 0.20
 

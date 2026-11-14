@@ -1,0 +1,22 @@
+description: Rust only (contract "Whole-deployment retry"). The client side is cut just after the server granted the deploy lock, so the reply never arrives and the orphaned backend keeps the lock; pgmi learned its session's pid and start time before asking for the lock, so the retry recognises its own earlier session, ends it and succeeds instead of failing with exit 15 (PGMI-990)
+impl: rust
+proxy:
+  - {query: pg_try_advisory_lock, do: cut-client, after: 0, times: 1}
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE IF NOT EXISTS marker (n int);
+      INSERT INTO marker VALUES (1);
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}", --timeout, 40s]
+    timeout: 60
+    expect:
+      exit: 0
+      stderr:
+        - "^pgmi: attempt 1 failed \\(connection lost\\); retrying in"
+        - "^pgmi: the deploy lock is held by this deploy's earlier session \\(pid [0-9]+\\), which the server has not noticed is gone; ending it"
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[1]]

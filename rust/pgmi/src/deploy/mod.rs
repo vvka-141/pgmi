@@ -187,7 +187,7 @@ pub(crate) struct Progress {
     execution: Option<Execution>,
     attempts: Vec<Tried>,
     time_used: Option<Duration>,
-    lock_holders: Vec<i32>,
+    lock_holders: Vec<Backend>,
 }
 
 /// One run of the deploy from the start: when it began, how long it took,
@@ -1187,8 +1187,9 @@ impl Steps<'_> {
     /// Takes the deploy lock. A holder that is this deploy's own earlier
     /// session, orphaned by a connection the server has not noticed is gone,
     /// is ended so the retry can go on (PGMI-919).
-    async fn lock(&self, session: &Session, db: &str, holders: &mut Vec<i32>) -> Result<()> {
-        let (mut locked, pid) = self.guard.running(session, try_lock(session)).await?;
+    async fn lock(&self, session: &Session, db: &str, holders: &mut Vec<Backend>) -> Result<()> {
+        holders.push(self.guard.running(session, backend(session)).await?);
+        let mut locked = self.guard.running(session, try_lock(session)).await?;
         if !locked {
             let holder = self.guard.running(session, lock_holder(session)).await?;
             let Some(earlier) = holder.filter(|h| holders.contains(h)) else {
@@ -1197,12 +1198,13 @@ impl Steps<'_> {
                     format!("another pgmi deployment is already running against \"{db}\""),
                 ));
             };
+            let pid = earlier.pid;
             self.reporter.line(&format!(
-                "pgmi: the deploy lock is held by this deploy's earlier session (pid {earlier}), which the server has not noticed is gone; ending it"
+                "pgmi: the deploy lock is held by this deploy's earlier session (pid {pid}), which the server has not noticed is gone; ending it"
             ));
             locked = self
                 .guard
-                .running(session, take_from(session, earlier))
+                .running(session, take_from(session, &earlier))
                 .await
                 .map_err(|e| {
                     if e.kind() != Kind::Sql {
@@ -1211,7 +1213,7 @@ impl Steps<'_> {
                     Error::new(
                         Kind::Locked,
                         format!(
-                            "the deploy lock against \"{db}\" is held by this deploy's earlier session (pid {earlier}), which pgmi could not end: {}",
+                            "the deploy lock against \"{db}\" is held by this deploy's earlier session (pid {pid}), which pgmi could not end: {}",
                             e.text()
                         ),
                     )
@@ -1220,42 +1222,68 @@ impl Steps<'_> {
                 return Err(Error::new(
                     Kind::Locked,
                     format!(
-                        "the deploy lock against \"{db}\" is still held by this deploy's earlier session (pid {earlier}) after pgmi ended it"
+                        "the deploy lock against \"{db}\" is still held by this deploy's earlier session (pid {pid}) after pgmi ended it"
                     ),
                 ));
             }
         }
-        holders.push(pid);
         Ok(())
     }
+}
+
+/// A server session by pid and start time: a pid alone may be reused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Backend {
+    pid: i32,
+    started: String,
+}
+
+/// This session, learned before it asks for the lock, so a lost answer to
+/// that question still leaves the session known as this deploy's own.
+async fn backend(session: &Session) -> Result<Backend> {
+    let rows = session
+        .client
+        .query_typed(
+            "SELECT a.pid, a.backend_start::pg_catalog.text FROM pg_catalog.pg_stat_activity a WHERE a.pid OPERATOR(pg_catalog.=) pg_catalog.pg_backend_pid()",
+            &[],
+        )
+        .await
+        .map_err(|e| sql_error("query the server", e))?;
+    let row = rows
+        .first()
+        .ok_or_else(|| Error::new(Kind::Sql, "the session query returned no row"))?;
+    Ok(Backend {
+        pid: row
+            .try_get(0)
+            .map_err(|e| sql_error("query the server", e))?,
+        started: row
+            .try_get(1)
+            .map_err(|e| sql_error("query the server", e))?,
+    })
 }
 
 const LOCK_KEY: &str =
     "pg_catalog.hashtextextended('pgmi.deploy.' || pg_catalog.current_database(), 0)";
 
-async fn try_lock(session: &Session) -> Result<(bool, i32)> {
-    let sql =
-        format!("SELECT pg_catalog.pg_try_advisory_lock({LOCK_KEY}), pg_catalog.pg_backend_pid()");
+async fn try_lock(session: &Session) -> Result<bool> {
+    let sql = format!("SELECT pg_catalog.pg_try_advisory_lock({LOCK_KEY})");
     let rows = session
         .client
         .query_typed(&sql, &[])
         .await
         .map_err(|e| sql_error("query the server", e))?;
-    let row = rows
-        .first()
-        .ok_or_else(|| Error::new(Kind::Sql, "the lock query returned no row"))?;
-    let locked = row
+    rows.first()
+        .ok_or_else(|| Error::new(Kind::Sql, "the lock query returned no row"))?
         .try_get(0)
-        .map_err(|e| sql_error("query the server", e))?;
-    let pid = row
-        .try_get(1)
-        .map_err(|e| sql_error("query the server", e))?;
-    Ok((locked, pid))
+        .map_err(|e| sql_error("query the server", e))
 }
 
-async fn lock_holder(session: &Session) -> Result<Option<i32>> {
+/// The session holding the lock; its start time is unknown (NULL) when it
+/// belongs to a role this one may not see, so it never matches ours.
+async fn lock_holder(session: &Session) -> Result<Option<Backend>> {
     let sql = format!(
-        "SELECT l.pid FROM pg_catalog.pg_locks l \
+        "SELECT l.pid, a.backend_start::pg_catalog.text FROM pg_catalog.pg_locks l \
+         LEFT JOIN pg_catalog.pg_stat_activity a ON a.pid OPERATOR(pg_catalog.=) l.pid \
          WHERE l.locktype = 'advisory' AND l.granted AND l.objsubid = 1 \
          AND l.database = (SELECT d.oid FROM pg_catalog.pg_database d WHERE d.datname = pg_catalog.current_database()) \
          AND ((l.classid::pg_catalog.int8 << 32) | l.objid::pg_catalog.int8) = {LOCK_KEY}"
@@ -1265,26 +1293,40 @@ async fn lock_holder(session: &Session) -> Result<Option<i32>> {
         .query_typed(&sql, &[])
         .await
         .map_err(|e| sql_error("query the server", e))?;
-    rows.first()
-        .map(|r| r.try_get(0))
-        .transpose()
-        .map_err(|e| sql_error("query the server", e))
+    let Some(row) = rows.first() else {
+        return Ok(None);
+    };
+    let pid = row
+        .try_get(0)
+        .map_err(|e| sql_error("query the server", e))?;
+    let started: Option<String> = row
+        .try_get(1)
+        .map_err(|e| sql_error("query the server", e))?;
+    Ok(started.map(|started| Backend { pid, started }))
 }
 
 const TAKE_TRIES: u32 = 50;
 const TAKE_PAUSE: Duration = Duration::from_millis(200);
 
-async fn take_from(session: &Session, earlier: i32) -> Result<bool> {
+const TERMINATE: &str = "SELECT pg_catalog.pg_terminate_backend(a.pid) FROM pg_catalog.pg_stat_activity a \
+     WHERE a.pid OPERATOR(pg_catalog.=) $1 AND a.backend_start::pg_catalog.text OPERATOR(pg_catalog.=) $2";
+
+/// Ends `earlier` only while that pid still belongs to the session that
+/// started then, and waits for the lock.
+async fn take_from(session: &Session, earlier: &Backend) -> Result<bool> {
     session
         .client
         .query_typed(
-            "SELECT pg_catalog.pg_terminate_backend($1)",
-            &[(&earlier, tokio_postgres::types::Type::INT4)],
+            TERMINATE,
+            &[
+                (&earlier.pid, tokio_postgres::types::Type::INT4),
+                (&earlier.started, tokio_postgres::types::Type::TEXT),
+            ],
         )
         .await
         .map_err(|e| sql_error("end the earlier session", e))?;
     for _ in 0..TAKE_TRIES {
-        if try_lock(session).await?.0 {
+        if try_lock(session).await? {
             return Ok(true);
         }
         tokio::time::sleep(TAKE_PAUSE).await;
@@ -2125,6 +2167,21 @@ mod tests {
             where_: Some("w".into()),
             ..crate::error::SqlDiagnostics::default()
         })
+    }
+
+    #[test]
+    fn an_earlier_session_is_ended_only_while_its_pid_and_start_time_both_match() {
+        assert!(TERMINATE.contains("a.pid OPERATOR(pg_catalog.=) $1"));
+        assert!(TERMINATE.contains("a.backend_start::pg_catalog.text OPERATOR(pg_catalog.=) $2"));
+        let ours = Backend {
+            pid: 7,
+            started: "2026-11-14 10:00:00+00".into(),
+        };
+        let reused = Backend {
+            pid: 7,
+            started: "2026-11-14 10:00:05+00".into(),
+        };
+        assert!(![ours].contains(&reused));
     }
 
     #[test]

@@ -136,9 +136,6 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
 Low findings of the 2026-11-14 review that 0.20 ships with. Each has its
 ticket; none loses data on its own.
 
-- **A lost reply to the deploy-lock query** makes the retry find its own
-  earlier session holding the lock and stop with exit 15; the takeover of
-  an orphaned session matches it by pid alone (PGMI-990).
 - **Google sign-in's own HTTP clients** follow redirects and read a reply
   without a size cap (PGMI-994).
 - **An interrupted `CREATE INDEX CONCURRENTLY`** leaves an INVALID index,
