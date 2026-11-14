@@ -19,6 +19,7 @@ pub(crate) enum Reason {
     Ambiguous { key: String, why: Ambiguity },
     Nul,
     Expands(String),
+    ExpandsInAll,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +40,9 @@ impl std::fmt::Display for ParseError {
                 f,
                 "the value of {key} grows past 1 MiB when its variables expand"
             ),
+            Reason::ExpandsInAll => {
+                f.write_str("the values grow past 16 MiB in all when their variables expand")
+            }
             Reason::InvalidKey(key) => write!(f, "invalid key {key:?}"),
             Reason::Unterminated(q) => write!(f, "unterminated {q} quote"),
             Reason::Ambiguous { key, why } => {
@@ -188,7 +192,7 @@ fn dotenv(text: &str) -> Result<Vec<(String, String)>, ParseError> {
     let s: Vec<char> = text.chars().collect();
     let at = |i: usize, f: fn(char) -> bool| s.get(i).is_some_and(|&c| f(c));
     let mut out: Vec<(String, String)> = Vec::new();
-    let mut i = 0;
+    let (mut total, mut i) = (0, 0);
     loop {
         while at(i, char::is_whitespace) {
             i += 1;
@@ -274,6 +278,10 @@ fn dotenv(text: &str) -> Result<Vec<(String, String)>, ParseError> {
                 v
             }
         };
+        total += value.len();
+        if total > EXPANDED_TOTAL_MAX {
+            return fail(Reason::ExpandsInAll);
+        }
         out.push((key, value));
     }
     Ok(out)
@@ -313,6 +321,7 @@ fn unescape(s: &[char]) -> Vec<char> {
 }
 
 const EXPANDED_MAX: usize = 1 << 20;
+const EXPANDED_TOTAL_MAX: usize = 16 << 20;
 
 /// `s` with its variables expanded; `None` past [`EXPANDED_MAX`] bytes.
 fn expand(s: &[char], earlier: &[(String, String)]) -> Option<String> {
@@ -509,6 +518,22 @@ mod tests {
             });
             assert_eq!(parse(text, Mode::Dotenv).ok(), want, "{text:?}");
         }
+    }
+
+    #[test]
+    fn values_that_expand_past_16_mib_in_all_are_refused() {
+        let big = "${V0}".repeat(1000);
+        let text = std::iter::once(format!("V0={}\n", "x".repeat(1000)))
+            .chain((1..=20).map(|i| format!("V{i}=\"{big}\"\n")))
+            .collect::<Vec<_>>()
+            .concat();
+        let e = dotenv(&text).unwrap_err();
+        assert!(e.to_string().contains("past 16 MiB in all"), "{e}");
+        let small = (1..=10)
+            .map(|i| format!("V{i}=\"${{V0}}\"\n"))
+            .collect::<Vec<_>>()
+            .concat();
+        dotenv(&format!("V0=x\n{small}")).unwrap();
     }
 
     #[test]
