@@ -137,7 +137,9 @@ Low findings of the 2026-11-14 review that 0.20 ships with. Each has its
 ticket; none loses data on its own.
 
 - **Google sign-in's own HTTP clients** follow redirects and read a reply
-  without a size cap (PGMI-994).
+  without a size cap. Accepted: the token endpoints come from the
+  operator's own Google ADC configuration, and google-cloud-auth offers no
+  way to pass pgmi's capped client (PGMI-994).
 - **An interrupted `CREATE INDEX CONCURRENTLY`** leaves an INVALID index,
   and the message does not say so; drop it before the next deploy
   (PGMI-998, as in Go).
