@@ -30,6 +30,7 @@ pub enum Error {
     UnsupportedSasl,
     SaslUnfinished,
     SessionOversized { tag: u8, len: usize, max: usize },
+    PlusOnly,
 }
 
 impl fmt::Display for Error {
@@ -52,6 +53,9 @@ impl fmt::Display for Error {
             Error::Scram(text) => f.write_str(text),
             Error::ChannelBinding => f.write_str("server did not use channel binding"),
             Error::UnsupportedSasl => f.write_str("unsupported SASL mechanism"),
+            Error::PlusOnly => f.write_str(
+                "the server offers only SCRAM-SHA-256-PLUS, which needs channel binding over TLS; this connection has none (no TLS, or channel_binding=disable)",
+            ),
             Error::SessionOversized { tag, len, max } => write!(
                 f,
                 "the server announced a {len}-byte '{}' message; pgmi refuses more than {max} bytes for it",
@@ -481,7 +485,8 @@ impl Startup {
                 let point = end_point.filter(|_| login.binding != BindingPolicy::Disable);
                 let (plus, binding) = match (has_plus, has_scram, point) {
                     (true, _, Some(p)) => (true, Binding::EndPoint(p.to_vec())),
-                    (true, _, None) | (false, true, None) => (false, Binding::Unsupported),
+                    (true, false, None) => return Err(Error::PlusOnly),
+                    (_, true, None) => (false, Binding::Unsupported),
                     (false, true, Some(_)) => (false, Binding::Unrequested),
                     (false, false, _) => return Err(Error::UnsupportedSasl),
                 };
@@ -968,6 +973,25 @@ mod startup_tests {
                 .to_be_bytes(),
         );
         assert!(f.pass(&mut big_notice).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_server_offering_only_scram_plus_without_tls_is_refused_before_any_answer() {
+        for binding in [BindingPolicy::Prefer, BindingPolicy::Disable] {
+            let e = read_err(
+                |mut s| {
+                    tokio::spawn(async move {
+                        s.write_all(&auth(10, b"SCRAM-SHA-256-PLUS\0\0"))
+                            .await
+                            .unwrap();
+                        std::future::pending::<()>().await;
+                    })
+                },
+                binding,
+            )
+            .await;
+            assert_eq!(tap_error(&e), &Error::PlusOnly);
+        }
     }
 
     async fn client_first(s: &mut tokio::io::DuplexStream) -> String {
