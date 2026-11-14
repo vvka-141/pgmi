@@ -28,6 +28,7 @@ pub enum Error {
     Scram(String),
     ChannelBinding,
     UnsupportedSasl,
+    SaslUnfinished,
 }
 
 impl fmt::Display for Error {
@@ -50,6 +51,9 @@ impl fmt::Display for Error {
             Error::Scram(text) => f.write_str(text),
             Error::ChannelBinding => f.write_str("server did not use channel binding"),
             Error::UnsupportedSasl => f.write_str("unsupported SASL mechanism"),
+            Error::SaslUnfinished => f.write_str(
+                "the server ended SCRAM authentication without proving it knows the password (expected AuthenticationSASLFinal)",
+            ),
         }
     }
 }
@@ -434,6 +438,9 @@ impl Startup {
                     return Ok(());
                 }
             }
+            (Some(0), Some(_)) if !matches!(self.sasl, Sasl::Idle | Sasl::Done(_)) => {
+                return Err(Error::SaslUnfinished);
+            }
             (Some(0), Some(_)) if require && !matches!(self.sasl, Sasl::Done(true)) => {
                 return Err(Error::ChannelBinding);
             }
@@ -733,6 +740,49 @@ mod startup_tests {
             )
             .await;
             assert_eq!(tap_error(&e), &Error::ChannelBinding);
+        }
+    }
+
+    async fn client_first(s: &mut tokio::io::DuplexStream) -> String {
+        let mut head = [0u8; 5];
+        s.read_exact(&mut head).await.unwrap();
+        let len = u32::from_be_bytes([head[1], head[2], head[3], head[4]]) as usize;
+        let mut body = vec![0u8; len - 4];
+        s.read_exact(&mut body).await.unwrap();
+        let text = String::from_utf8_lossy(&body).into_owned();
+        text.split("r=").nth(1).unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn authentication_ok_before_the_server_proved_itself_is_refused() {
+        for step in 0..3 {
+            for binding in [BindingPolicy::Prefer, BindingPolicy::Disable] {
+                let e = read_err(
+                    move |mut s| {
+                        tokio::spawn(async move {
+                            s.write_all(&auth(10, b"SCRAM-SHA-256\0\0")).await.unwrap();
+                            let nonce = client_first(&mut s).await;
+                            if step > 0 {
+                                let first = format!("r={nonce}X,s=c2FsdA==,i=4096");
+                                s.write_all(&auth(11, first.as_bytes())).await.unwrap();
+                            }
+                            if step > 1 {
+                                let mut head = [0u8; 5];
+                                s.read_exact(&mut head).await.unwrap();
+                                let len = u32::from_be_bytes([head[1], head[2], head[3], head[4]]);
+                                let mut body = vec![0u8; len as usize - 4];
+                                s.read_exact(&mut body).await.unwrap();
+                            }
+                            s.write_all(&auth(0, b"")).await.unwrap();
+                            s.write_all(&frame(b'Z', b"I")).await.unwrap();
+                            std::future::pending::<()>().await;
+                        })
+                    },
+                    binding,
+                )
+                .await;
+                assert_eq!(tap_error(&e), &Error::SaslUnfinished, "step {step}");
+            }
         }
     }
 }
