@@ -383,9 +383,32 @@ pub(crate) struct Execution {
 pub(crate) struct Failure {
     unit: usize,
     blame: blame::Blame,
-    /// The unit was sent and the server never answered: it may have
-    /// committed.
-    unknown: bool,
+    unknown: Option<Unknown>,
+}
+
+/// Why a failed unit may have committed although it failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Unknown {
+    /// The unit was sent and the server never answered.
+    NoAnswer,
+    /// The unit is one DO block or CALL run outside a transaction block,
+    /// which can COMMIT inside.
+    CommitsInside,
+}
+
+impl Failure {
+    fn why_unknown(&self, units: usize) -> Option<String> {
+        self.unknown.map(|u| match u {
+            Unknown::NoAnswer => format!(
+                "unit {} of {units} got no answer from the server, so whether it committed is unknown",
+                self.unit
+            ),
+            Unknown::CommitsInside => format!(
+                "unit {} of {units} is a DO block or CALL, which may have committed before it failed",
+                self.unit
+            ),
+        })
+    }
 }
 
 /// How many notices a deploy printed, and how many of them were warnings.
@@ -1315,14 +1338,20 @@ fn summary(p: &Progress, result: &Result<()>, elapsed: Duration) -> Option<Summa
     let mut notes = earlier.clone();
     if let Some(x) = &p.execution {
         match &x.failure {
-            Some(f) if f.unknown => {
+            Some(f) if f.unknown.is_some() => {
                 if committed > 0 {
                     let _ = write!(text, " ({committed} earlier unit(s) committed)");
                 }
-                notes.push(format!(
-                    "unit {} of {} got no answer from the server; whether it committed is unknown, check the database",
-                    f.unit, x.units
-                ));
+                notes.push(match f.unknown {
+                    Some(Unknown::CommitsInside) => format!(
+                        "unit {} of {} is a DO block or CALL, which may have committed before it failed; check the database",
+                        f.unit, x.units
+                    ),
+                    _ => format!(
+                        "unit {} of {} got no answer from the server; whether it committed is unknown, check the database",
+                        f.unit, x.units
+                    ),
+                });
             }
             Some(f) if committed > 0 => {
                 let _ = write!(
@@ -1349,7 +1378,7 @@ fn summary(p: &Progress, result: &Result<()>, elapsed: Duration) -> Option<Summa
             .execution
             .as_ref()
             .and_then(|x| x.failure.as_ref())
-            .is_some_and(|f| f.unknown);
+            .is_some_and(|f| f.unknown.is_some());
         let left = if committed == 0 && earlier.is_empty() && !unknown {
             ", left empty"
         } else {
@@ -1368,11 +1397,8 @@ fn summary(p: &Progress, result: &Result<()>, elapsed: Duration) -> Option<Summa
 /// without `retry_after_commit`.
 fn not_retried(execution: Option<&Execution>, after_commit: bool) -> Option<String> {
     let x = execution?;
-    if let Some(f) = x.failure.as_ref().filter(|f| f.unknown) {
-        return Some(format!(
-            "unit {} of {} got no answer from the server, so whether it committed is unknown",
-            f.unit, x.units
-        ));
+    if let Some(why) = x.failure.as_ref().and_then(|f| f.why_unknown(x.units)) {
+        return Some(why);
     }
     (x.committed > 0 && !after_commit).then(|| {
         format!(
@@ -1606,7 +1632,7 @@ mod tests {
         Some(Failure {
             unit,
             blame,
-            unknown: false,
+            unknown: None,
         })
     }
 
@@ -1732,7 +1758,7 @@ mod tests {
                 Some(Failure {
                     unit: 2,
                     blame: blame::Blame::default(),
-                    unknown: true,
+                    unknown: Some(Unknown::NoAnswer),
                 }),
             )
         };
@@ -1745,6 +1771,22 @@ mod tests {
                     )
                 );
             }
+        }
+        let inside = executed(
+            0,
+            Some(Failure {
+                unit: 1,
+                blame: blame::Blame::default(),
+                unknown: Some(Unknown::CommitsInside),
+            }),
+        );
+        for after_commit in [false, true] {
+            assert_eq!(
+                not_retried(inside.as_ref(), after_commit).as_deref(),
+                Some(
+                    "unit 1 of 3 is a DO block or CALL, which may have committed before it failed"
+                )
+            );
         }
         let refused = executed(1, failure(2, blame::Blame::default()));
         assert_eq!(
@@ -1776,7 +1818,7 @@ mod tests {
                 failure: Some(Failure {
                     unit: 1,
                     blame: blame::Blame::default(),
-                    unknown: true,
+                    unknown: Some(Unknown::NoAnswer),
                 }),
             }),
             ..loaded("app")
@@ -1791,7 +1833,7 @@ mod tests {
                 Some(Failure {
                     unit: 2,
                     blame: blame::Blame::default(),
-                    unknown: true,
+                    unknown: Some(Unknown::NoAnswer),
                 }),
             ),
             ..loaded("app")

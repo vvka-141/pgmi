@@ -52,6 +52,31 @@ pub(crate) fn head_commits(head: &str) -> bool {
         .is_some_and(|w| (eq(w[0], "COMMIT") || eq(w[0], "END")) && is_terminator(&w))
 }
 
+/// True when the unit is one CALL, or one DO block that says COMMIT: the
+/// only statements that can commit inside themselves.
+pub(crate) fn commits_inside(unit: &str) -> bool {
+    let bytes = unit.as_bytes();
+    let mut firsts = statements(unit)
+        .into_iter()
+        .map(|(s, e)| words(&bytes[s..e], &lexer::tokens(&bytes[s..e])))
+        .filter(|w| !w.is_empty())
+        .map(|w| w[0]);
+    match (firsts.next(), firsts.next()) {
+        (Some(w), None) if eq(w, "CALL") => true,
+        (Some(w), None) if eq(w, "DO") => says_commit(bytes),
+        _ => false,
+    }
+}
+
+fn says_commit(text: &[u8]) -> bool {
+    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$';
+    text.windows(6).enumerate().any(|(i, w)| {
+        w.eq_ignore_ascii_case(b"COMMIT")
+            && (i == 0 || !word(text[i - 1]))
+            && text.get(i + 6).is_none_or(|b| !word(*b))
+    })
+}
+
 pub(crate) fn statements(src: &str) -> Vec<(usize, usize)> {
     let bytes = src.as_bytes();
     let toks = lexer::tokens(bytes);
@@ -518,6 +543,27 @@ mod tests {
         }
         assert!(!head_commits("BEGIN; SELECT 1;"));
         assert!(!head_commits("-- COMMIT;\nSELECT 1;"));
+    }
+
+    #[test]
+    fn only_a_lone_do_block_or_call_can_commit_inside() {
+        for (src, want) in [
+            ("DO $$ BEGIN COMMIT; END $$;", true),
+            (
+                "-- note\n  do $$ BEGIN INSERT INTO t VALUES (1); commit; END $$",
+                true,
+            ),
+            ("DO $$ BEGIN RAISE EXCEPTION 'busy'; END $$;", false),
+            ("DO $$ BEGIN PERFORM committed(); END $$;", false),
+            ("CALL p();", true),
+            ("call s.p(1) ;\n-- trailing\n", true),
+            ("SELECT 1;", false),
+            ("SELECT 1; CALL p();", false),
+            ("CALL p(); DO $$ BEGIN NULL; END $$;", false),
+            ("", false),
+        ] {
+            assert_eq!(commits_inside(src), want, "{src:?}");
+        }
     }
 
     #[test]

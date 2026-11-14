@@ -193,7 +193,7 @@ impl DeployRecord {
             notices_truncated,
             outcome_unknown: execution
                 .and_then(|x| x.failure.as_ref())
-                .and_then(|f| f.unknown.then_some(true)),
+                .and_then(|f| f.unknown.is_some().then_some(true)),
             overrides: p.overrides.clone(),
             paths_ignored: loaded
                 .map(|l| l.ignored.len())

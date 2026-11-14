@@ -7,7 +7,7 @@ use super::blame::{Blame, Sent};
 use super::record::Tls;
 use super::script::{self, LineMap, Unit};
 use super::session::{self, Load};
-use super::{ContractVersion, Execution, Failure, Guard, Needs, sql_error};
+use super::{ContractVersion, Execution, Failure, Guard, Needs, Unknown, sql_error};
 use crate::VERSION;
 use crate::conn::dial::Session;
 use crate::conn::tap::TxStatus;
@@ -195,10 +195,11 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
             execution.failure = Some(Failure {
                 unit: i + 1,
                 blame: Blame::default(),
-                unknown: false,
+                unknown: None,
             });
             return Err(e);
         }
+        let idle = session.tap.status() == TxStatus::Idle;
         let outcome = guard
             .running(session, async {
                 session
@@ -219,7 +220,13 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
             };
             execution.failure = Some(Failure {
                 unit: i + 1,
-                unknown: e.sql_diagnostics().is_none(),
+                unknown: if e.sql_diagnostics().is_none() {
+                    Some(Unknown::NoAnswer)
+                } else if idle && script::commits_inside(&unit.text) {
+                    Some(Unknown::CommitsInside)
+                } else {
+                    None
+                },
                 blame: e
                     .sql_diagnostics()
                     .map(|d| Blame::new(d, &e.text(), &sent, &files))
@@ -235,7 +242,7 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
         execution.failure = Some(Failure {
             unit: units.len(),
             blame: Blame::default(),
-            unknown: false,
+            unknown: None,
         });
         return Err(Error::sql(
             "deploy.sql ended inside an open transaction, which was rolled back; end it with COMMIT",
