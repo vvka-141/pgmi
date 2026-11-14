@@ -27,6 +27,7 @@ steps:
           rows: [[1]]
       rust:
         exit: 0
+        stdout_not: ['"id":2,']
         sql:
           - query: SELECT count(*) FROM pg_class WHERE relname = 'in_head'
             rows: [[0]]
@@ -44,6 +45,7 @@ steps:
           rows: [[3]]
       rust:
         exit: 0
+        stdout_not: ['"id":2,']
         sql:
           - query: SELECT string_agg(relname, ',' ORDER BY relname) FROM pg_class WHERE relname IN ('committed_first', 'in_tail', 'after_sleep')
             rows: [['committed_first,in_tail']]

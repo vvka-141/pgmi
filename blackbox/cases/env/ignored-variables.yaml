@@ -26,6 +26,7 @@ steps:
       exit: 0
       rust:
         exit: 0
+        stderr: ["^WARNING: PGSSLCRL is set, but pgmi does not support it"]
         json:
           warnings: ["WARNING: PGSSLCRL is set, but pgmi does not support it: certificate revocation lists are not checked; continuing without it"]
   - pgmi: [deploy, "{project}", --connection, "{conn}?sslmode=verify-full", -d, "{db}", --json]

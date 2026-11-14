@@ -13,6 +13,7 @@ steps:
       exit: 11
       rust:
         exit: 0
+        stderr: ['^ok bb_']
         sql:
           - query: SELECT count(*) FROM pg_class WHERE relname = 'marker'
             rows: [[1]]
