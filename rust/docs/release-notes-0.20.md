@@ -59,16 +59,20 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   1). When the record cannot be written, a deploy that succeeded exits 1.
 - **`pgmi serve` guards the operator's credentials and databases.** The
   operator's password, password file and cloud sign-in go only to its own
-  server and those in `PGMI_SERVE_HOSTS`, and a tool call may drop a
+  server (the one `PGHOST`/`PGPORT` or its connection string name, with or
+  without `PGDATABASE`) and those in `PGMI_SERVE_HOSTS`, and a tool call may drop a
   database (`overwrite`) only when `pgmi serve` runs with
   `PGMI_SERVE_ALLOW_OVERWRITE=1`. A `paramsFile` must lie inside the
   project or a directory of `PGMI_SERVE_ROOTS`. The operator's password
   never goes with a weaker `sslmode`, `channel_binding` or `require_auth`
   than the operator's own. See
   [serve-allowed-hosts](switch-day/serve-allowed-hosts.md).
-- **`pgmi serve` stops a deploy whose client left.** When the MCP client
-  closes stdin, a running deploy is cancelled and rolls back what it had
-  not committed yet; other tool calls still get their answers.
+- **`pgmi serve` cancels a running deploy when stdin closes.** Closing
+  stdin is how an MCP client shuts the server down, so a deploy still
+  running then is cancelled and rolls back what it had not committed yet;
+  work committed before stays. Other tool calls still finish and answer.
+  A script that pipes a deploy call into `pgmi serve` must keep stdin open
+  until the answer arrives; 0.14 finished the deploy after stdin closed.
 - **`pgmi serve` limits.** A request line may hold at most 16 MiB, at most 32
   tool calls run at once, and a client that leaves 1024 answers unread is
   disconnected.
