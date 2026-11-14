@@ -111,7 +111,7 @@ SELECT
     -- metadata.GenerateFallbackID on exactly the databases most tests skip.
     -- The cast is safe only because chk_path_no_backslash (schema.sql) bars the
     -- escapes byteain would otherwise parse.
-    md5(s.path::bytea)::uuid AS generic_id,
+    pg_catalog.md5(s.path::bytea)::uuid AS generic_id,
     m.id,  -- NULL for files without metadata
     COALESCE(m.idempotent, true) AS idempotent,
     COALESCE(m.description, '') AS description,
@@ -123,7 +123,7 @@ SELECT
     -- COLLATE "C": sort_key mixes user sortKeys ('001/000') with path fallbacks
     -- ('./migrations/x.sql'). Under a linguistic collation '.' sorts after digits,
     -- so the deployment order would depend on the server's locale, not the project.
-    ROW_NUMBER() OVER (
+    pg_catalog.row_number() OVER (
         ORDER BY unnested.sort_key COLLATE "C", s.path COLLATE "C"
     ) AS execution_order
 
@@ -132,11 +132,11 @@ LEFT JOIN pg_temp._pgmi_source_metadata m ON s.path = m.path
 
 -- CROSS JOIN LATERAL: For each file, expand sort_keys array
 -- If no metadata: use path as fallback sort key
-CROSS JOIN LATERAL UNNEST(
-    COALESCE(
-        NULLIF(m.sort_keys, '{}'),  -- Use metadata sort keys if present
-        ARRAY[s.path]               -- Fallback: lexicographic path order
-    )
+CROSS JOIN LATERAL pg_catalog.unnest(
+    CASE WHEN pg_catalog.cardinality(m.sort_keys) > 0
+         THEN m.sort_keys    -- Use metadata sort keys if present
+         ELSE ARRAY[s.path]  -- Fallback: lexicographic path order
+    END
 ) AS unnested(sort_key)
 
 ;
@@ -159,7 +159,9 @@ CREATE OR REPLACE FUNCTION pg_temp.pgmi_test_generate(
     p_pattern TEXT DEFAULT NULL,
     p_callback TEXT DEFAULT 'pg_temp.pgmi_test_callback'
 ) RETURNS TEXT
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp
+AS $$
 DECLARE
     v_sql TEXT := '';
     v_step RECORD;
@@ -187,7 +189,7 @@ BEGIN
     END IF;
 
     -- Suite start
-    v_sql := v_sql || format(
+    v_sql := v_sql || pg_catalog.format(
         'SELECT %s(ROW(''suite_start'', NULL, '''', 0, 0, NULL)::pg_temp.pgmi_test_event);',
         v_callback
     ) || E'\n';
@@ -200,22 +202,22 @@ BEGIN
             WHEN 'fixture' THEN
                 -- Create directory savepoint
                 v_sp_counter := v_sp_counter + 1;
-                v_sp_name := format('__pgmi_d%s__', v_sp_counter);
-                v_dir_paths := array_append(v_dir_paths, v_step.directory);
-                v_dir_sps := array_append(v_dir_sps, v_sp_name);
+                v_sp_name := pg_catalog.format('__pgmi_d%s__', v_sp_counter);
+                v_dir_paths := pg_catalog.array_append(v_dir_paths, v_step.directory);
+                v_dir_sps := pg_catalog.array_append(v_dir_sps, v_sp_name);
 
-                v_sql := v_sql || format('SAVEPOINT %I;', v_sp_name) || E'\n';
-                v_sql := v_sql || format(
+                v_sql := v_sql || pg_catalog.format('SAVEPOINT %I;', v_sp_name) || E'\n';
+                v_sql := v_sql || pg_catalog.format(
                     'SELECT %s(ROW(''fixture_start'', %L, %L, %s, %s, NULL)::pg_temp.pgmi_test_event);',
                     v_callback, v_step.script_path, v_step.directory, v_step.depth, v_step.ordinal
                 ) || E'\n';
-                v_sql := v_sql || format(
-                    'SELECT set_config(''pgmi_test.path'', %L, true);',
+                v_sql := v_sql || pg_catalog.format(
+                    'SELECT pg_catalog.set_config(''pgmi_test.path'', %L, true);',
                     v_step.script_path
                 ) || E'\n'
-                    || 'DO $pgmi_test$ BEGIN EXECUTE (SELECT content FROM pg_temp._pgmi_test_source WHERE path = current_setting(''pgmi_test.path'')); END $pgmi_test$;'
+                    || 'DO $pgmi_test$ BEGIN EXECUTE (SELECT content FROM pg_temp._pgmi_test_source WHERE path OPERATOR(pg_catalog.=) pg_catalog.current_setting(''pgmi_test.path'')); END $pgmi_test$;'
                     || E'\n';
-                v_sql := v_sql || format(
+                v_sql := v_sql || pg_catalog.format(
                     'SELECT %s(ROW(''fixture_end'', %L, %L, %s, %s, NULL)::pg_temp.pgmi_test_event);',
                     v_callback, v_step.script_path, v_step.directory, v_step.depth, v_step.ordinal
                 ) || E'\n';
@@ -224,60 +226,60 @@ BEGIN
                 v_test_count := v_test_count + 1;
 
                 -- Ensure dir savepoint exists
-                v_idx := array_position(v_dir_paths, v_step.directory);
+                v_idx := pg_catalog.array_position(v_dir_paths, v_step.directory);
                 IF v_idx IS NULL THEN
                     v_sp_counter := v_sp_counter + 1;
-                    v_sp_name := format('__pgmi_d%s__', v_sp_counter);
-                    v_dir_paths := array_append(v_dir_paths, v_step.directory);
-                    v_dir_sps := array_append(v_dir_sps, v_sp_name);
-                    v_sql := v_sql || format('SAVEPOINT %I;', v_sp_name) || E'\n';
+                    v_sp_name := pg_catalog.format('__pgmi_d%s__', v_sp_counter);
+                    v_dir_paths := pg_catalog.array_append(v_dir_paths, v_step.directory);
+                    v_dir_sps := pg_catalog.array_append(v_dir_sps, v_sp_name);
+                    v_sql := v_sql || pg_catalog.format('SAVEPOINT %I;', v_sp_name) || E'\n';
                 END IF;
 
                 -- Ensure test savepoint exists for this directory
-                v_idx := array_position(v_test_paths, v_step.directory);
+                v_idx := pg_catalog.array_position(v_test_paths, v_step.directory);
                 IF v_idx IS NULL THEN
                     v_sp_counter := v_sp_counter + 1;
-                    v_tsp_name := format('__pgmi_t%s__', v_sp_counter);
-                    v_test_paths := array_append(v_test_paths, v_step.directory);
-                    v_test_sps := array_append(v_test_sps, v_tsp_name);
-                    v_sql := v_sql || format('SAVEPOINT %I;', v_tsp_name) || E'\n';
+                    v_tsp_name := pg_catalog.format('__pgmi_t%s__', v_sp_counter);
+                    v_test_paths := pg_catalog.array_append(v_test_paths, v_step.directory);
+                    v_test_sps := pg_catalog.array_append(v_test_sps, v_tsp_name);
+                    v_sql := v_sql || pg_catalog.format('SAVEPOINT %I;', v_tsp_name) || E'\n';
                 ELSE
                     v_tsp_name := v_test_sps[v_idx];
                 END IF;
 
-                v_sql := v_sql || format(
+                v_sql := v_sql || pg_catalog.format(
                     'SELECT %s(ROW(''test_start'', %L, %L, %s, %s, NULL)::pg_temp.pgmi_test_event);',
                     v_callback, v_step.script_path, v_step.directory, v_step.depth, v_step.ordinal
                 ) || E'\n';
-                v_sql := v_sql || format(
-                    'SELECT set_config(''pgmi_test.path'', %L, true);',
+                v_sql := v_sql || pg_catalog.format(
+                    'SELECT pg_catalog.set_config(''pgmi_test.path'', %L, true);',
                     v_step.script_path
                 ) || E'\n'
-                    || 'DO $pgmi_test$ BEGIN EXECUTE (SELECT content FROM pg_temp._pgmi_test_source WHERE path = current_setting(''pgmi_test.path'')); END $pgmi_test$;'
+                    || 'DO $pgmi_test$ BEGIN EXECUTE (SELECT content FROM pg_temp._pgmi_test_source WHERE path OPERATOR(pg_catalog.=) pg_catalog.current_setting(''pgmi_test.path'')); END $pgmi_test$;'
                     || E'\n';
-                v_sql := v_sql || format(
+                v_sql := v_sql || pg_catalog.format(
                     'SELECT %s(ROW(''test_end'', %L, %L, %s, %s, NULL)::pg_temp.pgmi_test_event);',
                     v_callback, v_step.script_path, v_step.directory, v_step.depth, v_step.ordinal
                 ) || E'\n';
-                v_sql := v_sql || format(
+                v_sql := v_sql || pg_catalog.format(
                     'SELECT %s(ROW(''rollback'', %L, %L, %s, %s, NULL)::pg_temp.pgmi_test_event);',
                     v_callback, v_step.script_path, v_step.directory, v_step.depth, v_step.ordinal
                 ) || E'\n';
-                v_sql := v_sql || format('ROLLBACK TO SAVEPOINT %I;', v_tsp_name) || E'\n';
+                v_sql := v_sql || pg_catalog.format('ROLLBACK TO SAVEPOINT %I;', v_tsp_name) || E'\n';
 
             WHEN 'teardown' THEN
-                v_idx := array_position(v_dir_paths, v_step.directory);
+                v_idx := pg_catalog.array_position(v_dir_paths, v_step.directory);
                 v_sp_name := CASE WHEN v_idx IS NOT NULL THEN v_dir_sps[v_idx] END;
 
-                v_sql := v_sql || format(
+                v_sql := v_sql || pg_catalog.format(
                     'SELECT %s(ROW(''teardown_start'', NULL, %L, %s, %s, NULL)::pg_temp.pgmi_test_event);',
                     v_callback, v_step.directory, v_step.depth, v_step.ordinal
                 ) || E'\n';
                 IF v_sp_name IS NOT NULL THEN
-                    v_sql := v_sql || format('ROLLBACK TO SAVEPOINT %I;', v_sp_name) || E'\n';
-                    v_sql := v_sql || format('RELEASE SAVEPOINT %I;', v_sp_name) || E'\n';
+                    v_sql := v_sql || pg_catalog.format('ROLLBACK TO SAVEPOINT %I;', v_sp_name) || E'\n';
+                    v_sql := v_sql || pg_catalog.format('RELEASE SAVEPOINT %I;', v_sp_name) || E'\n';
                 END IF;
-                v_sql := v_sql || format(
+                v_sql := v_sql || pg_catalog.format(
                     'SELECT %s(ROW(''teardown_end'', NULL, %L, %s, %s, NULL)::pg_temp.pgmi_test_event);',
                     v_callback, v_step.directory, v_step.depth, v_step.ordinal
                 ) || E'\n';
@@ -289,7 +291,7 @@ BEGIN
     -- The message is a literal, never the pattern: it lands inside a dollar
     -- quote, and a pattern carrying that tag would close it.
     IF v_test_count = 0 THEN
-        RETURN format(
+        RETURN pg_catalog.format(
             'DO $__pgmi_no_tests__$ BEGIN RAISE EXCEPTION %L USING HINT = %L, ERRCODE = ''no_data_found''; END $__pgmi_no_tests__$;',
             CASE WHEN p_pattern IS NULL
                  THEN 'pgmi: no tests were discovered'
@@ -301,7 +303,7 @@ BEGIN
     END IF;
 
     -- Suite end
-    v_sql := v_sql || format(
+    v_sql := v_sql || pg_catalog.format(
         'SELECT %s(ROW(''suite_end'', NULL, '''', 0, %s, NULL)::pg_temp.pgmi_test_event);',
         v_callback, v_last_ordinal
     );
@@ -332,7 +334,7 @@ RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
     v_sql text;
 BEGIN
-    SELECT content INTO v_sql FROM pg_temp.pgmi_source_view WHERE path = p_path;
+    SELECT content INTO v_sql FROM pg_temp.pgmi_source_view WHERE path OPERATOR(pg_catalog.=) p_path;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'deploy.sql runs %, which is not in the project', p_path;
     END IF;

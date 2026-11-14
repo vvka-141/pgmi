@@ -41,7 +41,7 @@
 -- to_regnamespace('pg_temp') does NOT work here — it never resolves the alias.)
 DO $$
 BEGIN
-    IF pg_my_temp_schema() <> 0 THEN
+    IF pg_catalog.pg_my_temp_schema() OPERATOR(pg_catalog.<>) 0 THEN
         -- _pgmi_source_metadata references _pgmi_source: DROP _pgmi_source CASCADE
         -- drops only that FK constraint, not the referencing table, so re-running
         -- schema.sql in one session hit "relation _pgmi_source_metadata already
@@ -112,7 +112,7 @@ CREATE TEMP TABLE _pgmi_source
     CONSTRAINT chk_path_no_double_slash CHECK (path !~ '//'),
     -- Name constraints
     CONSTRAINT chk_name_format CHECK (name ~ '^[^/]+$'),
-    CONSTRAINT chk_name_no_whitespace_only CHECK (trim(name) != ''),
+    CONSTRAINT chk_name_no_whitespace_only CHECK (pg_catalog.btrim(name) != ''),
     -- Directory constraints (anchored format also rules out '' segments and non-slash endings)
     CONSTRAINT chk_directory_format CHECK (directory ~ '^\./(?:[^/]+/)*$'),
     CONSTRAINT chk_directory_no_backslash CHECK (directory !~ '\\'),
@@ -123,16 +123,16 @@ CREATE TEMP TABLE _pgmi_source
     CONSTRAINT chk_depth_reasonable CHECK (depth <= 100),
     -- Size constraints
     CONSTRAINT chk_size_bytes CHECK (size_bytes >= 0),
-    CONSTRAINT chk_content_size_match CHECK (octet_length(content) = size_bytes),
+    CONSTRAINT chk_content_size_match CHECK (pg_catalog.octet_length(content) = size_bytes),
     -- Checksum constraints
     CONSTRAINT chk_checksum_format CHECK (checksum ~ '^[a-fA-F0-9]{32,64}$'),
     CONSTRAINT chk_pgmi_checksum_format CHECK (pgmi_checksum ~ '^[a-fA-F0-9]{32,64}$'),
     -- Path parts constraints
-    CONSTRAINT chk_path_parts_not_empty CHECK (array_length(path_parts, 1) > 0),
-    CONSTRAINT chk_depth_path_parts CHECK (array_length(path_parts, 1) = depth + 2),
+    CONSTRAINT chk_path_parts_not_empty CHECK (pg_catalog.array_length(path_parts, 1) > 0),
+    CONSTRAINT chk_depth_path_parts CHECK (pg_catalog.array_length(path_parts, 1) = depth + 2),
     CONSTRAINT chk_path_parts_no_empty_strings CHECK (NOT ('' = ANY(path_parts))),
     CONSTRAINT chk_path_parts_first_element CHECK (path_parts[1] = '.'),
-    CONSTRAINT chk_path_parts_last_element CHECK (path_parts[array_length(path_parts, 1)] = name),
+    CONSTRAINT chk_path_parts_last_element CHECK (path_parts[pg_catalog.array_length(path_parts, 1)] = name),
     -- Parent folder constraints
     CONSTRAINT chk_parent_folder_depth CHECK (
         (depth = 0 AND parent_folder_name IS NULL) OR
@@ -240,7 +240,7 @@ COMMENT ON TYPE pg_temp.pgmi_test_event IS
 -- Default callback: emits NOTICE for fixtures/tests, DEBUG for rollback/teardown
 -- Override by passing custom function name to pgmi_test() macro
 CREATE OR REPLACE FUNCTION pg_temp.pgmi_test_callback(e pg_temp.pgmi_test_event)
-RETURNS void LANGUAGE plpgsql AS $$
+RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
     CASE e.event
         WHEN 'suite_start'    THEN RAISE NOTICE '[pgmi] Test suite started';
@@ -273,6 +273,7 @@ Example:
 CREATE OR REPLACE FUNCTION pg_temp.pgmi_validate_pattern(p_pattern TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql IMMUTABLE
+SET search_path = pg_catalog, pg_temp
 AS $$
 BEGIN
     IF p_pattern IS NULL THEN
@@ -305,6 +306,7 @@ CREATE OR REPLACE FUNCTION pg_temp.pgmi_has_tests(
     p_pattern TEXT DEFAULT NULL
 ) RETURNS BOOLEAN
 LANGUAGE sql STABLE
+SET search_path = pg_catalog, pg_temp
 AS $$
     WITH RECURSIVE dir_tree AS (
         SELECT path
@@ -336,6 +338,7 @@ Returns TRUE if any non-fixture test file exists in the directory or its descend
 CREATE OR REPLACE FUNCTION pg_temp.pgmi_test_plan(p_pattern TEXT DEFAULT NULL)
 RETURNS TABLE (ordinal INT, step_type TEXT, script_path TEXT, directory TEXT, depth INT)
 LANGUAGE sql STABLE
+SET search_path = pg_catalog, pg_temp
 AS $$
 WITH RECURSIVE
 -- Step 1: Directories containing matching tests (via pgmi_has_tests)
@@ -350,7 +353,7 @@ tree AS (
     FROM relevant
     WHERE parent_path IS NULL OR parent_path NOT IN (SELECT path FROM relevant)
     UNION ALL
-    SELECT r.path, r.depth, t.ancestry || r.path
+    SELECT r.path, r.depth, pg_catalog.array_append(t.ancestry, r.path)
     FROM relevant r JOIN tree t ON r.parent_path = t.path
 ),
 -- Step 3: Create entry/exit visits with DFS sort keys
@@ -359,15 +362,15 @@ tree AS (
 -- IMPORTANT: Uses COLLATE "C" to ensure byte-order comparison regardless of database collation.
 -- Without "C" collation, locales like en_US.utf8 sort '~' before '.' breaking DFS order.
 visits AS (
-    SELECT path, depth, array_append(ancestry, ''::text) AS sort_key, false AS is_exit FROM tree
+    SELECT path, depth, pg_catalog.array_append(ancestry, ''::text) AS sort_key, false AS is_exit FROM tree
     UNION ALL
-    SELECT path, depth, array_append(ancestry, '~'::text), true FROM tree
+    SELECT path, depth, pg_catalog.array_append(ancestry, '~'::text), true FROM tree
 )
 -- Step 4: Expand visits to fixture/test/teardown steps via LATERAL join
 -- NOTE: ORDER BY uses array_to_string with COLLATE "C" because PostgreSQL arrays
 -- use database collation by default, which may not be byte-ordered.
 SELECT
-    ROW_NUMBER() OVER (ORDER BY array_to_string(v.sort_key, E'\x01') COLLATE "C", s.sub_ord)::INT AS ordinal,
+    pg_catalog.row_number() OVER (ORDER BY pg_catalog.array_to_string(v.sort_key, E'\x01') COLLATE "C", s.sub_ord)::INT AS ordinal,
     s.step_type,
     s.script_path,
     v.path AS directory,
@@ -380,7 +383,7 @@ CROSS JOIN LATERAL (
     FROM pg_temp._pgmi_test_source ts
     WHERE NOT v.is_exit AND ts.directory = v.path AND ts.is_fixture
     UNION ALL
-    SELECT ROW_NUMBER() OVER (ORDER BY ts.filename COLLATE "C")::INT, 'test', ts.path
+    SELECT pg_catalog.row_number() OVER (ORDER BY ts.filename COLLATE "C")::INT, 'test', ts.path
     FROM pg_temp._pgmi_test_source ts
     WHERE NOT v.is_exit AND ts.directory = v.path AND NOT ts.is_fixture
       AND (p_pattern IS NULL OR ts.path ~ pg_temp.pgmi_validate_pattern(p_pattern))
@@ -403,6 +406,7 @@ CREATE OR REPLACE FUNCTION pg_temp.pgmi_is_sql_file(filename TEXT)
 RETURNS BOOLEAN
 IMMUTABLE
 LANGUAGE SQL
+SET search_path = pg_catalog, pg_temp
 AS $$
     SELECT filename ~* E'\\.(sql|ddl|dml|dql|dcl|psql|pgsql|plpgsql)$';
 $$;
@@ -418,6 +422,7 @@ CREATE OR REPLACE FUNCTION pg_temp.pgmi_register_file(
 )
 RETURNS pg_temp._pgmi_source
 LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp
 AS $$
 DECLARE
     v_row pg_temp._pgmi_source;
@@ -425,22 +430,22 @@ DECLARE
     v_parts TEXT[];
 BEGIN
     -- Normalize to POSIX: forward slashes, ./ prefix, no duplicate separators
-    v_path := trim(both ' ' from in_path);
-    v_path := replace(v_path, E'\\', '/');
+    v_path := pg_catalog.btrim(in_path, ' ');
+    v_path := pg_catalog.replace(v_path, E'\\', '/');
     IF v_path !~ '^\./' THEN
-        v_path := './' || regexp_replace(v_path, '^(\./|/)*', '');
+        v_path := './' || pg_catalog.regexp_replace(v_path, '^(\./|/)*', '');
     END IF;
-    v_path := regexp_replace(v_path, '/{2,}', '/', 'g');
+    v_path := pg_catalog.regexp_replace(v_path, '/{2,}', '/', 'g');
 
-    v_parts := string_to_array(v_path, '/');
+    v_parts := pg_catalog.string_to_array(v_path, '/');
 
     v_row.path               := v_path;
     v_row.path_parts         := v_parts;
-    v_row.depth              := array_length(v_parts, 1) - 2;  -- Subtract 2: one for '.' and one for filename
-    v_row.name               := v_parts[array_length(v_parts, 1)];
+    v_row.depth              := pg_catalog.array_length(v_parts, 1) - 2;  -- Subtract 2: one for '.' and one for filename
+    v_row.name               := v_parts[pg_catalog.array_length(v_parts, 1)];
     v_row.directory          :=
         CASE WHEN v_row.depth > 0
-             THEN array_to_string(v_parts[1:v_row.depth + 1], '/') || '/'
+             THEN pg_catalog.array_to_string(v_parts[1:v_row.depth + 1], '/') || '/'
              ELSE './'
         END;
     -- Extract only an extension the table's chk_extension_format accepts
@@ -452,18 +457,18 @@ BEGIN
     -- No match (no extension, punctuation tail, trailing dot) means '' — no
     -- extension — which is what those filenames have.
     v_row.extension          := COALESCE(
-        substring(v_row.name from '(\.[a-zA-Z0-9]+)$'),
+        pg_catalog.substring(v_row.name, '(\.[a-zA-Z0-9]+)$'),
         ''
     );
     v_row.content            := in_content;
-    v_row.size_bytes         := octet_length(in_content);
+    v_row.size_bytes         := pg_catalog.octet_length(in_content);
     v_row.checksum           := in_checksum;
     v_row.pgmi_checksum      := in_pgmi_checksum;
     v_row.is_sql_file        := pg_temp.pgmi_is_sql_file(v_row.path);
     v_row.is_test_file       := v_row.path ~ '(^|/)__tests?__/';
     v_row.parent_folder_name :=
         CASE WHEN v_row.depth > 0
-             THEN v_parts[array_length(v_parts, 1) - 1]
+             THEN v_parts[pg_catalog.array_length(v_parts, 1) - 1]
              ELSE NULL
         END;
 
@@ -484,17 +489,18 @@ $$;
 CREATE OR REPLACE FUNCTION pg_temp.pgmi_persist_test_plan(target_schema TEXT, p_pattern TEXT DEFAULT NULL)
 RETURNS void
 LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp
 AS $$
 BEGIN
-    EXECUTE format('CREATE TABLE IF NOT EXISTS %I.pgmi_test_plan (
+    EXECUTE pg_catalog.format('CREATE TABLE IF NOT EXISTS %I.pgmi_test_plan (
         ordinal INT PRIMARY KEY,
         step_type TEXT NOT NULL,
         script_path TEXT,
         directory TEXT NOT NULL,
         depth INT NOT NULL
     )', target_schema);
-    EXECUTE format('TRUNCATE %I.pgmi_test_plan', target_schema);
-    EXECUTE format('INSERT INTO %I.pgmi_test_plan SELECT * FROM pg_temp.pgmi_test_plan($1)', target_schema)
+    EXECUTE pg_catalog.format('TRUNCATE %I.pgmi_test_plan', target_schema);
+    EXECUTE pg_catalog.format('INSERT INTO %I.pgmi_test_plan SELECT * FROM pg_temp.pgmi_test_plan($1)', target_schema)
     USING p_pattern;
 END;
 $$;

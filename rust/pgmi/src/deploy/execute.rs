@@ -84,7 +84,7 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
     reporter.verbose(&format!("Connecting to database \"{database}\""));
     reporter.verbose("Creating pg_temp internal tables");
     let temporary = Needs::Temporary { database, role };
-    guard
+    let search_path = guard
         .running(
             session,
             session::prepared(session::create_tables(client, VERSION, temporary)),
@@ -116,7 +116,10 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
     }
     reporter.verbose("Applying API contract");
     guard
-        .running(session, session::prepared(session::apply_contract(client)))
+        .running(
+            session,
+            session::prepared(session::apply_contract(client, &search_path)),
+        )
         .await?;
     reporter.verbose(&format!("Applied API contract v{}", contract.as_str()));
     reporter.verbose(&tls.line());

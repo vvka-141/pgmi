@@ -96,3 +96,11 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   `--json` lists the `attempts`; `retry: false` in `pgmi.yaml` turns it off.
   Pipelines need no retry step of their own. See
   [Time box and retries](switch-day/timeout-and-retry.md).
+- **Security fix: functions planted in a schema on the search_path.** pgmi
+  sets up its session objects under `search_path = pg_catalog, pg_temp`,
+  calls every built-in by its `pg_catalog` name, and gives each helper
+  function its own `search_path`; the deploy's own `search_path` is restored
+  before deploy.sql runs. Before, a role that could create functions in a
+  schema on the deployer's `search_path` (`public` up to PostgreSQL 14 and on
+  clusters upgraded from it) could have pgmi run its function with the
+  deployer's rights during session set-up. **pgmi 0.14 (Go) is affected too.**

@@ -57,7 +57,16 @@ pub(crate) async fn create_tables(
     client: &Client,
     version: &str,
     temporary: Needs<'_>,
-) -> Result<()> {
+) -> Result<String> {
+    let row = client
+        .query_one(
+            "SELECT pg_catalog.current_setting('search_path'), \
+             pg_catalog.set_config('search_path', 'pg_catalog, pg_temp', false)",
+            &[],
+        )
+        .await
+        .map_err(|e| failed("pin the search_path", e, None))?;
+    let search_path: String = row.get(0);
     client
         .batch_execute(shared_sql("session/schema.sql")?)
         .await
@@ -67,7 +76,8 @@ pub(crate) async fn create_tables(
         "INSERT INTO pg_temp._pgmi_runtime (pgmi_version, contract_version) SELECT $1::text::jsonb->>0, '1'",
         json!([version]),
     )
-    .await
+    .await?;
+    Ok(search_path)
 }
 
 pub(crate) async fn load_params(client: &Client, params: &BTreeMap<String, String>) -> Result<()> {
@@ -85,11 +95,19 @@ pub(crate) async fn load_params(client: &Client, params: &BTreeMap<String, Strin
     .await
 }
 
-pub(crate) async fn apply_contract(client: &Client) -> Result<()> {
+pub(crate) async fn apply_contract(client: &Client, search_path: &str) -> Result<()> {
     client
         .batch_execute(shared_sql("contract/api-v1.sql")?)
         .await
-        .map_err(|e| failed("create the session API views", e, None))
+        .map_err(|e| failed("create the session API views", e, None))?;
+    client
+        .query_typed(
+            "SELECT pg_catalog.set_config('search_path', $1, false)",
+            &[(&search_path, Type::TEXT)],
+        )
+        .await
+        .map_err(|e| failed("restore the search_path", e, None))?;
+    Ok(())
 }
 
 /// Fills the file tables, then gives them planner statistics: autovacuum
