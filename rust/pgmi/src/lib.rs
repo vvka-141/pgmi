@@ -136,46 +136,34 @@ fn with_runtime(
     result
 }
 
-fn run_deploy(
-    args: cli::DeployArgs,
-    verbose: bool,
-    mut env: Env,
-    export: impl Fn(&str, &str),
-) -> u8 {
+fn run_deploy(args: cli::DeployArgs, verbose: bool, env: Env, export: impl Fn(&str, &str)) -> u8 {
     conn::tls::install();
-    let dotenv = match config::project_dotenv(&vfs::OsFs::new(&args.project), &env) {
+    let request = deploy::Request::from(args);
+    let mut ctx = deploy::Context {
+        approver: Box::new(deploy::Terminal::new(request.force, &env)),
+        request,
+        verbose,
+        env,
+        dotenv_keys: Vec::new(),
+        dotenv_refused: Vec::new(),
+        serve_hosts: None,
+        stdin: deploy::Stdin::Process,
+    };
+    let dotenv = match config::project_dotenv(&vfs::OsFs::new(&ctx.request.project), &ctx.env) {
         Ok(d) => d,
-        Err(e) => {
-            let _ = writeln!(std::io::stderr(), "pgmi: error: {}", e.text());
-            return e.exit_code();
-        }
+        Err(e) => return deploy::refused(&ctx, e),
     };
     for (k, v) in &dotenv.applied {
         export(k, v);
-        env.insert(k, v);
+        ctx.env.insert(k, v);
     }
-    let runtime = match runtime() {
-        Ok(r) => r,
-        Err(e) => {
-            output::Reporter::new(verbose, &env).line(&format!("pgmi: error: {}", e.text()));
-            return e.exit_code();
-        }
-    };
-    let request = deploy::Request::from(args);
-    let approver = Box::new(deploy::Terminal::new(request.force, &env));
-    deploy::run(
-        runtime,
-        &deploy::Context {
-            request,
-            verbose,
-            env,
-            dotenv_keys: dotenv.applied.into_iter().map(|(k, _)| k).collect(),
-            dotenv_refused: dotenv.refused,
-            serve_hosts: None,
-            stdin: deploy::Stdin::Process,
-            approver,
-        },
-    )
+    ctx.approver = Box::new(deploy::Terminal::new(ctx.request.force, &ctx.env));
+    ctx.dotenv_keys = dotenv.applied.into_iter().map(|(k, _)| k).collect();
+    ctx.dotenv_refused = dotenv.refused;
+    match runtime() {
+        Ok(runtime) => deploy::run(runtime, &ctx),
+        Err(e) => deploy::refused(&ctx, e),
+    }
 }
 
 /// `pgmi --version` and `pgmi version`, line for line as Go prints them: the

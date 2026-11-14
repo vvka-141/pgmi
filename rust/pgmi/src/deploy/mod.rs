@@ -1259,6 +1259,17 @@ fn test_panic() -> ! {
     panic!("PGMI_TEST_PANIC is set")
 }
 
+/// A deploy stopped before it started: the stderr line and the `--json`
+/// record any later refusal gets.
+pub(crate) fn refused(ctx: &Context, e: Error) -> u8 {
+    finish(
+        ctx,
+        &Run::start(),
+        &Err(e),
+        &Reporter::new(ctx.verbose, &ctx.env),
+    )
+}
+
 fn finish(ctx: &Context, run: &Run, result: &Result<()>, reporter: &Reporter) -> u8 {
     let st = &run.st;
     let elapsed = run.t0.elapsed();

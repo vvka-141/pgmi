@@ -10,3 +10,10 @@ steps:
       rust:
         exit: 10
         stderr: ["^pgmi: error: failed to read .*\\.env: is a directory$"]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --json]
+    expect:
+      exit: 0
+      rust:
+        exit: 10
+        stderr: ["^pgmi: error: failed to read .*\\.env: is a directory$"]
+        json: {status: failed, exitCode: 10}
