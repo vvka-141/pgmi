@@ -331,7 +331,7 @@ jobs:
       - name: Install the .deb and run it
         run: |
           docker run --rm -v "$PWD/dist:/d" debian:trixie-slim bash -c \
-            "dpkg -i /d/pgmi_${VERSION}_linux_amd64.deb && pgmi --version | grep -q 'pgmi ${VERSION} ' && test -s /usr/share/doc/pgmi/THIRD-PARTY-LICENSES"
+            "dpkg -i /d/pgmi_${VERSION}_linux_amd64.deb && pgmi --version | grep -q 'pgmi ${VERSION} ' && dpkg-deb -c /d/pgmi_${VERSION}_linux_amd64.deb | grep -q ' ./usr/share/doc/pgmi/THIRD-PARTY-LICENSES$'"
       - name: Homebrew cask
         run: rust/release/cask.sh "$VERSION" dist/checksums.txt > dist/pgmi.rb
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
