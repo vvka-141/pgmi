@@ -286,6 +286,24 @@ impl Policy {
         self.methods.contains(&method) != self.negated
     }
 
+    /// Whether every method this policy allows, `other` allows too.
+    pub(crate) fn within(&self, other: &Policy) -> bool {
+        [
+            AuthMethod::Password,
+            AuthMethod::Md5,
+            AuthMethod::Gss,
+            AuthMethod::Sspi,
+            AuthMethod::ScramSha256,
+            AuthMethod::None,
+        ]
+        .into_iter()
+        .all(|m| !self.allows(m) || other.allows(m))
+    }
+
+    pub(crate) fn text(&self) -> &str {
+        &self.text
+    }
+
     fn check(&self, code: u32, asked_before: bool) -> Result<(), Error> {
         let (method, what) = match code {
             0 if asked_before => return Ok(()),

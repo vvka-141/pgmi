@@ -1,3 +1,4 @@
+mod allowed;
 mod approve;
 mod blame;
 mod execute;
@@ -34,6 +35,10 @@ use crate::output::{Notice, NoticeLog, Reporter, Summary, seconds};
 use crate::project::{metadata, walk};
 use crate::vfs::OsFs;
 
+use allowed::restrict_to_allowed;
+pub(crate) use allowed::ServeHosts;
+#[cfg(test)]
+pub(crate) use allowed::AllowedHost;
 pub(crate) use approve::{Approver, ConfirmedName, Terminal};
 pub(crate) use blame::redact_sql_passwords;
 use guard::{Guard, deadline, limit, spawn_signals};
@@ -132,7 +137,7 @@ pub(crate) struct Context {
     pub(crate) dotenv_keys: Vec<String>,
     pub(crate) dotenv_refused: Vec<String>,
     /// `pgmi serve`: the hosts the operator's own credentials may go to.
-    pub(crate) serve_hosts: Option<Vec<String>>,
+    pub(crate) serve_hosts: Option<ServeHosts>,
     pub(crate) stdin: Stdin,
     pub(crate) approver: Box<dyn Approver>,
 }
@@ -291,51 +296,6 @@ fn provenance(
         lines.push("session options: from PGOPTIONS".into());
     }
     lines
-}
-
-/// `pgmi serve`: keeps the operator's password, password file and cloud
-/// sign-in from a server the operator did not allow: its environment's own
-/// `host:port`, or a `PGMI_SERVE_HOSTS` entry (`host` for any port, or
-/// `host:port`). A password typed in the tool call's own connection string
-/// stays. Returns the first server not allowed, as `host:port`, when an
-/// operator credential was withheld from it.
-fn restrict_to_allowed(
-    spec: &mut Spec,
-    flags: &resolve::Flags,
-    cloud: bool,
-    allowed: &[String],
-) -> Result<Option<String>> {
-    let allows = |e: &resolve::Endpoint| {
-        let with_port = [
-            format!("{}:{}", e.name, e.port),
-            format!("[{}]:{}", e.name, e.port),
-        ];
-        allowed.iter().any(|a| {
-            a.eq_ignore_ascii_case(&e.name) || with_port.iter().any(|w| a.eq_ignore_ascii_case(w))
-        })
-    };
-    let Some(host) = spec
-        .hosts
-        .endpoints()
-        .find(|e| !allows(e))
-        .map(|e| format!("{}:{}", e.name, e.port))
-    else {
-        return Ok(None);
-    };
-    if cloud {
-        return Err(Error::config(format!(
-            "pgmi serve signs in to a cloud only for hosts the operator allowed, and \"{host}\" is not one; add it to PGMI_SERVE_HOSTS where pgmi serve starts"
-        )));
-    }
-    let typed = flags.connection.as_ref().is_some_and(|c| {
-        crate::conn::parse::parse(c.expose()).is_ok_and(|f| f.contains_key("password"))
-    });
-    spec.ambient_passfile = false;
-    if typed {
-        return Ok(None);
-    }
-    spec.password = None;
-    Ok(Some(host))
 }
 
 /// What the project `.env` set and which of its keys were refused.
@@ -2563,65 +2523,6 @@ mod tests {
             &notes,
             env.non_empty("PGOPTIONS").unwrap().is_some(),
         )
-    }
-
-    #[test]
-    fn serve_keeps_the_operators_credentials_for_the_hosts_the_operator_allowed() {
-        let resolved = |conn: &str, env: &[(&str, &str)]| {
-            let flags = resolve::Flags {
-                connection: Some(conn.into()),
-                ..resolve::Flags::default()
-            };
-            (
-                resolve::resolve(&flags, &Env::from_pairs(env), None).unwrap(),
-                flags,
-            )
-        };
-        let allowed = vec!["db.internal".to_string(), "127.0.0.1:5432".to_string()];
-        let env = [("PGPASSWORD", "operator-pw")];
-
-        let (mut spec, flags) = resolved("host=evil.example user=u dbname=d", &env);
-        let refused = restrict_to_allowed(&mut spec, &flags, false, &allowed).unwrap();
-        assert_eq!(refused.as_deref(), Some("evil.example:5432"));
-        assert!(spec.password.is_none() && !spec.ambient_passfile);
-
-        let (mut spec, flags) = resolved("host=evil.example user=u password=typed dbname=d", &env);
-        assert_eq!(
-            restrict_to_allowed(&mut spec, &flags, false, &allowed).unwrap(),
-            None
-        );
-        assert_eq!(spec.password.as_ref().map(Secret::expose), Some("typed"));
-        assert!(!spec.ambient_passfile);
-
-        let (mut spec, flags) = resolved("host=DB.internal user=u dbname=d", &env);
-        assert_eq!(
-            restrict_to_allowed(&mut spec, &flags, false, &allowed).unwrap(),
-            None
-        );
-        assert_eq!(
-            spec.password.as_ref().map(Secret::expose),
-            Some("operator-pw")
-        );
-        assert!(spec.ambient_passfile);
-
-        let (mut spec, flags) = resolved("host=127.0.0.1 port=5432 user=u dbname=d", &env);
-        assert_eq!(
-            restrict_to_allowed(&mut spec, &flags, false, &allowed).unwrap(),
-            None
-        );
-        let (mut spec, flags) = resolved("host=127.0.0.1 port=55902 user=u dbname=d", &env);
-        assert_eq!(
-            restrict_to_allowed(&mut spec, &flags, false, &allowed)
-                .unwrap()
-                .as_deref(),
-            Some("127.0.0.1:55902")
-        );
-        assert!(spec.password.is_none());
-
-        let (mut spec, flags) = resolved("host=evil.example user=u dbname=d", &env);
-        let e = restrict_to_allowed(&mut spec, &flags, true, &allowed).unwrap_err();
-        assert_eq!(e.exit_code(), 10);
-        assert!(e.text().contains("PGMI_SERVE_HOSTS"), "{}", e.text());
     }
 
     #[test]

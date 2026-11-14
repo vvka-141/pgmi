@@ -62,7 +62,9 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   server and those in `PGMI_SERVE_HOSTS`, and a tool call may drop a
   database (`overwrite`) only when `pgmi serve` runs with
   `PGMI_SERVE_ALLOW_OVERWRITE=1`. A `paramsFile` must lie inside the
-  project or a directory of `PGMI_SERVE_ROOTS`. See
+  project or a directory of `PGMI_SERVE_ROOTS`. The operator's password
+  never goes with a weaker `sslmode`, `channel_binding` or `require_auth`
+  than the operator's own. See
   [serve-allowed-hosts](switch-day/serve-allowed-hosts.md).
 - **`pgmi serve` stops a deploy whose client left.** When the MCP client
   closes stdin, a running deploy is cancelled and rolls back what it had
@@ -157,11 +159,6 @@ ticket; none loses data on its own.
 - **The Windows arm64 binary** is run on a `windows-11-arm` runner, but
   deployed only if that runner has PostgreSQL; otherwise the release
   workflow warns that only `--version` ran (PGMI-1004).
-- **`pgmi serve` details**: an unbracketed IPv6 `host:port` entry in
-  `PGMI_SERVE_HOSTS` can match another address; a withheld credential's
-  tool result names only `PGPASSWORD` (the reason is on stderr); a deploy
-  goes on and commits after the client closes stdin; a tool call can lower
-  `sslmode` for an allowed host (PGMI-1005).
 - **Upgrading from an older binary**: a project that `pgmi init` 0.20
   scaffolded calls `pg_temp.pgmi_run_file`, which pgmi 0.14 does not
   create, though the contract version is still 1.

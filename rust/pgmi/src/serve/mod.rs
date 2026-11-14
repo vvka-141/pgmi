@@ -40,6 +40,7 @@ const BUSY: i64 = -32000;
 
 pub(crate) fn run(runtime: Runtime, verbose: bool, env: Env) -> Result<(), Error> {
     crate::conn::tls::install();
+    tools::operator_hosts(&env)?;
     let stop = CancellationToken::new();
     let ended = runtime.block_on(async {
         let first = stop.clone();

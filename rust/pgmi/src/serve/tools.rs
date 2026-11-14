@@ -10,7 +10,9 @@ use super::wire::{JsonKind, Members};
 use crate::commands::{init, metadata};
 use crate::config::params::{Param, check_key};
 use crate::conn::resolve::Flags;
-use crate::deploy::{ConfirmedName, Context, Request, Run, Stdin, Stop, redact_sql_passwords};
+use crate::deploy::{
+    ConfirmedName, Context, Request, Run, ServeHosts, Stdin, Stop, redact_sql_passwords,
+};
 use crate::env::Env;
 use crate::error::redact;
 use crate::error::{Error, Kind};
@@ -461,25 +463,15 @@ fn confine(project: &Path, params_files: &[String], env: &Env) -> Result<(), Err
 
 /// its environment resolves to, and the comma-separated `PGMI_SERVE_HOSTS`
 /// (`host` for any port, or `host:port`).
-fn operator_hosts(env: &Env) -> Result<Vec<String>, Error> {
-    let mut hosts: Vec<String> = env
-        .non_empty("PGMI_SERVE_HOSTS")?
-        .map(|v| {
-            v.split(',')
-                .map(str::trim)
-                .filter(|h| !h.is_empty())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default();
-    if let Ok(spec) = crate::conn::resolve::resolve(&Flags::default(), env, None) {
-        hosts.extend(
-            spec.hosts
-                .endpoints()
-                .map(|e| format!("{}:{}", e.name, e.port)),
-        );
-    }
-    Ok(hosts)
+/// The servers the operator's credentials may go to, and the operator's own
+/// connection settings, which a tool call may not lower.
+pub(crate) fn operator_hosts(env: &Env) -> Result<ServeHosts, Error> {
+    let any_database = Flags {
+        database: Some("postgres".into()),
+        ..Flags::default()
+    };
+    let own = crate::conn::resolve::resolve(&any_database, env, None).ok();
+    ServeHosts::new(env.non_empty("PGMI_SERVE_HOSTS")?, own.as_ref())
 }
 
 /// A connection from a tool call may not point the operator's password
@@ -653,6 +645,19 @@ async fn run_deploy(ctx: Context, token: CancellationToken) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_operators_own_server_is_allowed_without_pgdatabase() {
+        let env = Env::from_pairs(&[("PGHOST", "db.internal"), ("PGPORT", "6432")]);
+        let hosts = operator_hosts(&env).unwrap();
+        assert_eq!(
+            hosts.hosts,
+            [crate::deploy::AllowedHost::parse("db.internal:6432").unwrap()]
+        );
+        assert!(hosts.floor.is_some());
+        let refused = operator_hosts(&Env::from_pairs(&[("PGMI_SERVE_HOSTS", "::1:5432")]));
+        assert_eq!(refused.unwrap_err().exit_code(), 10);
+    }
 
     fn slots(
         n: usize,

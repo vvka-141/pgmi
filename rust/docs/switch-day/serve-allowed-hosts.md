@@ -5,16 +5,29 @@ An MCP client is an agent, and an agent can be talked into naming a server.
 to servers that account chose:
 
 - the `host:port` its own environment resolves to (`PGHOST`/`PGPORT`,
-  `PGMI_CONNECTION_STRING`, the defaults), and
+  `PGMI_CONNECTION_STRING`, the defaults; `PGDATABASE` need not be set), and
 - every entry of `PGMI_SERVE_HOSTS`, a comma-separated list of `host` (any
-  port) or `host:port`, read when `pgmi serve` starts.
+  port), `host:port`, `[ipv6]` or `[ipv6]:port`, read when `pgmi serve`
+  starts. An IPv6 address must be in brackets: an entry such as `::1:5432`
+  is refused at start with exit 10, since it is itself an address. Host
+  names compare without case, addresses by value, ports exactly.
 
 For any other server a deploy tool call still runs, but pgmi uses neither
 `PGPASSWORD`, nor a password file (`passfile`, `PGPASSFILE`, `~/.pgpass`),
 nor a cloud sign-in (`--azure`, `--aws`, `--google`, `--databricks`, or
 `auth_method` in the project's `pgmi.yaml`; a cloud sign-in is refused with
 exit 10). A password the tool call types in its own connection string is
-used. stderr names the server that was not allowed.
+used. stderr names the server that was not allowed, and when the server
+then asks for a password, the tool result says the operator's password was
+not used for that host because it is not on the list.
+
+On an allowed server the operator's credentials go only with settings at
+least as strict as the operator's own: a tool call's `sslmode` and
+`channel_binding` are raised to the operator's (disable < allow < prefer <
+require < verify-ca < verify-full; disable < prefer < require), and its
+`require_auth` becomes the operator's when it set none. A `require_auth`
+that allows a method the operator's does not is refused, exit 10. A tool
+call that types its own password keeps its own settings.
 
 A tool call may not set `hostaddr` or `passfile` in its connection string.
 

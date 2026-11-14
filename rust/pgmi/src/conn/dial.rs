@@ -740,6 +740,14 @@ impl Attempt<'_> {
             let no_password = password.is_none() && shared.asked_password();
             match token_refused(&e, spec, self.db) {
                 Some(text) => DialFailure::TokenRefused { text, origin: e },
+                None if no_password && spec.withheld => DialFailure::Broken {
+                    text: format!(
+                        "no password supplied: the operator's password is not used for \"{}\", because pgmi serve gives it only to the operator's own server and the hosts in PGMI_SERVE_HOSTS; pass a password in the connection string, or ask the operator to add the host to PGMI_SERVE_HOSTS",
+                        self.name
+                    ),
+                    class: Class::Fatal,
+                    origin: Origin::Driver(e),
+                },
                 None => classify_pg(e, self.name, &passfile, no_password),
             }
         })?;

@@ -468,6 +468,8 @@ pub(crate) struct Spec {
     /// be read; `pgmi serve` turns it off for a host the operator did not
     /// allow.
     pub(crate) ambient_passfile: bool,
+    /// `pgmi serve` withheld the operator's password from this server.
+    pub(crate) withheld: bool,
     pub(crate) maintenance_db: String,
     pub(crate) target_db: String,
     /// The connection string's own database when `-d` named another.
@@ -719,6 +721,7 @@ fn finish(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>, given: Given)
         password: f.remove("password").map(Secret::from),
         passfile: f.remove("passfile").map(PathBuf::from),
         ambient_passfile: true,
+        withheld: false,
         maintenance_db,
         target_db,
         replaced_db,
