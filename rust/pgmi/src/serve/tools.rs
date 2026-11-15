@@ -471,7 +471,10 @@ pub(crate) fn operator_hosts(env: &Env) -> Result<ServeHosts, Error> {
         ..Flags::default()
     };
     let own = crate::conn::resolve::resolve(&any_database, env, None).ok();
-    ServeHosts::new(env.non_empty("PGMI_SERVE_HOSTS")?, own.as_ref())
+    Ok(
+        ServeHosts::new(env.non_empty("PGMI_SERVE_HOSTS")?, own.as_ref())?
+            .with_instances(env.non_empty("PGMI_SERVE_CLOUDSQL_INSTANCES")?),
+    )
 }
 
 /// A connection from a tool call may not point the operator's password

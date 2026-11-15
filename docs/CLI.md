@@ -826,6 +826,15 @@ used. stderr names the server that was not allowed, and when the server then
 asks for a password, the tool result says the operator's password was not
 used for that host because it is not on the list.
 
+Google sign-in is the exception to "server": pgmi then connects to the
+Cloud SQL instance the project's `pgmi.yaml` names (`google_instance`), at
+the address Google's API gives for it, not to a host. So for Google the
+operator allows instances: `PGMI_SERVE_CLOUDSQL_INSTANCES` is a
+comma-separated list of instance connection names
+(`project:region:instance`), read when `pgmi serve` starts and compared
+exactly. A deploy whose `pgmi.yaml` names any other instance is refused with
+exit 10 before any sign-in.
+
 On an allowed server the operator's credentials go only with settings at
 least as strict as the operator's own: a tool call's `sslmode` and
 `channel_binding` are raised to the operator's (disable < allow < prefer <
@@ -837,7 +846,8 @@ types its own password keeps its own settings. A tool call may not set
 
 ```json
 {"mcpServers": {"pgmi": {"command": "pgmi", "args": ["serve"],
-  "env": {"PGMI_SERVE_HOSTS": "db.internal,staging.example.com:6432"}}}}
+  "env": {"PGMI_SERVE_HOSTS": "db.internal,staging.example.com:6432",
+          "PGMI_SERVE_CLOUDSQL_INSTANCES": "my-project:europe-west4:main"}}}}
 ```
 
 **Which files a deploy may read.** A `paramsFile` must lie inside the project,
@@ -926,6 +936,7 @@ pgmi respects standard PostgreSQL environment variables and its own:
 | `PGCLIENTENCODING` | `deploy` | The session's `client_encoding` (default: the database's encoding) |
 | `PGMI_PARAM_<NAME>` | `deploy`, `serve` | Deploy parameter `<name>` (lower-cased); empty value exits 10 |
 | `PGMI_SERVE_HOSTS` | `serve` | Servers, besides the operator's own, that may receive the operator's credentials (`host`, `host:port`, `[ipv6]:port`, comma-separated). See [pgmi serve](#pgmi-serve) |
+| `PGMI_SERVE_CLOUDSQL_INSTANCES` | `serve` | Cloud SQL instance connection names (`project:region:instance`, comma-separated) a deploy may sign in to with the operator's Google credentials. See [pgmi serve](#pgmi-serve) |
 | `PGMI_SERVE_ROOTS` | `serve` | Directories a deploy tool call's `paramsFile` and project may lie in, besides the project (comma-separated) |
 | `PGMI_SERVE_ALLOW_OVERWRITE` | `serve` | `1` lets a deploy tool call drop and recreate a database (`overwrite: true`); otherwise exit 12 |
 | `PGMI_MAX_FILE_SIZE` | `deploy` | Per-file cap in bytes for project files, params files and `.env` (default 10 MiB) |

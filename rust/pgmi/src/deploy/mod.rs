@@ -831,7 +831,7 @@ impl Steps<'_> {
         }
         if let Some(allowed) = &self.ctx.serve_hosts
             && let Some(host) =
-                restrict_to_allowed(&mut spec, &request.connection, cloud.is_some(), allowed)?
+                restrict_to_allowed(&mut spec, &request.connection, cloud.as_ref(), allowed)?
         {
             self.reporter.line(&format!(
                 "pgmi serve: \"{host}\" is not a host the operator allowed (its environment's host or PGMI_SERVE_HOSTS), so the operator's password, password file and cloud sign-in are not used"

@@ -1,0 +1,23 @@
+description: Rust only (contract "Behaviour changes in 0.20", pgmi serve and the operator's credentials, PGMI-1023). With Google sign-in pgmi connects to the Cloud SQL instance a project's pgmi.yaml names, not to a host, so in pgmi serve the instance is what the operator allows - a deploy whose pgmi.yaml names an instance that is not in PGMI_SERVE_CLOUDSQL_INSTANCES is refused (exit 10 in the tool result) before any sign-in
+impl: rust
+project:
+  files:
+    deploy.sql: SELECT 1;
+    pgmi.yaml: |
+      connection:
+        auth_method: google
+        google_instance: other-project:us-central1:planted
+        username: someone
+        database: postgres
+steps:
+  - pgmi: [serve]
+    env: {PGMI_SERVE_CLOUDSQL_INSTANCES: "my-project:us-central1:mine"}
+    stdin:
+      - '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}'
+      - '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}"}}}'
+      - {until: '"id":2,', timeout: 30}
+    timeout: 60
+    expect:
+      exit: 0
+      stdout: ['"id":2,"result".*signs in to Cloud SQL only for instances the operator allowed, and \\"other-project:us-central1:planted\\" is not one.*PGMI_SERVE_CLOUDSQL_INSTANCES.*"exitCode":10']
+      stderr_not: ['credentials', 'sqladmin', 'metadata']

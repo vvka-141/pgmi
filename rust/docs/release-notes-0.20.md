@@ -61,7 +61,9 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
 - **`pgmi serve` guards the operator's credentials and databases.** The
   operator's password, password file and cloud sign-in go only to its own
   server (the one `PGHOST`/`PGPORT` or its connection string name, with or
-  without `PGDATABASE`) and those in `PGMI_SERVE_HOSTS`, and a tool call may drop a
+  without `PGDATABASE`) and those in `PGMI_SERVE_HOSTS`; a Google sign-in
+  goes only to the Cloud SQL instances in `PGMI_SERVE_CLOUDSQL_INSTANCES`.
+  A tool call may drop a
   database (`overwrite`) only when `pgmi serve` runs with
   `PGMI_SERVE_ALLOW_OVERWRITE=1`. A `paramsFile` must lie inside the
   project or a directory of `PGMI_SERVE_ROOTS`. The operator's password

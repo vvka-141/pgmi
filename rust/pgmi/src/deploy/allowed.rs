@@ -4,6 +4,7 @@
 
 use std::net::{IpAddr, Ipv6Addr};
 
+use crate::conn::cloud::{Options, Provider};
 use crate::conn::resolve::{self, ChannelBinding, Endpoint, RequireAuth, Spec, SslMode};
 use crate::conn::tap;
 use crate::error::{Error, Result};
@@ -13,6 +14,9 @@ use crate::error::{Error, Result};
 pub(crate) struct ServeHosts {
     pub(crate) hosts: Vec<AllowedHost>,
     pub(crate) floor: Option<Floor>,
+    /// Cloud SQL instance connection names: the Google route dials the
+    /// instance, not a host, so the instance is what the operator allows.
+    pub(crate) instances: Vec<String>,
 }
 
 /// One allowed server: a host, and a port when the entry named one.
@@ -54,7 +58,21 @@ impl ServeHosts {
                 channel_binding: s.channel_binding,
                 require_auth: s.require_auth.policy().ok().flatten().cloned(),
             }),
+            instances: Vec::new(),
         })
+    }
+
+    /// Adds the `PGMI_SERVE_CLOUDSQL_INSTANCES` entries, compared whole.
+    #[must_use]
+    pub(crate) fn with_instances(mut self, entries: Option<&str>) -> Self {
+        self.instances = entries
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|e| !e.is_empty())
+            .map(str::to_string)
+            .collect();
+        self
     }
 
     fn allows(&self, e: &Endpoint) -> bool {
@@ -179,9 +197,17 @@ impl Floor {
 pub(crate) fn restrict_to_allowed(
     spec: &mut Spec,
     flags: &resolve::Flags,
-    cloud: bool,
+    cloud: Option<&(Provider, Options)>,
     allowed: &ServeHosts,
 ) -> Result<Option<String>> {
+    if let Some((Provider::Google, options)) = cloud {
+        let instance = options.google_instance.as_deref().unwrap_or_default();
+        if !allowed.instances.iter().any(|i| i == instance) {
+            return Err(Error::config(format!(
+                "pgmi serve signs in to Cloud SQL only for instances the operator allowed, and \"{instance}\" is not one; add it to PGMI_SERVE_CLOUDSQL_INSTANCES where pgmi serve starts"
+            )));
+        }
+    }
     let typed = flags.connection.as_ref().is_some_and(|c| {
         crate::conn::parse::parse(c.expose()).is_ok_and(|f| f.contains_key("password"))
     });
@@ -196,7 +222,7 @@ pub(crate) fn restrict_to_allowed(
         }
         return Ok(None);
     };
-    if cloud {
+    if cloud.is_some() {
         return Err(Error::config(format!(
             "pgmi serve signs in to a cloud only for hosts the operator allowed, and \"{host}\" is not one; add it to PGMI_SERVE_HOSTS where pgmi serve starts"
         )));
@@ -227,19 +253,73 @@ mod tests {
         )
     }
 
+    fn azure() -> (Provider, Options) {
+        (Provider::Azure, Options::default())
+    }
+
+    fn google(instance: &str) -> (Provider, Options) {
+        let options = Options {
+            google_instance: Some(instance.into()),
+            ..Options::default()
+        };
+        (Provider::Google, options)
+    }
+
+    #[test]
+    fn serve_refuses_a_cloud_sql_instance_the_operator_did_not_allow() {
+        let own = resolved("host=localhost user=u dbname=d", &[]).0;
+        for listed in [None, Some("proj:region:other, proj:region:Evil")] {
+            let allowed = ServeHosts::new(None, Some(&own))
+                .unwrap()
+                .with_instances(listed);
+            let (mut spec, flags) = resolved("user=u dbname=d", &[]);
+            let e = restrict_to_allowed(
+                &mut spec,
+                &flags,
+                Some(&google("proj:region:evil")),
+                &allowed,
+            )
+            .unwrap_err();
+            assert_eq!(e.exit_code(), 10);
+            assert!(
+                e.text().contains("\"proj:region:evil\" is not one")
+                    && e.text().contains("PGMI_SERVE_CLOUDSQL_INSTANCES"),
+                "{}",
+                e.text()
+            );
+        }
+    }
+
+    #[test]
+    fn serve_allows_a_cloud_sql_instance_the_operator_listed() {
+        let allowed = ServeHosts::new(None, None)
+            .unwrap()
+            .with_instances(Some(" proj:region:db ,other:r:i"));
+        let (mut spec, flags) = resolved("user=u dbname=d", &[]);
+        let cloud = google("proj:region:db");
+        let own = ServeHosts {
+            hosts: vec![AllowedHost::parse("localhost").unwrap()],
+            ..allowed
+        };
+        assert_eq!(
+            restrict_to_allowed(&mut spec, &flags, Some(&cloud), &own).unwrap(),
+            None
+        );
+    }
+
     #[test]
     fn serve_keeps_the_operators_credentials_for_the_hosts_the_operator_allowed() {
         let allowed = ServeHosts::new(Some("db.internal, 127.0.0.1:5432"), None).unwrap();
         let env = [("PGPASSWORD", "operator-pw")];
 
         let (mut spec, flags) = resolved("host=evil.example user=u dbname=d", &env);
-        let refused = restrict_to_allowed(&mut spec, &flags, false, &allowed).unwrap();
+        let refused = restrict_to_allowed(&mut spec, &flags, None, &allowed).unwrap();
         assert_eq!(refused.as_deref(), Some("evil.example:5432"));
         assert!(spec.password.is_none() && !spec.ambient_passfile && spec.withheld);
 
         let (mut spec, flags) = resolved("host=evil.example user=u password=typed dbname=d", &env);
         assert_eq!(
-            restrict_to_allowed(&mut spec, &flags, false, &allowed).unwrap(),
+            restrict_to_allowed(&mut spec, &flags, None, &allowed).unwrap(),
             None
         );
         assert_eq!(spec.password.as_ref().map(Secret::expose), Some("typed"));
@@ -247,7 +327,7 @@ mod tests {
 
         let (mut spec, flags) = resolved("host=DB.internal user=u dbname=d", &env);
         assert_eq!(
-            restrict_to_allowed(&mut spec, &flags, false, &allowed).unwrap(),
+            restrict_to_allowed(&mut spec, &flags, None, &allowed).unwrap(),
             None
         );
         assert_eq!(
@@ -258,12 +338,12 @@ mod tests {
 
         let (mut spec, flags) = resolved("host=127.0.0.1 port=5432 user=u dbname=d", &env);
         assert_eq!(
-            restrict_to_allowed(&mut spec, &flags, false, &allowed).unwrap(),
+            restrict_to_allowed(&mut spec, &flags, None, &allowed).unwrap(),
             None
         );
         let (mut spec, flags) = resolved("host=127.0.0.1 port=55902 user=u dbname=d", &env);
         assert_eq!(
-            restrict_to_allowed(&mut spec, &flags, false, &allowed)
+            restrict_to_allowed(&mut spec, &flags, None, &allowed)
                 .unwrap()
                 .as_deref(),
             Some("127.0.0.1:55902")
@@ -271,7 +351,7 @@ mod tests {
         assert!(spec.password.is_none());
 
         let (mut spec, flags) = resolved("host=evil.example user=u dbname=d", &env);
-        let e = restrict_to_allowed(&mut spec, &flags, true, &allowed).unwrap_err();
+        let e = restrict_to_allowed(&mut spec, &flags, Some(&azure()), &allowed).unwrap_err();
         assert_eq!(e.exit_code(), 10);
         assert!(e.text().contains("PGMI_SERVE_HOSTS"), "{}", e.text());
     }
@@ -327,17 +407,17 @@ mod tests {
         let allowed = ServeHosts::new(Some("[::1]:5432"), None).unwrap();
         let (mut spec, flags) = resolved("postgresql://u@[::1]:5432/d", &[]);
         assert_eq!(
-            restrict_to_allowed(&mut spec, &flags, false, &allowed).unwrap(),
+            restrict_to_allowed(&mut spec, &flags, None, &allowed).unwrap(),
             None
         );
         let (mut spec, flags) = resolved("postgresql://u@[0:0:0:0:0:0:0:1]:5432/d", &[]);
         assert_eq!(
-            restrict_to_allowed(&mut spec, &flags, false, &allowed).unwrap(),
+            restrict_to_allowed(&mut spec, &flags, None, &allowed).unwrap(),
             None
         );
         let (mut spec, flags) = resolved("postgresql://u@[::1]:5433/d", &[]);
         assert!(
-            restrict_to_allowed(&mut spec, &flags, false, &allowed)
+            restrict_to_allowed(&mut spec, &flags, None, &allowed)
                 .unwrap()
                 .is_some()
         );
@@ -345,7 +425,7 @@ mod tests {
         let allowed = ServeHosts::new(None, Some(&own)).unwrap();
         let (mut spec, flags) = resolved("postgresql://u@[::1]:5432/d", &[]);
         assert!(
-            restrict_to_allowed(&mut spec, &flags, false, &allowed)
+            restrict_to_allowed(&mut spec, &flags, None, &allowed)
                 .unwrap()
                 .is_some()
         );
@@ -363,7 +443,7 @@ mod tests {
             &[],
         );
         assert_eq!(
-            restrict_to_allowed(&mut spec, &flags, false, &allowed).unwrap(),
+            restrict_to_allowed(&mut spec, &flags, None, &allowed).unwrap(),
             None
         );
         assert_eq!(spec.sslmode(), SslMode::Require);
@@ -374,11 +454,11 @@ mod tests {
         );
 
         let (mut spec, flags) = resolved("host=db user=u dbname=d sslmode=verify-full", &[]);
-        restrict_to_allowed(&mut spec, &flags, false, &allowed).unwrap();
+        restrict_to_allowed(&mut spec, &flags, None, &allowed).unwrap();
         assert_eq!(spec.sslmode(), SslMode::VerifyFull);
 
         let (mut spec, flags) = resolved("host=db user=u dbname=d require_auth=password", &[]);
-        let e = restrict_to_allowed(&mut spec, &flags, false, &allowed).unwrap_err();
+        let e = restrict_to_allowed(&mut spec, &flags, None, &allowed).unwrap_err();
         assert_eq!(e.exit_code(), 10);
         assert!(
             e.text().contains("require_auth \"password\""),
@@ -388,7 +468,7 @@ mod tests {
 
         let (mut spec, flags) =
             resolved("host=db user=u password=own dbname=d sslmode=disable", &[]);
-        restrict_to_allowed(&mut spec, &flags, false, &allowed).unwrap();
+        restrict_to_allowed(&mut spec, &flags, None, &allowed).unwrap();
         assert_eq!(spec.sslmode(), SslMode::Disable);
     }
 }

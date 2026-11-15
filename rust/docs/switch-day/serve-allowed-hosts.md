@@ -21,6 +21,15 @@ used. stderr names the server that was not allowed, and when the server
 then asks for a password, the tool result says the operator's password was
 not used for that host because it is not on the list.
 
+Google sign-in is the exception to "server": pgmi then connects to the
+Cloud SQL instance the project's `pgmi.yaml` names (`google_instance`), at
+the address Google's API gives for it, not to a host. So for Google the
+operator allows instances: `PGMI_SERVE_CLOUDSQL_INSTANCES` is a
+comma-separated list of instance connection names
+(`project:region:instance`), read when `pgmi serve` starts and compared
+exactly. A deploy whose `pgmi.yaml` names any other instance is refused with
+exit 10 before any sign-in.
+
 On an allowed server the operator's credentials go only with settings at
 least as strict as the operator's own: a tool call's `sslmode` and
 `channel_binding` are raised to the operator's (disable < allow < prefer <
@@ -45,7 +54,8 @@ directories too.
 
 ```json
 {"mcpServers": {"pgmi": {"command": "pgmi", "args": ["serve"],
-  "env": {"PGMI_SERVE_HOSTS": "db.internal,staging.example.com:6432"}}}}
+  "env": {"PGMI_SERVE_HOSTS": "db.internal,staging.example.com:6432",
+          "PGMI_SERVE_CLOUDSQL_INSTANCES": "my-project:europe-west4:main"}}}}
 ```
 
 The plain `pgmi deploy` command is not affected.
