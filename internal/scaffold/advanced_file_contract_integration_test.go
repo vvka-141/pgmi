@@ -28,30 +28,35 @@ func TestAdvancedTemplate_RefusesFileOfTheWrongKind(t *testing.T) {
 		idempotent bool
 		body       string
 		wantMsg    string
+		wantHead   string
 	}{
 		{
 			name:       "run-once file defining a function",
 			idempotent: false,
 			body:       "CREATE TABLE core.kind_probe (id int);\n\nCREATE OR REPLACE FUNCTION core.kind_probe_fn() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;\n",
 			wantMsg:    "CREATE OR REPLACE FUNCTION",
+			wantHead:   "Run-once file(s) define code",
 		},
 		{
 			name:       "re-run file creating a table",
 			idempotent: true,
 			body:       "CREATE OR REPLACE FUNCTION core.kind_probe_fn() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;\n\n  CREATE TABLE core.kind_probe (id int);\n",
 			wantMsg:    "CREATE TABLE",
+			wantHead:   "Re-run file(s) define structure",
 		},
 		{
 			name:       "re-run file creating an operator",
 			idempotent: true,
 			body:       "CREATE OR REPLACE FUNCTION core.kind_probe_fn(text, int) RETURNS int LANGUAGE sql AS $$ SELECT $2 $$;\n\nCREATE OPERATOR core.?> (LEFTARG = text, RIGHTARG = int, FUNCTION = core.kind_probe_fn);\n",
 			wantMsg:    "CREATE OPERATOR",
+			wantHead:   "Re-run file(s) define structure",
 		},
 		{
 			name:       "re-run file creating a constraint trigger",
 			idempotent: true,
 			body:       "CREATE OR REPLACE FUNCTION core.kind_probe_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$;\n\nCREATE CONSTRAINT TRIGGER kind_probe_tg AFTER INSERT ON core.kind_probe\n    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION core.kind_probe_fn();\n",
 			wantMsg:    "CREATE CONSTRAINT TRIGGER",
+			wantHead:   "Re-run file(s) define structure",
 		},
 	}
 
@@ -92,6 +97,9 @@ func TestAdvancedTemplate_RefusesFileOfTheWrongKind(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), "./core/kind_probe.sql") || !strings.Contains(err.Error(), tt.wantMsg) {
 				t.Fatalf("want an error naming ./core/kind_probe.sql and %s, got: %v", tt.wantMsg, err)
+			}
+			if !strings.Contains(err.Error(), tt.wantHead) {
+				t.Errorf("want the error to say %q, got: %v", tt.wantHead, err)
 			}
 		})
 	}

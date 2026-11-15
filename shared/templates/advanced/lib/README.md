@@ -200,6 +200,7 @@ Tests for the framework itself (not your application).
 | `test_transaction_policy.sql` | Read-only routes and resolve-then-open |
 | `test_approved_schemas.sql` | The application schemas, their grants and the per-schema default privileges are exactly `pg_temp.approved_schema_grant()` and `pg_temp.approved_default_privilege()` in deploy/settings.sql |
 | `test_change_tracking.sql` | Every table `core.apply_change_tracking` lists keeps its trigger, and records each change once with person and agent |
+| `test_deploy_time_sql.sql` | `pg_temp.deploy_time_sql`, the lexer behind the run-once vs re-run check: comments, strings, quoted identifiers and dollar quotes, case by case |
 | `test_dev_entry_points.sql` | `api.open_dev_login_session` exists only while the database is dev |
 | `test_entity_registry.sql` | The entity registry lists registered rows under their own row-level security |
 | `test_error_answer_rollback.sql` | An error answer (REST/RPC 400+, an MCP error or `isError`) leaves no write behind; its exchange row still commits |

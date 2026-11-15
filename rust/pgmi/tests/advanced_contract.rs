@@ -16,27 +16,31 @@ fn refuses_file_of_the_wrong_kind() {
             false,
             "CREATE TABLE core.kind_probe (id int);\n\nCREATE OR REPLACE FUNCTION core.kind_probe_fn() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;\n",
             "CREATE OR REPLACE FUNCTION",
+            "Run-once file(s) define code",
         ),
         (
             "re-run file creating a table",
             true,
             "CREATE OR REPLACE FUNCTION core.kind_probe_fn() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;\n\n  CREATE TABLE core.kind_probe (id int);\n",
             "CREATE TABLE",
+            "Re-run file(s) define structure",
         ),
         (
             "re-run file creating an operator",
             true,
             "CREATE OR REPLACE FUNCTION core.kind_probe_fn(text, int) RETURNS int LANGUAGE sql AS $$ SELECT $2 $$;\n\nCREATE OPERATOR core.?> (LEFTARG = text, RIGHTARG = int, FUNCTION = core.kind_probe_fn);\n",
             "CREATE OPERATOR",
+            "Re-run file(s) define structure",
         ),
         (
             "re-run file creating a constraint trigger",
             true,
             "CREATE OR REPLACE FUNCTION core.kind_probe_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$;\n\nCREATE CONSTRAINT TRIGGER kind_probe_tg AFTER INSERT ON core.kind_probe\n    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION core.kind_probe_fn();\n",
             "CREATE CONSTRAINT TRIGGER",
+            "Re-run file(s) define structure",
         ),
     ];
-    for (i, (name, idempotent, body, want)) in cases.iter().enumerate() {
+    for (i, (name, idempotent, body, want, head)) in cases.iter().enumerate() {
         let file = format!(
             "/*\n<pgmi-meta id=\"ffffffff-0446-4000-8000-00000000000{i}\" idempotent=\"{idempotent}\">\n  <sortKeys><key>900/000</key></sortKeys>\n</pgmi-meta>\n*/\n-- CREATE TABLE in a comment is not a statement\n{body}"
         );
@@ -44,8 +48,8 @@ fn refuses_file_of_the_wrong_kind() {
         let db = pg.database(&format!("pgmi_rs_a_kind_{i}"));
         let text = adv::refused(&deploy(&pg, &project, &db, true, &[("env", "dev")]));
         assert!(
-            text.contains("./core/kind_probe.sql") && text.contains(want),
-            "{name}: want an error naming ./core/kind_probe.sql and {want}, got:\n{text}"
+            text.contains("./core/kind_probe.sql") && text.contains(want) && text.contains(head),
+            "{name}: want an error saying {head:?} and naming ./core/kind_probe.sql and {want}, got:\n{text}"
         );
     }
 }
