@@ -201,7 +201,7 @@ async fn ping_is_answered_and_cancel_stops_a_slow_tool_call() {
 }
 
 #[tokio::test]
-async fn the_end_of_input_cancels_a_call_that_can_commit_and_answers_the_others() {
+async fn the_end_of_input_cancels_a_call_that_can_commit_and_still_answers_it() {
     let (tools, mut probes) = fakes();
     let mut s = Running::start(tools);
     s.send(r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"slow"}}"#)
@@ -219,7 +219,7 @@ async fn the_end_of_input_cancels_a_call_that_can_commit_and_answers_the_others(
         .await
         .unwrap();
     assert!(rest.contains(r#""id":2,"result""#), "{rest}");
-    assert!(!rest.contains(r#""id":1,"#), "{rest}");
+    assert!(rest.contains(r#""id":1,"result""#), "{rest}");
 }
 
 #[tokio::test]

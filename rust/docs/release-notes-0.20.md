@@ -80,9 +80,12 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
 - **`pgmi serve` cancels a running deploy when stdin closes.** Closing
   stdin is how an MCP client shuts the server down, so a deploy still
   running then is cancelled and rolls back what it had not committed yet;
-  work committed before stays. Other tool calls still finish and answer.
-  A script that pipes a deploy call into `pgmi serve` must keep stdin open
-  until the answer arrives; 0.14 finished the deploy after stdin closed.
+  work committed before stays. The cancelled call is still answered
+  (`isError`, exit code 130, the record with what it committed) and stderr
+  names it; other tool calls finish and answer. A script that pipes a
+  deploy call into `pgmi serve` and wants the deploy to run must keep stdin
+  open until the answer arrives; 0.14 finished the deploy after stdin
+  closed.
 - **`pgmi serve` limits.** A request line may hold at most 16 MiB, at most 32
   tool calls run at once, and a client that leaves 1024 answers unread is
   disconnected.

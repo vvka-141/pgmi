@@ -41,6 +41,10 @@ pub(crate) trait Toolbox: Send + Sync + 'static {
         arguments: Option<Box<RawValue>>,
         token: CancellationToken,
     ) -> impl std::future::Future<Output = Outcome> + Send;
+
+    /// Told that the end of input cancelled call `id`, whose answer
+    /// `outcome` is about to be queued for a client that may be gone.
+    fn input_ended(&self, _id: &str, _outcome: &Outcome) {}
 }
 
 /// pgmi's own tools.
@@ -72,6 +76,24 @@ impl Toolbox for Tools {
     ) -> impl std::future::Future<Output = Outcome> + Send {
         tool.call(arguments, self.env.clone(), self.verbose, token)
     }
+
+    fn input_ended(&self, id: &str, outcome: &Outcome) {
+        Reporter::unstamped(self.verbose, &self.env).line(&cancelled_line(id, outcome));
+    }
+}
+
+/// The stderr line for a call the end of input cancelled: a client that
+/// never reads the answer still leaves what was committed in its log.
+fn cancelled_line(id: &str, outcome: &Outcome) -> String {
+    let committed = outcome
+        .structured
+        .as_deref()
+        .and_then(|r| serde_json::from_str::<Value>(r.get()).ok())
+        .and_then(|v| v.get("unitsCommitted").and_then(Value::as_u64))
+        .unwrap_or(0);
+    format!(
+        "pgmi serve: stdin closed; tool call {id} was cancelled after {committed} committed unit(s)"
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -966,6 +988,20 @@ mod tests {
         assert!(e.text().contains("is a symbolic link"), "{}", e.text());
         assert!(!elsewhere.join("created.yaml").exists());
         assert!(!target.join("deploy.sql").exists());
+    }
+
+    #[test]
+    fn a_call_cancelled_by_the_end_of_input_says_what_it_committed() {
+        let committed = Outcome::json(&json!({"status": "failed", "unitsCommitted": 2}));
+        assert_eq!(
+            cancelled_line("7", &committed),
+            "pgmi serve: stdin closed; tool call 7 was cancelled after 2 committed unit(s)"
+        );
+        let refused = Outcome::failed(&Error::config("project path \"/x\" does not exist"));
+        assert_eq!(
+            cancelled_line("\"a\"", &refused),
+            "pgmi serve: stdin closed; tool call \"a\" was cancelled after 0 committed unit(s)"
+        );
     }
 
     #[test]

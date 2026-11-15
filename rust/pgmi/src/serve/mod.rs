@@ -170,7 +170,7 @@ enum Delivery {
 struct Server<T> {
     out: Sender<String>,
     taken: watch::Receiver<u64>,
-    calls: Mutex<HashMap<CallId, CancellationToken>>,
+    calls: Mutex<HashMap<CallId, Call>>,
     slots: Arc<Semaphore>,
     root: CancellationToken,
     /// Cancelled at the end of input; parent of the calls that end with it.
@@ -283,6 +283,14 @@ struct Reader<T> {
     server: Arc<Server<T>>,
     tasks: JoinSet<()>,
     lines: wire::Lines,
+}
+
+/// A tool call in flight. A call the client withdrew
+/// (`notifications/cancelled`) is not answered; one the end of input
+/// cancelled is, so the client's log says what it left behind.
+struct Call {
+    token: CancellationToken,
+    withdrawn: bool,
 }
 
 impl<T: Toolbox> Reader<T> {
@@ -459,7 +467,7 @@ impl<T: Toolbox> Server<T> {
         }
     }
 
-    fn calls(&self) -> MutexGuard<'_, HashMap<CallId, CancellationToken>> {
+    fn calls(&self) -> MutexGuard<'_, HashMap<CallId, Call>> {
         self.calls.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -475,8 +483,9 @@ impl<T: Toolbox> Server<T> {
         else {
             return;
         };
-        if let Some(token) = self.calls().get(&id) {
-            token.cancel();
+        if let Some(call) = self.calls().get_mut(&id) {
+            call.withdrawn = true;
+            call.token.cancel();
         }
     }
 
@@ -598,7 +607,13 @@ impl<T: Toolbox> Server<T> {
                 &format!("{MAX_CALLS} tool calls are already running; wait for one to finish"),
             ));
         };
-        calls.insert(key.clone(), token.clone());
+        calls.insert(
+            key.clone(),
+            Call {
+                token: token.clone(),
+                withdrawn: false,
+            },
+        );
         drop(calls);
         let server = self.clone();
         let slot = Slot::from(permit);
@@ -611,9 +626,12 @@ impl<T: Toolbox> Server<T> {
                 Ok(o) => o,
                 Err(p) => Outcome::panicked(&p),
             };
-            server.calls().remove(&key);
+            let withdrawn = server.calls().remove(&key).is_none_or(|c| c.withdrawn);
             if token.is_cancelled() {
-                return;
+                if withdrawn || server.root.is_cancelled() {
+                    return;
+                }
+                server.tools.input_ended(&id, &outcome);
             }
             let _ = server.queue(wire::result(&id, &outcome.render(era))).await;
             drop(slot);
@@ -733,11 +751,13 @@ mod tests {
     async fn a_request_id_already_in_flight_is_refused() {
         let (server, _rx) = server();
         let busy = CancellationToken::new();
-        server
-            .calls
-            .lock()
-            .unwrap()
-            .insert(CallId::Number("7".into()), busy.clone());
+        server.calls.lock().unwrap().insert(
+            CallId::Number("7".into()),
+            Call {
+                token: busy.clone(),
+                withdrawn: false,
+            },
+        );
         let mut tasks = JoinSet::new();
         let Reply::Now(answer) = server.handle(
             br#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"templates_list","arguments":{}}}"#,

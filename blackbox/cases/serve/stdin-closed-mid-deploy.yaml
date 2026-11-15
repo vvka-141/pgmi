@@ -1,4 +1,4 @@
-description: a client that closes stdin while a deploy tool call runs cancels it, as notifications/cancelled does - the atomic head rolls back, and in the psql tail what committed before stays while the running statement stops (Rust, owner 2026-11-14); Go lets the deploy finish and commit
+description: a client that closes stdin while a deploy tool call runs cancels it, as notifications/cancelled does - the atomic head rolls back, and in the psql tail what committed before stays while the running statement stops (Rust, owner 2026-11-14); Go lets the deploy finish and commit. The cancelled call is still answered (exit code 130, with what it committed) and stderr names it (Rust, PGMI-1034)
 project:
   files:
     deploy.sql: |
@@ -27,7 +27,8 @@ steps:
           rows: [[1]]
       rust:
         exit: 0
-        stdout_not: ['"id":2,']
+        stdout: ['"id":2,"result".*"exitCode":130.*"isError":true']
+        stderr: ['^pgmi serve: stdin closed; tool call 2 was cancelled after 0 committed unit\(s\)$']
         sql:
           - query: SELECT count(*) FROM pg_class WHERE relname = 'in_head'
             rows: [[0]]
@@ -45,7 +46,8 @@ steps:
           rows: [[3]]
       rust:
         exit: 0
-        stdout_not: ['"id":2,']
+        stdout: ['"id":2,"result".*"exitCode":130.*"isError":true']
+        stderr: ['^pgmi serve: stdin closed; tool call 2 was cancelled after 2 committed unit\(s\)$']
         sql:
           - query: SELECT string_agg(relname, ',' ORDER BY relname) FROM pg_class WHERE relname IN ('committed_first', 'in_tail', 'after_sleep')
             rows: [['committed_first,in_tail']]
