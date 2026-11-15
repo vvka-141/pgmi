@@ -224,6 +224,11 @@ accept:
     step: steps[0]
     field: stderr
     rust: '\Apgmi: error: Google Cloud SQL IAM auth requires --google-instance \(project:region:instance\)\n\(connection defaults\)$'
+  - row: '`AWS_MAX_ATTEMPTS`, `AWS_RETRY_MODE` with `--aws`'
+    case: cases/cloud/aws-bad-retry-profile\.yaml
+    field: stderr
+    go: 'failed to load (max_attempts|retry_mode) from shared config'
+    rust: 'the AWS IAM token was refused for user "retry_profile_(abc|bogus)"'
   - row: AWS sign-in without a region
     case: cases/cloud/aws-(iam-token|without-region)\.yaml
     field: stderr
