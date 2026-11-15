@@ -350,6 +350,7 @@ jobs:
       id-token: write
       attestations: write
       artifact-metadata: write
+      actions: write
     env:
       VERSION: ${{ needs.verify.outputs.version }}
     steps:
@@ -386,3 +387,8 @@ jobs:
           cd tap
           git -c user.name=pgmi-bot -c user.email=bot@pgmi.dev commit -am "pgmi $VERSION"
           git -c "http.https://github.com/.extraheader=$auth" push
+      - name: Verify Install
+        if: ${{ !contains(needs.verify.outputs.version, '-') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run verify-install.yml --ref main -f expected_tag="$TAG" -f settle_seconds=600

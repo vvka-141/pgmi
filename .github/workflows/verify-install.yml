@@ -1,8 +1,11 @@
 name: Verify Install
 
-# Installs pgmi through every channel the README documents and checks that
-# each one serves the latest release and that it works. Runs after each
-# release (publishing to the tap lags by minutes) and weekly, because a channel
+# Installs pgmi through every channel the README documents (0.20: the GitHub
+# release assets, install.sh, install.ps1 and Homebrew), on x86-64 and arm64,
+# and checks that each one serves the latest release, built from its tag's
+# commit, and that it works. Runs after each release (the Rust release's
+# publish job dispatches it; publishing to the tap lags by minutes) and
+# weekly, because a channel
 # can break with nothing changing here: a Homebrew deprecation, an install
 # script edited on main. Weekly, not nightly: every run downloads release
 # assets, and nightly runs swamped the download counts.
@@ -18,9 +21,14 @@ on:
         description: 'Tag that must be the latest release (e.g. v0.12.2); empty checks whatever is latest'
         required: false
         default: ''
+      settle_seconds:
+        description: 'Seconds to wait first, so the tap catches up (the release dispatch passes 600)'
+        required: false
+        default: '0'
 
 permissions:
   contents: read
+  attestations: read
 
 # Explicit bash adds pipefail, so a failed `curl | bash` or `brew | tee` fails
 # its own step instead of surfacing later as an empty version.
@@ -35,10 +43,11 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.latest.outputs.version }}
+      commit: ${{ steps.latest.outputs.commit }}
     steps:
       - name: Let the tap catch up
-        if: github.event_name == 'workflow_run'
-        run: sleep 600
+        if: github.event_name == 'workflow_run' || inputs.settle_seconds != '0'
+        run: sleep "${{ github.event_name == 'workflow_run' && '600' || inputs.settle_seconds }}"
 
       # Every channel below is compared against releases/latest, so a release
       # left as a draft or prerelease, or cut from an older commit than the
@@ -56,6 +65,7 @@ jobs:
             exit 1
           fi
           echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "commit=$(gh api "repos/${{ github.repository }}/commits/$tag" --jq .sha)" >> "$GITHUB_OUTPUT"
 
   assets:
     name: Release assets and checksums
@@ -80,20 +90,25 @@ jobs:
           [ "$(wc -l < published)" -eq 8 ] || { echo "::error::$tag should carry six archives and two .deb packages"; cat published; exit 1; }
           diff -u listed published || { echo "::error::checksums.txt disagrees with the digests GitHub publishes for $tag"; exit 1; }
 
+      - name: Attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.expected.outputs.version }}
+        run: |
+          gh release download "v$VERSION" --repo "${{ github.repository }}" --pattern "pgmi_${VERSION}_linux_amd64.tar.gz"
+          gh attestation verify "pgmi_${VERSION}_linux_amd64.tar.gz" --repo "${{ github.repository }}"
+
   linux:
-    name: ${{ matrix.channel }}
+    name: ${{ matrix.channel }} (${{ matrix.os }})
     needs: expected
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        channel: [install.sh, install.sh without sudo, go install]
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+        channel: [install.sh, install.sh without sudo]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        if: matrix.channel == 'go install'
-        with:
-          go-version: '1.27'
 
       - name: Install
         env:
@@ -105,28 +120,32 @@ jobs:
             "install.sh without sudo")
               curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | INSTALL_DIR="$HOME/.local/bin" bash
               echo "$HOME/.local/bin" >> "$GITHUB_PATH" ;;
-            "go install")
-              (cd "$RUNNER_TEMP" && go list -m "github.com/vvka-141/pgmi@v${{ needs.expected.outputs.version }}")
-              go install github.com/vvka-141/pgmi/cmd/pgmi@latest
-              echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH" ;;
           esac
 
-      - name: Serves the latest release
+      - name: Serves the latest release, built from its tag
+        env:
+          WANT: ${{ needs.expected.outputs.version }}
+          COMMIT: ${{ needs.expected.outputs.commit }}
         run: |
+          pgmi --version
           got="$(pgmi --version | head -n 1 | awk '{print $2}')"; got="${got#v}"
-          echo "pgmi --version: $got"
-          if [ "$got" != "${{ needs.expected.outputs.version }}" ]; then
-            echo "::error::${{ matrix.channel }} serves $got, latest release is ${{ needs.expected.outputs.version }}"
-            exit 1
+          [ "$got" = "$WANT" ] || { echo "::error::${{ matrix.channel }} serves $got, latest release is $WANT"; exit 1; }
+          built="$(pgmi --version | sed -n 's/^Commit: \([0-9a-f]*\),.*/\1/p')"
+          if [ -z "$built" ] || [ "${COMMIT#"$built"}" = "$COMMIT" ]; then
+            echo "::error::${{ matrix.channel }} was built from '$built', the tag is ${COMMIT:0:8}"; exit 1
           fi
 
       - name: Documented walkthrough
         run: scripts/verify-walkthrough.sh "$(command -v pgmi)"
 
   homebrew:
-    name: homebrew
+    name: homebrew (${{ matrix.os }})
     needs: expected
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-15-intel]
     steps:
       - name: Install
         run: |
@@ -136,22 +155,30 @@ jobs:
             exit 1
           fi
 
-      - name: Serves the latest release
+      - name: Serves the latest release, built from its tag
+        env:
+          WANT: ${{ needs.expected.outputs.version }}
+          COMMIT: ${{ needs.expected.outputs.commit }}
         run: |
+          pgmi --version
           got="$(pgmi --version | head -n 1 | awk '{print $2}')"; got="${got#v}"
-          echo "pgmi --version: $got"
-          if [ "$got" != "${{ needs.expected.outputs.version }}" ]; then
-            echo "::error::homebrew serves $got, latest release is ${{ needs.expected.outputs.version }}"
-            exit 1
+          [ "$got" = "$WANT" ] || { echo "::error::homebrew serves $got, latest release is $WANT"; exit 1; }
+          built="$(pgmi --version | sed -n 's/^Commit: \([0-9a-f]*\),.*/\1/p')"
+          if [ -z "$built" ] || [ "${COMMIT#"$built"}" = "$COMMIT" ]; then
+            echo "::error::homebrew was built from '$built', the tag is ${COMMIT:0:8}"; exit 1
           fi
 
       - name: Scaffolds a project
         run: pgmi init demo --template basic && test -f demo/deploy.sql
 
   windows:
-    name: install.ps1
+    name: install.ps1 (${{ matrix.os }})
     needs: expected
-    runs-on: windows-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-11-arm]
     steps:
       - name: Install
         shell: pwsh
@@ -164,10 +191,16 @@ jobs:
       - name: Serves the latest release
         shell: pwsh
         run: |
-          $got = ((pgmi --version | Select-Object -First 1) -split ' ')[1].TrimStart('v')
-          "pgmi --version: $got"
+          $lines = @(pgmi --version)
+          $lines
+          $got = ($lines[0] -split ' ')[1].TrimStart('v')
           if ($got -ne "${{ needs.expected.outputs.version }}") {
             "::error::install.ps1 serves $got, latest release is ${{ needs.expected.outputs.version }}"
+            exit 1
+          }
+          $built = if ($lines[1] -match '^Commit: ([0-9a-f]+),') { $Matches[1] } else { '' }
+          if (-not $built -or -not "${{ needs.expected.outputs.commit }}".StartsWith($built)) {
+            "::error::install.ps1 was built from '$built', the tag is ${{ needs.expected.outputs.commit }}"
             exit 1
           }
 
