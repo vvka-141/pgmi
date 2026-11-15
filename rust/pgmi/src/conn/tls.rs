@@ -264,40 +264,48 @@ impl Verifier {
         })
     }
 
-    /// webpki takes a root for its subject and key alone; Go also refuses
-    /// one whose dates do not hold. False only when every root that signed
-    /// the chain's last certificate is outside its validity.
-    fn anchor_current(
+    /// The chain's verdict with only the roots that are valid at `now`:
+    /// webpki takes a root for its subject and key alone, Go also refuses one
+    /// whose dates do not hold. A chain that verifies only through a root
+    /// outside its validity is `Expired`, as Go words it.
+    fn chain_verdict(
         &self,
+        chain: &WebPkiServerVerifier,
         ee: &CertificateDer<'_>,
         im: &[CertificateDer<'_>],
+        name: &ServerName<'_>,
+        ocsp: &[u8],
         now: UnixTime,
-    ) -> bool {
-        use x509_cert::der::{Decode, Encode};
-        let top = im.last().unwrap_or(ee);
-        let Some((tbs, sig_alg, signature)) = signed_parts(top.as_ref()) else {
-            return true;
-        };
-        let Some(issuer) = x509_cert::Certificate::from_der(top.as_ref())
-            .ok()
-            .and_then(|c| c.tbs_certificate().issuer().to_der().ok())
-        else {
-            return true;
-        };
-        let at = now.as_secs();
-        let mut signers = self.roots.iter().filter_map(|r| {
-            let root = x509_cert::Certificate::from_der(r.as_ref()).ok()?;
-            self.signed(&root, &issuer, tbs, sig_alg, signature)
-                .then_some(root)
-        });
-        let mut any = false;
-        let current = signers.any(|root| {
-            any = true;
-            let v = root.tbs_certificate().validity();
-            at >= v.not_before.to_unix_duration().as_secs()
-                && at <= v.not_after.to_unix_duration().as_secs()
-        });
-        current || !any
+    ) -> std::result::Result<ServerCertVerified, rustls::Error> {
+        let through_any_root = || chain.verify_server_cert(ee, im, name, ocsp, now);
+        let current: Vec<_> = self
+            .roots
+            .iter()
+            .filter(|r| valid_at(r, now))
+            .cloned()
+            .collect();
+        if current.len() == self.roots.len() {
+            return through_any_root();
+        }
+        let unknown = rustls::Error::InvalidCertificate(CertificateError::UnknownIssuer);
+        let mut store = RootCertStore::empty();
+        store.add_parsable_certificates(current);
+        let strict =
+            WebPkiServerVerifier::builder_with_provider(Arc::new(store), self.provider.clone())
+                .build()
+                .map_or(Err(unknown.clone()), |v| {
+                    v.verify_server_cert(ee, im, name, ocsp, now)
+                });
+        if !matches!(&strict, Err(e) if *e == unknown) {
+            return strict;
+        }
+        match through_any_root() {
+            Ok(_)
+            | Err(rustls::Error::InvalidCertificate(
+                CertificateError::NotValidForName | CertificateError::NotValidForNameContext { .. },
+            )) => Err(rustls::Error::InvalidCertificate(CertificateError::Expired)),
+            other => other,
+        }
     }
 
     fn root_of(
@@ -348,6 +356,19 @@ impl Verifier {
                     && alg.verify_signature(key, tbs, signature).is_ok()
             })
     }
+}
+
+/// Whether `now` lies inside the certificate's validity; a certificate that
+/// does not decode is left to webpki to judge.
+fn valid_at(der: &CertificateDer<'_>, now: UnixTime) -> bool {
+    use x509_cert::der::Decode;
+    let Ok(cert) = x509_cert::Certificate::from_der(der.as_ref()) else {
+        return true;
+    };
+    let v = cert.tbs_certificate().validity();
+    let at = now.as_secs();
+    at >= v.not_before.to_unix_duration().as_secs()
+        && at <= v.not_after.to_unix_duration().as_secs()
 }
 
 /// Whether the root's name constraints allow every DNS name and IP address
@@ -447,15 +468,7 @@ impl ServerCertVerifier for Verifier {
         let Some(chain) = &self.chain else {
             return Ok(ServerCertVerified::assertion());
         };
-        let result = chain
-            .verify_server_cert(ee, im, name, ocsp, now)
-            .and_then(|ok| {
-                if self.anchor_current(ee, im, now) {
-                    Ok(ok)
-                } else {
-                    Err(rustls::Error::InvalidCertificate(CertificateError::Expired))
-                }
-            });
+        let result = self.chain_verdict(chain, ee, im, name, ocsp, now);
         if result.is_err()
             && let Some(verdict) = self.ca_leaf(ee, name, now)
         {
@@ -1174,6 +1187,91 @@ mod tests {
                 Err(rustls::Error::InvalidCertificate(CertificateError::Expired))
             );
         }
+    }
+
+    const IN_2027: u64 = 500_000;
+
+    fn trusting(roots: &[&[u8]], names: Names) -> Arc<Verifier> {
+        let trusted: Vec<_> = roots.iter().map(|r| cert(r)).collect();
+        let mut store = rustls::RootCertStore::empty();
+        store.add_parsable_certificates(trusted.iter().cloned());
+        let chain = WebPkiServerVerifier::builder_with_provider(Arc::new(store), provider())
+            .build()
+            .unwrap();
+        Verifier::new(Some(chain), trusted, names)
+    }
+
+    fn verdict_with(
+        v: &Verifier,
+        leaf: &[u8],
+        intermediates: &[&[u8]],
+        host: &str,
+    ) -> std::result::Result<(), rustls::Error> {
+        let im: Vec<_> = intermediates.iter().map(|c| cert(c)).collect();
+        v.verify_server_cert(
+            &cert(leaf),
+            &im,
+            &ServerName::try_from(host.to_string()).unwrap(),
+            &[],
+            UnixTime::since_unix_epoch(std::time::Duration::from_hours(IN_2027)),
+        )
+        .map(drop)
+    }
+
+    const EXPIRED_ROOT: &[u8] = include_bytes!("testdata/expired-root.crt");
+    const CURRENT_ROOT: &[u8] = include_bytes!("testdata/current-root.crt");
+    const EXPIRED: std::result::Result<(), rustls::Error> =
+        Err(rustls::Error::InvalidCertificate(CertificateError::Expired));
+
+    #[test]
+    fn an_expired_root_vouches_for_nothing_whatever_the_name_rule() {
+        let other = include_bytes!("testdata/other-leaf-of-expired-root.crt");
+        for roots in [&[EXPIRED_ROOT][..], &[CURRENT_ROOT, EXPIRED_ROOT]] {
+            for names in [Names::Ignore, Names::Check] {
+                assert_eq!(
+                    verdict_with(&trusting(roots, names), other, &[], "localhost"),
+                    EXPIRED
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_appended_certificate_does_not_hide_an_expired_root() {
+        let leaf = include_bytes!("testdata/leaf-of-expired-root.crt");
+        let both = trusting(&[CURRENT_ROOT, EXPIRED_ROOT], Names::Check);
+        for appended in [
+            &[CURRENT_ROOT][..],
+            &[include_bytes!("testdata/other-root.crt")],
+            &[],
+        ] {
+            assert_eq!(verdict_with(&both, leaf, appended, "localhost"), EXPIRED);
+        }
+    }
+
+    #[test]
+    fn a_path_through_a_current_root_is_trusted_when_a_cross_signed_copy_leads_to_an_expired_one() {
+        let leaf = include_bytes!("testdata/leaf-of-intermediate.crt");
+        let by_current = include_bytes!("testdata/intermediate-by-current-root.crt");
+        let by_expired = include_bytes!("testdata/intermediate-by-expired-root.crt");
+        let both = trusting(&[CURRENT_ROOT, EXPIRED_ROOT], Names::Check);
+        verdict_with(&both, leaf, &[by_current, by_expired], "localhost").unwrap();
+        verdict_with(&both, leaf, &[by_expired, by_current], "localhost").unwrap();
+        assert_eq!(
+            verdict_with(&both, leaf, &[by_expired], "localhost"),
+            EXPIRED
+        );
+        assert_eq!(
+            verdict_with(
+                &trusting(&[CURRENT_ROOT], Names::Check),
+                leaf,
+                &[by_expired],
+                "localhost"
+            ),
+            Err(rustls::Error::InvalidCertificate(
+                CertificateError::UnknownIssuer
+            ))
+        );
     }
 
     #[test]
