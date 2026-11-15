@@ -71,7 +71,9 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   A tool call may drop a
   database (`overwrite`) only when `pgmi serve` runs with
   `PGMI_SERVE_ALLOW_OVERWRITE=1`. A `paramsFile` must lie inside the
-  project or a directory of `PGMI_SERVE_ROOTS`. The operator's password
+  project or a directory of `PGMI_SERVE_ROOTS`. The `init` tool obeys
+  `PGMI_SERVE_ROOTS` and refuses a directory that holds a symbolic link, and
+  a server that is not allowed gets no client certificate of the operator. The operator's password
   never goes with a weaker `sslmode`, `channel_binding` or `require_auth`
   than the operator's own. See
   [serve-allowed-hosts](switch-day/serve-allowed-hosts.md).

@@ -174,7 +174,7 @@ impl Blocking {
 
     fn answer(self, arguments: Option<&RawValue>, env: &Env) -> Outcome {
         match self {
-            Blocking::Init => match init(arguments) {
+            Blocking::Init => match init(arguments, env) {
                 Ok(v) => Outcome::json(&v),
                 Err(e) => Outcome::failed(&e),
             },
@@ -227,11 +227,12 @@ impl Blocking {
     }
 }
 
-fn init(arguments: Option<&RawValue>) -> Result<Value, Error> {
+fn init(arguments: Option<&RawValue>, env: &Env) -> Result<Value, Error> {
     let (path, args) = path_argument(arguments, &["name", "path", "template"], "cli.mcpInitArgs")?;
     let template = args.string("template")?.filter(|t| !t.is_empty());
     let template = template.as_deref().unwrap_or("basic");
     let target = std::path::Path::new(&path);
+    scaffold_target(target, env)?;
     init::check_empty(&crate::vfs::OsFs::new(target))?;
     init::scaffold(
         target,
@@ -420,25 +421,69 @@ fn path_argument(
     }
 }
 
-/// The servers the operator's own credentials may go to: the `host:port`s
-/// Keeps a tool call's project and params files where the operator allows:
-/// a params file inside the project, or inside a directory of the
-/// comma-separated `PGMI_SERVE_ROOTS`; when that is set, the project too.
-fn confine(project: &Path, params_files: &[String], env: &Env) -> Result<(), Error> {
-    let real = |p: &Path, what: &str| {
-        p.canonicalize()
-            .map_err(|e| Error::config(format!("{what} {:?}: {e}", p.display().to_string())))
-    };
-    let roots = env
-        .non_empty("PGMI_SERVE_ROOTS")?
+/// The canonical directories of the comma-separated `PGMI_SERVE_ROOTS`, or
+/// `None` when the operator set none: then a tool call may name any path.
+fn serve_roots(env: &Env) -> Result<Option<Vec<PathBuf>>, Error> {
+    env.non_empty("PGMI_SERVE_ROOTS")?
         .map(|v| {
             v.split(',')
                 .map(str::trim)
                 .filter(|r| !r.is_empty())
                 .map(|r| real(Path::new(r), "PGMI_SERVE_ROOTS entry"))
-                .collect::<Result<Vec<_>, Error>>()
+                .collect()
         })
-        .transpose()?;
+        .transpose()
+}
+
+fn real(p: &Path, what: &str) -> Result<PathBuf, Error> {
+    p.canonicalize()
+        .map_err(|e| Error::config(format!("{what} {:?}: {e}", p.display().to_string())))
+}
+
+/// Where a tool call may scaffold a project: inside `PGMI_SERVE_ROOTS` when
+/// the operator set it, and never through a symbolic link in the target,
+/// which could put a file outside it.
+fn scaffold_target(target: &Path, env: &Env) -> Result<(), Error> {
+    if let Some(roots) = serve_roots(env)? {
+        let absolute = std::path::absolute(target)
+            .map_err(|e| Error::config(format!("path {:?}: {e}", target.display().to_string())))?;
+        let existing = absolute
+            .ancestors()
+            .find(|a| a.exists())
+            .unwrap_or(Path::new("/"));
+        let rest = absolute.strip_prefix(existing).unwrap_or(Path::new(""));
+        let resolved = real(existing, "path")?.join(rest);
+        let climbs = rest
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)));
+        if climbs || !roots.iter().any(|r| resolved.starts_with(r)) {
+            return Err(Error::config(format!(
+                "path {:?} is outside PGMI_SERVE_ROOTS, the directories the operator allows",
+                target.display().to_string()
+            )));
+        }
+    }
+    let Ok(entries) = std::fs::read_dir(target) else {
+        return Ok(());
+    };
+    for entry in entries.flatten() {
+        if entry.file_type().is_ok_and(|t| t.is_symlink()) {
+            return Err(Error::config(format!(
+                "{:?} is a symbolic link; pgmi serve does not scaffold into a directory that holds one, since a file could be written outside it",
+                entry.path().display().to_string()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Keeps a tool call's project and params files where the operator allows:
+/// a params file inside the project, or inside a directory of the
+/// comma-separated `PGMI_SERVE_ROOTS`; when that is set, the project too.
+/// A params file is looked at only for a directory that holds a deploy.sql,
+/// so a call cannot name `/` as its project and probe any file.
+fn confine(project: &Path, params_files: &[String], env: &Env) -> Result<(), Error> {
+    let roots = serve_roots(env)?;
     let project = real(project, "project path")?;
     if let Some(roots) = &roots
         && !roots.iter().any(|r| project.starts_with(r))
@@ -447,6 +492,16 @@ fn confine(project: &Path, params_files: &[String], env: &Env) -> Result<(), Err
             "project path {:?} is outside PGMI_SERVE_ROOTS, the directories the operator allows",
             project.display().to_string()
         )));
+    }
+    if !params_files.is_empty() && !project.join("deploy.sql").is_file() {
+        return Err(Error::new(
+            Kind::NoDeploySql,
+            format!(
+                "deploy.sql not found in {}\nexpected: {} — run `pgmi init` to scaffold one; no params file was read",
+                project.display(),
+                project.join("deploy.sql").display()
+            ),
+        ));
     }
     for f in params_files {
         let file = real(Path::new(f), "params file")?;
@@ -834,6 +889,7 @@ mod tests {
     fn a_params_file_outside_the_project_and_the_roots_is_refused() {
         let project = crate::testdir::TempDir::new("serve-confine-project");
         let other = crate::testdir::TempDir::new("serve-confine-other");
+        std::fs::write(project.join("deploy.sql"), "SELECT 1;").unwrap();
         std::fs::write(other.join("p.env"), "K=v\n").unwrap();
         let outside = other.join("p.env").display().to_string();
         let call = |env: &Env| {
@@ -851,8 +907,71 @@ mod tests {
     }
 
     #[test]
+    fn a_project_without_deploy_sql_is_refused_before_its_params_files_are_read() {
+        let dir = crate::testdir::TempDir::new("serve-no-deploy-sql");
+        std::fs::write(dir.join("not-params"), "this is no KEY=VALUE file").unwrap();
+        let call = json!({"path": dir.path(), "paramsFile": dir.join("not-params")});
+        let e = deploy_context(Some(&raw(&call.to_string())), &Env::default(), false)
+            .map(drop)
+            .unwrap_err();
+        assert_eq!(e.exit_code(), 14, "{}", e.text());
+        assert!(e.text().contains("no params file was read"), "{}", e.text());
+        let root = json!({"path": "/", "paramsFile": "/etc/hostname"});
+        let e = deploy_context(Some(&raw(&root.to_string())), &Env::default(), false)
+            .map(drop)
+            .unwrap_err();
+        assert_eq!(e.exit_code(), 14, "{}", e.text());
+    }
+
+    #[test]
+    fn serve_init_stays_inside_the_serve_roots() {
+        let root = crate::testdir::TempDir::new("serve-init-root");
+        let other = crate::testdir::TempDir::new("serve-init-other");
+        let roots = root.path().display().to_string();
+        let env = Env::from_pairs(&[("PGMI_SERVE_ROOTS", &roots)]);
+        for outside in [
+            other.join("new"),
+            root.join("..").join("escaped"),
+            root.join("a").join("..").join("..").join("escaped"),
+        ] {
+            let e = scaffold_target(&outside, &env).unwrap_err();
+            assert_eq!(e.exit_code(), 10, "{}", outside.display());
+            assert!(
+                e.text().contains("outside PGMI_SERVE_ROOTS"),
+                "{}",
+                e.text()
+            );
+        }
+        scaffold_target(&root.join("new").join("deeper"), &env).unwrap();
+        scaffold_target(root.path(), &env).unwrap();
+        scaffold_target(&other.join("new"), &Env::default()).unwrap();
+        let call = json!({"path": other.join("new"), "template": "basic"});
+        let e = init(Some(&raw(&call.to_string())), &env).unwrap_err();
+        assert_eq!(e.exit_code(), 10);
+        assert!(!other.join("new").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn serve_init_refuses_to_write_through_a_symlink() {
+        let dir = crate::testdir::TempDir::new("serve-init-link");
+        let elsewhere = crate::testdir::TempDir::new("serve-init-elsewhere");
+        let target = dir.join("project");
+        std::fs::create_dir(&target).unwrap();
+        std::os::unix::fs::symlink(elsewhere.join("created.yaml"), target.join("pgmi.yaml"))
+            .unwrap();
+        let call = json!({"path": target, "template": "basic"});
+        let e = init(Some(&raw(&call.to_string())), &Env::default()).unwrap_err();
+        assert_eq!(e.exit_code(), 10, "{}", e.text());
+        assert!(e.text().contains("is a symbolic link"), "{}", e.text());
+        assert!(!elsewhere.join("created.yaml").exists());
+        assert!(!target.join("deploy.sql").exists());
+    }
+
+    #[test]
     fn deploy_arguments_map_to_flags() {
         let dir = crate::testdir::TempDir::new("serve-deploy-arguments");
+        std::fs::write(dir.join("deploy.sql"), "SELECT 1;").unwrap();
         let files: Vec<String> = ["a", "b"]
             .iter()
             .map(|f| {

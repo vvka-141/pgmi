@@ -1,4 +1,4 @@
-description: Rust only (PGMI-989). The serve deploy tool reads a paramsFile only inside the project or a directory the operator named in PGMI_SERVE_ROOTS; one elsewhere is refused before connecting (exit 10) and its values never reach the session
+description: Rust only (PGMI-989). The serve deploy tool reads a paramsFile only inside the project or a directory the operator named in PGMI_SERVE_ROOTS; one elsewhere is refused before connecting (exit 10) and its values never reach the session. A params file is read only for a directory that holds a deploy.sql, so a call that names another directory as its project is refused with exit 14 before any file is read (PGMI-1035)
 impl: rust
 home:
   secrets.env: "SECRET=from-home\n"
@@ -37,3 +37,13 @@ steps:
       exit: 0
       stdout:
         - '(?m)^{"jsonrpc":"2.0","id":2,"result":{.*a file outside the project was loaded.*"exitCode":13.*"isError":true}}$'
+  - pgmi: [serve]
+    stdin:
+      - '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"blackbox","version":"1"}}}'
+      - '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{home}","connection":"{conn}","database":"{db}","paramsFile":"{home}/secrets.env"}}}'
+      - {until: '"id":2,', timeout: 30}
+    timeout: 60
+    expect:
+      exit: 0
+      stdout:
+        - '(?m)^{"jsonrpc":"2.0","id":2,"result":{.*deploy\.sql not found in .*no params file was read.*"exitCode":14.*"isError":true}}$'

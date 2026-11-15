@@ -5,7 +5,9 @@
 use std::net::{IpAddr, Ipv6Addr};
 
 use crate::conn::cloud::{Options, Provider};
-use crate::conn::resolve::{self, ChannelBinding, Endpoint, RequireAuth, Spec, SslMode};
+use crate::conn::resolve::{
+    self, ChannelBinding, Endpoint, RequireAuth, Spec, SslCertMode, SslMode,
+};
 use crate::conn::tap;
 use crate::error::{Error, Result};
 
@@ -228,6 +230,12 @@ pub(crate) fn restrict_to_allowed(
         )));
     }
     spec.ambient_passfile = false;
+    let own_certificate = flags.connection.as_ref().is_some_and(|c| {
+        crate::conn::parse::parse(c.expose()).is_ok_and(|f| f.contains_key("sslcert"))
+    });
+    if !own_certificate {
+        spec.sslcertmode = SslCertMode::Disable;
+    }
     if typed {
         return Ok(None);
     }
@@ -251,6 +259,36 @@ mod tests {
             resolve::resolve(&flags, &Env::from_pairs(env), None).unwrap(),
             flags,
         )
+    }
+
+    #[test]
+    fn a_host_not_allowed_gets_no_client_certificate_of_the_operator() {
+        let allowed = ServeHosts::new(Some("db.internal"), None).unwrap();
+        let env = [
+            ("PGSSLCERT", "/operator/client.crt"),
+            ("PGSSLKEY", "/operator/client.key"),
+        ];
+        let mode = |conn: &str| {
+            let (mut spec, flags) = resolved(conn, &env);
+            restrict_to_allowed(&mut spec, &flags, None, &allowed).unwrap();
+            spec.sslcertmode
+        };
+        assert_eq!(
+            mode("host=evil.example user=u dbname=d"),
+            SslCertMode::Disable
+        );
+        assert_eq!(
+            mode("host=evil.example user=u password=typed dbname=d"),
+            SslCertMode::Disable
+        );
+        assert_ne!(
+            mode("host=evil.example user=u dbname=d sslcert=/mine.crt sslkey=/mine.key"),
+            SslCertMode::Disable
+        );
+        assert_ne!(
+            mode("host=db.internal user=u dbname=d"),
+            SslCertMode::Disable
+        );
     }
 
     fn azure() -> (Provider, Options) {
