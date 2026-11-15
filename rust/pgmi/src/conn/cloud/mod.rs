@@ -1,6 +1,7 @@
 mod aws;
 mod azure;
 mod azure_msi;
+mod child;
 mod databricks;
 mod google;
 mod http;

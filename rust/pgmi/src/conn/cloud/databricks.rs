@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -516,7 +515,6 @@ pub(crate) enum CliError {
     NotInstalled,
     Spawn(std::io::Error),
     TimedOut,
-    Wait(std::io::Error),
     Failed(String),
     NoToken,
 }
@@ -525,7 +523,7 @@ impl std::fmt::Display for CliError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CliError::NotInstalled => f.write_str("databricks CLI not found on PATH"),
-            CliError::Spawn(e) | CliError::Wait(e) => e.fmt(f),
+            CliError::Spawn(e) => e.fmt(f),
             CliError::TimedOut => f.write_str("databricks auth token timed out"),
             CliError::Failed(stderr) => write!(f, "databricks auth token failed: {stderr}"),
             CliError::NoToken => f.write_str("databricks auth token printed no access_token"),
@@ -536,7 +534,7 @@ impl std::fmt::Display for CliError {
 impl std::error::Error for CliError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            CliError::Spawn(e) | CliError::Wait(e) => Some(e),
+            CliError::Spawn(e) => Some(e),
             _ => None,
         }
     }
@@ -548,21 +546,15 @@ async fn cli(s: &Settings) -> std::result::Result<Secret, CliError> {
         Some(p) => args.extend(["--profile", p.as_str()]),
         None => args.extend(["--host", s.host.as_str()]),
     }
-    let child = tokio::process::Command::new("databricks")
-        .args(&args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
+    let mut command = tokio::process::Command::new("databricks");
+    command.args(&args);
+    let out = tokio::time::timeout(Duration::from_secs(60), super::child::output(command))
+        .await
+        .map_err(|_| CliError::TimedOut)?
         .map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => CliError::NotInstalled,
             _ => CliError::Spawn(e),
         })?;
-    let out = tokio::time::timeout(Duration::from_secs(60), child.wait_with_output())
-        .await
-        .map_err(|_| CliError::TimedOut)?
-        .map_err(CliError::Wait)?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         return Err(CliError::Failed(stderr.trim().replace('\n', " ")));

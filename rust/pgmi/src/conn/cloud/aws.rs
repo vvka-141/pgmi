@@ -116,12 +116,26 @@ pub(crate) async fn signer(req: &Options, env: &Env) -> Result<Signer> {
     let region = region(req, env)?;
     let retries = retries(env)?;
     let http = SharedHttpClient::new(Reqwest(client()?));
-    let config = aws_config::defaults(BehaviorVersion::latest())
+    let mut loader = aws_config::defaults(BehaviorVersion::latest())
         .region(Region::new(region.clone()))
         .http_client(http)
-        .retry_config(retries)
-        .load()
-        .await;
+        .retry_config(retries);
+    if let Some(command) = profile_process(env).await {
+        loader = loader.credentials_provider(
+            aws_config::meta::credentials::CredentialsProviderChain::first_try(
+                "Environment",
+                aws_config::environment::EnvironmentVariableCredentialsProvider::new(),
+            )
+            .or_else(
+                "CredentialProcess",
+                Process {
+                    command,
+                    patience: process_patience(env),
+                },
+            ),
+        );
+    }
+    let config = loader.load().await;
     let provider = config.credentials_provider().ok_or_else(|| {
         Error::connection("failed to acquire AWS IAM token: no credentials provider")
     })?;
@@ -129,6 +143,160 @@ pub(crate) async fn signer(req: &Options, env: &Env) -> Result<Signer> {
         credentials: Renewing::start(Chain(provider)).await?,
         region,
     })
+}
+
+/// How long a profile's `credential_process` may run, as in Go's SDK.
+const PROCESS_PATIENCE: Duration = Duration::from_mins(1);
+
+#[cfg(feature = "testhooks")]
+fn process_patience(env: &Env) -> Duration {
+    env.non_empty("PGMI_TEST_AWS_PROCESS_SECONDS")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse().ok())
+        .map_or(PROCESS_PATIENCE, Duration::from_secs)
+}
+
+#[cfg(not(feature = "testhooks"))]
+fn process_patience(_: &Env) -> Duration {
+    PROCESS_PATIENCE
+}
+
+/// The selected profile's `credential_process`, when the SDK would run it
+/// for that profile itself: the profile names no role, web identity, SSO,
+/// login session or access key, which the SDK would use first. The SDK runs
+/// the command with neither a time limit nor a kill, so pgmi runs it.
+async fn profile_process(env: &Env) -> Option<String> {
+    let names = [
+        "AWS_CONFIG_FILE",
+        "AWS_SHARED_CREDENTIALS_FILE",
+        "AWS_PROFILE",
+        "HOME",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+    ];
+    let vars: Vec<(&str, &str)> = names
+        .iter()
+        .filter_map(|n| env.get(n).ok().flatten().map(|v| (*n, v)))
+        .collect();
+    let profiles = aws_config::profile::load(
+        &aws_types::os_shim_internal::Fs::real(),
+        &aws_types::os_shim_internal::Env::from_slice(&vars),
+        &aws_runtime::env_config::file::EnvConfigFiles::default(),
+        None,
+    )
+    .await
+    .ok()?;
+    let profile = profiles.get_profile(profiles.selected_profile())?;
+    let shadowed = [
+        "role_arn",
+        "credential_source",
+        "web_identity_token_file",
+        "sso_session",
+        "sso_start_url",
+        "login_session",
+        "aws_access_key_id",
+    ];
+    if shadowed.iter().any(|k| profile.get(k).is_some()) {
+        return None;
+    }
+    profile.get("credential_process").map(str::to_string)
+}
+
+/// A profile's `credential_process`, run in its own process group, given
+/// `patience` and then killed with everything it started.
+#[derive(Debug)]
+struct Process {
+    command: String,
+    patience: Duration,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ProcessCredentials {
+    version: u8,
+    access_key_id: String,
+    secret_access_key: String,
+    session_token: Option<String>,
+    expiration: Option<String>,
+}
+
+impl Process {
+    async fn run(&self) -> aws_credential_types::provider::Result {
+        use aws_credential_types::provider::error::CredentialsError;
+        #[cfg(windows)]
+        let command = {
+            let mut c = tokio::process::Command::new("cmd.exe");
+            c.arg("/C").raw_arg(format!("\"{}\"", self.command));
+            c
+        };
+        #[cfg(not(windows))]
+        let command = {
+            let mut c = tokio::process::Command::new("sh");
+            c.args(["-c", self.command.as_str()]);
+            c
+        };
+        let output = tokio::time::timeout(self.patience, super::child::output(command))
+            .await
+            .map_err(|_| {
+                CredentialsError::provider_error(format!(
+                    "the profile's credential_process did not answer within {} s and was ended",
+                    self.patience.as_secs()
+                ))
+            })?
+            .map_err(|e| {
+                CredentialsError::provider_error(format!(
+                    "the profile's credential_process could not run: {e}"
+                ))
+            })?;
+        if !output.status.success() {
+            return Err(CredentialsError::provider_error(format!(
+                "the profile's credential_process exited with {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        let parsed: ProcessCredentials = serde_json::from_slice(&output.stdout).map_err(|e| {
+            CredentialsError::provider_error(format!(
+                "the profile's credential_process printed no credentials JSON: {e}"
+            ))
+        })?;
+        if parsed.version != 1 {
+            return Err(CredentialsError::provider_error(format!(
+                "the profile's credential_process printed Version {}; only 1 is known",
+                parsed.version
+            )));
+        }
+        let expiry = match parsed.expiration.as_deref() {
+            None => None,
+            Some(text) => Some(SystemTime::from(text.parse::<jiff::Timestamp>().map_err(
+                |e| {
+                    CredentialsError::provider_error(format!(
+                        "the profile's credential_process printed an Expiration that is not a time: {e}"
+                    ))
+                },
+            )?)),
+        };
+        Ok(Credentials::new(
+            parsed.access_key_id,
+            parsed.secret_access_key,
+            parsed.session_token,
+            expiry,
+            "CredentialProcess",
+        ))
+    }
+}
+
+impl ProvideCredentials for Process {
+    fn provide_credentials<'a>(
+        &'a self,
+    ) -> aws_credential_types::provider::future::ProvideCredentials<'a>
+    where
+        Self: 'a,
+    {
+        aws_credential_types::provider::future::ProvideCredentials::new(self.run())
+    }
 }
 
 impl Signer {

@@ -888,6 +888,13 @@ naming the user and pointing at `--username`.
 `--aws`: an RDS IAM token built locally from the AWS credentials
 (`host:port?Action=connect&DBUser=...&X-Amz-...`, valid 900 s), region from
 `--aws-region`, else `AWS_REGION`, else `AWS_DEFAULT_REGION`, else exit 10.
+A `credential_process` gets one minute, as in Go's SDK, also under
+`--timeout 0`; the Rust binary runs the selected profile's
+`credential_process` itself and ends it, with everything it started, at that
+limit or when the deploy stops (`the profile's credential_process did not
+answer within 60 s and was ended`, exit 11). One in a `source_profile` of a
+role profile is run by the AWS SDK, without that limit (PGMI-1049, case
+`cloud/aws-credential-process`, Rust tests `aws_credential_process_hang`).
 `--google`: needs `--google-instance` (exit 10); connects through the Cloud SQL
 connector with IAM authentication, signed in with Application Default
 Credentials: `GOOGLE_APPLICATION_CREDENTIALS`, else gcloud's

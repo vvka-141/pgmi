@@ -337,7 +337,7 @@ jobs:
         env:
           PGMI_TEST_CONN: postgresql://postgres:postgres@127.0.0.1:5432/postgres
           PGMI_REQUIRE_DB: '1'
-        run: cargo test --locked -p pgmi --features testhooks --test panic --test google_cloud_sql
+        run: cargo test --locked -p pgmi --features testhooks --test panic --test google_cloud_sql --test aws_credential_process_hang
       - name: Dependencies (advisories, licences, no C)
         run: cargo deny --locked check
       - name: No C compiler on any release target
