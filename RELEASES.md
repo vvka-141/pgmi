@@ -17,6 +17,72 @@
 > through every documented channel and checks each serves the new version — look
 > at that run before announcing a release.
 
+<!-- DRAFT -->
+## v0.20.0 — TBD
+
+**pgmi is now one Rust program: a single static file, with the same commands, the same session API and the same deploy.sql you already have.** pgmi 0.20 replaces the Go implementation. Everything a pgmi project relies on stays as it was: the session views, `pg_temp.pgmi_*` functions, `CALL pgmi_test()`, the exit codes and the `--json` record. More than 350 black-box cases check the Rust binary, and every case that applies to Go passes on both; each difference that remains is deliberate and listed in Upgrading.
+
+What is new for you: a deploy that hits a transient failure (a lost connection, a server restart, a deadlock, a failover) now retries itself from the start inside `--timeout`, exactly like a redeploy, so pipelines need no retry step of their own. Each download can be checked with `gh attestation verify`, and every archive carries its third-party licence notices.
+
+### What you can do now
+
+Let pgmi ride out a server restart in CI, and see what happened in the record:
+
+```bash
+pgmi deploy ./project -d mydb --timeout 5m --json | jq '{status, exitCode, attempts: (.attempts // [] | length)}'
+```
+
+A test failure or any other SQL error is never retried. Once a unit of deploy.sql has committed, a failure is final, as before, unless you set `retry_after_commit: true` in `pgmi.yaml`. `retry: false` in `pgmi.yaml` turns retrying off ([time box and retries](docs/CLI.md#time-box-and-retries)).
+
+### Requirements
+
+- **CPU.** pgmi's TLS and cloud sign-in need, on x86-64: AES-NI, PCLMULQDQ, SSSE3, AVX, AVX2, BMI1, BMI2 and ADX (Intel Broadwell, AMD Zen and later, about 2014 on). On arm64 they need NEON, AES, PMULL and SHA2 (Apple silicon, AWS Graviton, Raspberry Pi 5; not Raspberry Pi 4). On a CPU without them:
+  - `sslmode=require`, `verify-ca`, `verify-full` and any cloud sign-in stop with exit 10 and name the missing features;
+  - `allow` and `prefer` (the default) connect without TLS, as a libpq built without SSL does, with a `WARNING:` on stderr and in `--json` `warnings`.
+
+  Unix sockets and commands that need no encryption run on any CPU.
+- **PostgreSQL 15 or later**, as before.
+
+### Upgrading
+
+- **Install.** 0.20 ships as the GitHub release archives (and `.deb` files on the release page), through Homebrew, and through `install.sh` and `install.ps1`. `go install` no longer installs current pgmi. Check a download with `gh attestation verify <file> --repo vvka-141/pgmi`.
+- **The Go library is gone.** pgmi 0.20 is a Rust program with no library crate. Go programs that embedded `pkg/pgmi` pin the `go-legacy` tag, or call `pgmi deploy --json` and read the record.
+- **Newly refused before connecting (exit 10).** Check your CI for these:
+  - a client private key that group or others can read (`chmod 600` it);
+  - a project `.env` or `.pgmiignore` that exists but cannot be read;
+  - a project `.env` that sets a key locating credentials, endpoints, proxies or trust roots (`AWS_PROFILE`, `PGSSLROOTCERT`, `PGPASSFILE`, `HTTPS_PROXY` and the others listed in the contract). Set them in the environment pgmi runs in;
+  - two `<pgmi-meta>` blocks in one file, or an attribute written twice;
+  - `sslrootcert=system` with an explicit sslmode weaker than `verify-full`;
+  - a `pgmi.yaml` with two documents, `port: 0` or a negative timeout;
+  - `deploy` on a terminal with no connection configured. It no longer opens the wizard; `pgmi init` and `pgmi config` keep theirs.
+- **Exit codes that moved.** A connection reset mid-deploy is exit 13 once the session is open. Google sign-in without Application Default Credentials is exit 11 (was 1). `pgmi help <unknown topic>` is exit 2.
+- **`pgmi serve` guards the operator's credentials.** The operator's password, password file and cloud sign-in go only to the operator's own server and to the hosts in `PGMI_SERVE_HOSTS`. Dropping a database needs `PGMI_SERVE_ALLOW_OVERWRITE=1`. A `paramsFile` must lie inside the project or a directory in `PGMI_SERVE_ROOTS`. Closing stdin cancels a running deploy, so a script that pipes a deploy call into `pgmi serve` must keep stdin open until the answer arrives ([CLI reference](docs/CLI.md)).
+- **Advanced-template projects.** `session.xml` becomes `deploy/parameters.xml` (root element `<parameters>`), and parameters are read only as `pgmi.<key>`; the `deployment.<key>` copies are gone.
+  - Replace `current_setting('deployment.<key>')` with `current_setting('pgmi.<key>')` in your files, except in run-once files that already ran: an edit there is refused as drift.
+  - A project whose `lib/internal/environment.sql` already ran keeps one line in `deploy/parameters.sql`, beside the `pgmi.` `set_config`: `PERFORM set_config('deployment.env', v_param.value, false) WHERE v_param.key = 'env';`
+- **Session API contract:** still version 1. New: `pg_temp.pgmi_run_file(path)`, which pgmi 0.14 does not create; a project scaffolded by 0.20 needs 0.20.
+- **Every difference from 0.14**, with old and new exit codes, is in the table [Behaviour changes in 0.20](docs/design/behaviour-contract.md#behaviour-changes-in-020).
+
+### Also in this release
+
+- **Security fix: functions planted in a schema on the search_path.** pgmi now sets up its session objects under `search_path = pg_catalog, pg_temp` and calls every built-in by its `pg_catalog` name. Before, a role that could create functions in a schema on the deployer's `search_path` (`public` up to PostgreSQL 14, and on clusters upgraded from it) could have pgmi run its function with the deployer's rights during session set-up. **pgmi 0.14 is affected too.**
+- **Secrets stay out of the output.** The connection password and every sign-in token are shown as `***` wherever pgmi prints them: notices, errors, `--json` and `pgmi serve` answers.
+- **Server text cannot drive the terminal.** Escape sequences and other control characters in notices, errors and file names are shown escaped on stderr; the `--json` record keeps the original text.
+- **`--json` always ends with a record,** also when a project `.env` cannot be read or the runtime cannot start.
+- **One unreachable host no longer uses the whole time box.** With several hosts and no `connect_timeout`, each host but the last gets at most its share of `--timeout` (and at most 30 s).
+- **A stopped `CREATE INDEX CONCURRENTLY` is named.** pgmi says an INVALID index may be left, and how to find and drop it.
+- **`sslmode=verify-ca` without a root file checks the host name,** because the system trust store then vouches for the server.
+- **Revocation lists are never dropped quietly.** pgmi does not check `PGSSLCRL` or `PGSSLCRLDIR`. Under `verify-ca` or `verify-full` it refuses them (exit 10); otherwise it warns.
+- **Templates on managed clouds.** `pgmi init` no longer writes `sslmode: prefer`, so a new project works with `--azure`, `--aws`, `--google` and `--databricks` as it is. The advanced template names a login's missing `CREATEDB` or `CREATEROLE`, and extensions Azure has not allow-listed, before it changes anything. On Databricks Lakebase it sets its provider parameters itself.
+- **The advanced template's deploy.sql reads top to bottom,** in five banners (PREFLIGHT, BOOTSTRAP, DEPLOY, VERIFY, TAIL) with the file loop in plain sight. Its setup lives in `deploy/` files that it runs by name.
+- **Google Cloud SQL** goes through pgmi's own dialer, and a transient connection failure is retried as on every other route.
+
+### Known issues
+
+- Google sign-in uses google-cloud-auth's own HTTP clients, which follow redirects and read a reply without pgmi's size cap. The token endpoints come from your own Google configuration.
+- The Windows arm64 binary is tested with `--version`, and with a deploy only when the test runner has PostgreSQL.
+- On a CPU without the TLS features, the "connects without TLS" warning appears twice when `--overwrite` connects to the maintenance database first.
+
 ## v0.14.1 — 2026-11-09
 
 **You can now deploy the advanced template to Databricks Lakebase, from your machine or from a serverless job in a Databricks bundle.** Lakebase grants its own roles on every schema and table it sees created; two deploy parameters name those roles, the deploy takes back what row-level security cannot hold, and the template's grant checks pass. This was verified on a real Lakebase project. The refusal log and the request log now sit behind row-level security too, so a provider's reader sees no organization's data in them. A new page, [Databricks Lakebase](docs/LAKEBASE.md), walks through the credential, the bundle job and a test-gated deploy on a Lakebase branch.

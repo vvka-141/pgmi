@@ -1,8 +1,9 @@
 # 0.20 release notes: material collected before switch day
 
-Switch day (PGMI-835) moves this into `RELEASES.md` and the README, then
-deletes this file. Until then the README describes the Go binary, so the
-Rust-only requirements live here.
+**Superseded on 2026-11-15:** the 0.20 notes are drafted in `RELEASES.md`
+(section `v0.20.0`, marked DRAFT) and the README carries the requirements.
+Edit there. This file stays as the source list until switch day removes it
+with the Go code (PGMI-835).
 
 ## Requirements (README "Requirements" line)
 
