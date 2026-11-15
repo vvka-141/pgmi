@@ -58,31 +58,35 @@ a database cannot drop itself.
 
 ![Secrets as parameters: a CI-generated params file flows into one PostgreSQL session where your SQL reads current_setting('pgmi.*'); the command line, pgmi's logs, and disk are never on the path](diagrams/d08-secrets-flow.drawio.svg)
 
-Every pgmi-internal database operation uses **parameterized queries** (`$1`, `$2` placeholders). Parameter values are never interpolated into SQL strings by pgmi itself. This eliminates SQL injection in pgmi's own code; your `deploy.sql` and application SQL are your responsibility.
+Every pgmi-internal database operation sends its values as **bind parameters** (`$1` placeholders). Parameter values are never interpolated into SQL strings by pgmi itself. This eliminates SQL injection in pgmi's own code; your `deploy.sql` and application SQL are your responsibility.
+
+pgmi sets up its session objects under `search_path = pg_catalog, pg_temp`, calls every built-in by its `pg_catalog` name, and gives each helper function its own `search_path`; the deploy's own `search_path` is restored before `deploy.sql` runs. A role that can create functions in a schema on the deployer's `search_path` therefore cannot have pgmi run its function with the deployer's rights during session set-up.
 
 ## What pgmi Logs
 
 The **pgmi core CLI** logs **parameter counts only**, never keys or values — even in `--verbose` mode.
 
 ```
-[VERBOSE] Loaded 3 parameters from file (total: 3)
+[VERBOSE] Loaded 3 parameter(s) from file (total: 3)
 [VERBOSE] CLI parameters override 1 value(s)
-[VERBOSE] Loading parameters into pg_temp._pgmi_parameter
-Loaded 4 parameters
+Loaded 4 parameter(s)
 ```
 
 No parameter name, value, or hint about content ever appears in **pgmi's own (core CLI) output**.
 
 ### Connection passwords in error messages
 
-An error message can quote back the connection string it failed on — `net/url`
-does exactly that when a password contains an unescaped `@`, and again when one
-contains a bare `%`. pgmi redacts the password before that text reaches stderr,
-`--json`, MCP `structuredContent`, or the connection wizard's on-screen error,
-covering the URI form (`postgresql://user:secret@host/db`, including a `secret`
-that itself contains `@`), the keyword form (`password=`, `sslpassword=`), and
-the quoted ADO.NET form (`Password='p ass'`). The host, user and failure reason
-are preserved — a redacted message still has to be diagnosable.
+A connection-string parse error never quotes the string: it names what is
+wrong (an unknown option, a bad port), not the input, which may hold a
+password. An unknown option written after a password is not named either,
+since it may be the password's rest. The host, user and failure reason are
+preserved — a refusal still has to be diagnosable.
+
+Known secrets are shown as `***` wherever pgmi prints them: the connection
+password, `sslpassword` and every sign-in token, in notices, errors, `--json`,
+`pgmi serve` answers and the connection wizard's on-screen error, also where
+the secret is part of a longer word. A password equal to the login or a
+database name is not hidden, since pgmi prints those names anyway.
 
 ### Your SQL controls its own logging
 
@@ -94,15 +98,15 @@ This guarantee covers only pgmi core. Your `deploy.sql` and template SQL run wit
 - **A failing top-level statement has its source line echoed back**, psql-style, with a caret under the error position:
 
   ```
-  pgmi: error: execution failed: ERROR: unrecognized role option "totally_bogus_keyword" (SQLSTATE 42601)
+  pgmi: error: ERROR: unrecognized role option "totally_bogus_keyword" (SQLSTATE 42601)
   LOCATION: deploy.sql line 1, column 42
-  LINE 1: CREATE ROLE app LOGIN PASSWORD 'hunter2' TOTALLY_BOGUS_KEYWORD;
+  LINE 1: CREATE ROLE app LOGIN PASSWORD [redacted] TOTALLY_BOGUS_KEYWORD;
                                                    ^
   ```
 
-  This is pgmi's own output, so `log_statement = 'none'` does not suppress it — a secret written **literally** into `deploy.sql` reaches stderr, `--json` and CI logs on any error on that line. Suppressing the line is not the fix; it is what makes a syntax error diagnosable.
+  This is pgmi's own output, so `log_statement = 'none'` does not suppress it. pgmi redacts a SQL `PASSWORD '...'` literal, as above, but any other secret written **literally** into `deploy.sql` reaches stderr, `--json` and CI logs on any error on that line. Suppressing the line is not the fix; it is what makes a syntax error diagnosable.
 
-  **Parameters are not exposed this way.** A value passed via `--params-file` reaches SQL through `current_setting('pgmi.key')`, evaluated server-side, so it is never part of the statement text pgmi holds or echoes — including when that statement fails. The exception is your own SQL interpolating it with `format(... %L ...)` inside `EXECUTE`. A syntax error there carries no statement context, but a runtime error (permission denied, duplicate role) carries the expanded statement as `CONTEXT`, value included, and PostgreSQL also writes that `CONTEXT` to the server log under `log_min_error_statement`. pgmi redacts a SQL `PASSWORD '...'` literal from stderr, `--json` and MCP output, but it cannot redact the server log or any other secret. Wrap every statement that expands a secret in `BEGIN ... EXCEPTION WHEN OTHERS THEN RAISE EXCEPTION USING ERRCODE = SQLSTATE, MESSAGE = ...` and leave the original `CONTEXT` behind, as the advanced template does for its admin role. Pinned by `TestParameterValuesNeverReachDeployErrors` and `TestAdvancedTemplate_AdminPasswordNeverInRoleError`.
+  **Parameters are not exposed this way.** A value passed via `--params-file` reaches SQL through `current_setting('pgmi.key')`, evaluated server-side, so it is never part of the statement text pgmi holds or echoes — including when that statement fails. The exception is your own SQL interpolating it with `format(... %L ...)` inside `EXECUTE`. A syntax error there carries no statement context, but a runtime error (permission denied, duplicate role) carries the expanded statement as `CONTEXT`, value included, and PostgreSQL also writes that `CONTEXT` to the server log under `log_min_error_statement`. pgmi redacts a SQL `PASSWORD '...'` literal from stderr, `--json` and MCP output, but it cannot redact the server log or any other secret. Wrap every statement that expands a secret in `BEGIN ... EXCEPTION WHEN OTHERS THEN RAISE EXCEPTION USING ERRCODE = SQLSTATE, MESSAGE = ...` and leave the original `CONTEXT` behind, as the advanced template does for its admin role. Pinned by the black-box cases `errors/parameter-value-not-in-statement-echo` and `errors/diagnostics-secrets`.
 
 ## Threat Model
 
@@ -128,7 +132,7 @@ A process's environment is readable only by the same user and root (`/proc/<pid>
 
 **Risk: Medium** — depends on server configuration.
 
-pgmi sets session variables with `set_config($1, $2, false)`, sending each value as a bind parameter. PostgreSQL writes bind parameter values to its log, in full by default, whenever it logs the statement: under `log_statement = 'all'`, under `log_min_duration_statement` / `log_min_duration_sample` (including `0`, which logs every statement), and through auto_explain. This is PostgreSQL's behavior, not pgmi's.
+pgmi sets session variables with `set_config('pgmi.' || key, value, false)` over one JSON bind parameter that holds every key and value. PostgreSQL writes bind parameter values to its log, in full by default, whenever it logs the statement: under `log_statement = 'all'`, under `log_min_duration_statement` / `log_min_duration_sample` (including `0`, which logs every statement), and through auto_explain. This is PostgreSQL's behavior, not pgmi's.
 
 **Mitigation:** Set `log_parameter_max_length = 0` (and `auto_explain.log_parameter_max_length = 0` if auto_explain is loaded) on servers that receive secrets. Statements are still logged, without their parameter values. `log_statement = 'ddl'` alone does not cover the duration logs. Otherwise treat server logs as sensitive and access-controlled.
 

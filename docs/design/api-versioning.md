@@ -22,7 +22,7 @@ Before this change, deploy.sql scripts referenced internal tables like `pg_temp.
 
 **Use case:** A CI/CD pipeline uses `pgmi deploy --compat=1`. When a later pgmi changes its internal tables, the pipeline's queries still resolve because every v1 view names its columns. `--compat` does not pin behavior: plan ordering, which files load, and how deploy.sql is sent follow the binary version.
 
-**Pre-1.0 promise (supersedes "backward compatible" below):** before pgmi 1.0 the v1 contract may change in a minor release. Every change is listed under Upgrading in that release's notes, and `internal/contract/testdata/session-api.snapshot` makes each one a deliberate diff. No contract-version bump and no old contract files are kept for these changes.
+**Pre-1.0 promise (supersedes "backward compatible" below):** before pgmi 1.0 the v1 contract may change in a minor release. Every change is listed under Upgrading in that release's notes, and a snapshot of the session API in the test suite makes each one a deliberate diff. No contract-version bump and no old contract files are kept for these changes.
 
 ---
 
@@ -37,7 +37,7 @@ Before this change, deploy.sql scripts referenced internal tables like `pg_temp.
 | Deprecation policy | Pre-1.0: may change in a minor release, listed under Upgrading | No version removal; behavior follows the binary version |
 | File naming | `api-v1.sql`, `api-v2.sql` | Major versions only, no semver in filenames |
 | `pgmi_plan_view` location | Moves to `api-v1.sql` | It's part of the public API, references internal tables |
-| Macro code generation | SQL function returns replacement code | Go calls `pgmi_test_generate()`, replaces macro with result |
+| Macro code generation | SQL function returns replacement code | pgmi calls `pgmi_test_generate()`, replaces macro with result |
 
 ---
 
@@ -65,7 +65,7 @@ Before this change, deploy.sql scripts referenced internal tables like `pg_temp.
 |----------|---------|
 | `pgmi_test_plan(pattern)` | Return test execution plan |
 | `pgmi_is_sql_file(filename)` | Check SQL file extension |
-| `pgmi_register_file(...)` | Internal: Go calls to insert files |
+| `pgmi_register_file(...)` | Internal: pgmi calls it to insert files |
 | `pgmi_validate_pattern(pattern)` | Internal: Regex validation |
 | `pgmi_has_tests(dir, pattern)` | Internal: Recursive test discovery |
 | `pgmi_persist_test_plan(schema, pattern)` | Export test plan to permanent table |
@@ -79,9 +79,9 @@ Before this change, deploy.sql scripts referenced internal tables like `pg_temp.
 ### File Structure
 
 ```
-internal/params/
+shared/session/
   schema.sql          # Internal tables (_pgmi_*) and most functions, always executes first
-internal/contract/
+shared/contract/
   api-v1.sql          # V1 views and pgmi_test_generate
   api-v2.sql          # Future: V2 contract (when needed)
 ```
@@ -121,7 +121,7 @@ Functions that are part of the v1 contract. Only `pgmi_test_generate` lives in `
 **Note:** Parameter functions (`pgmi_declare_param`, `pgmi_get_param`) were removed. Parameters are accessed via `current_setting('pgmi.key', true)`. Templates handle declaration, validation, and defaults.
 
 Internal functions (not part of public API, stay in `schema.sql`):
-- `pgmi_register_file(...)` - called by Go only
+- `pgmi_register_file(...)` - called by pgmi only
 - `pgmi_validate_pattern(...)` - internal helper
 - `pgmi_has_tests(...)` - internal helper
 
@@ -129,12 +129,12 @@ Internal functions (not part of public API, stay in `schema.sql`):
 
 ## Macro Code Generation Architecture
 
-### Current State (Go generates SQL)
+### Previous State (the binary generates SQL)
 
-The Go preprocessor in `internal/preprocessor/` finds `pgmi_test()` or `CALL pgmi_test()` calls and replaces them with a large DO block containing loops, savepoints, and EXECUTE statements. This means:
-- Go needs to know internal table names
-- Different API versions would require different Go code
-- SQL generation logic is split between Go and SQL
+The preprocessor found `pgmi_test()` or `CALL pgmi_test()` calls and replaced them with a large DO block containing loops, savepoints, and EXECUTE statements, written in the binary's own code. This meant:
+- The binary needed to know internal table names
+- Different API versions would require different code in the binary
+- SQL generation logic was split between the binary and SQL
 
 ### Target State (SQL generates SQL)
 
@@ -142,7 +142,7 @@ Move code generation to a SQL function that returns the replacement code as TEXT
 
 ```
 ┌─────────────────┐     ┌────────────────────────────┐     ┌──────────────────┐
-│ Go preprocessor │ ──► │ SELECT pgmi_test_generate( │ ──► │ Go replaces      │
+│ preprocessor    │ ──► │ SELECT pgmi_test_generate( │ ──► │ pgmi replaces    │
 │ finds macro     │     │   'pattern', 'callback')   │     │ macro with       │
 │ pgmi_test(...)  │     │ Returns: DO $$ ... END $$  │     │ returned SQL     │
 └─────────────────┘     └────────────────────────────┘     └──────────────────┘
@@ -231,171 +231,49 @@ $$;
 
 COMMENT ON FUNCTION pg_temp.pgmi_test_generate IS
 'Generates the SQL code for pgmi_test() macro expansion.
-Called by Go preprocessor, returns a DO block as TEXT.
+Called by the preprocessor, returns a DO block as TEXT.
 Part of the versioned API contract - v1 generates code referencing v1 internal tables.';
 ```
 
 > **Implementation Note:** The actual implementation in `api-v1.sql` differs from this proposal. Instead of generating a single DO block containing SAVEPOINT commands (which would fail because PL/pgSQL doesn't support savepoints), the actual implementation generates a series of top-level SQL statements where SAVEPOINT/ROLLBACK are at the SQL level and each fixture or test runs through a constant `DO` block that `EXECUTE`s its content (the path is passed through `set_config('pgmi_test.path', …)`, never inside the dollar quote). See `shared/contract/api-v1.sql` for the working implementation.
 
-### Updated Go Preprocessor Flow
+### Expansion flow
 
-```go
-// internal/preprocessor/preprocessor.go
-
-func (p *Preprocessor) ExpandMacros(ctx context.Context, conn *pgxpool.Conn, sql string) (string, error) {
-    // Find all pgmi_test(...) or CALL pgmi_test(...) calls
-    matches := pgmiTestRegex.FindAllStringSubmatchIndex(sql, -1)
-
-    for _, match := range matches {
-        pattern, callback := extractArguments(sql, match)
-
-        // Call the SQL generator function (part of versioned API)
-        var generatedSQL string
-        err := conn.QueryRow(ctx,
-            "SELECT pg_temp.pgmi_test_generate($1, $2)",
-            pattern, callback,
-        ).Scan(&generatedSQL)
-        if err != nil {
-            return "", fmt.Errorf("macro expansion failed: %w", err)
-        }
-
-        // Replace macro with generated SQL
-        sql = replaceMacro(sql, match, generatedSQL)
-    }
-
-    return sql, nil
-}
-```
+pgmi finds each `CALL pgmi_test(...)` in deploy.sql, calls
+`SELECT pg_temp.pgmi_test_generate($1, $2)` with the pattern and the callback
+as bind parameters, and puts the returned SQL in the macro's place.
 
 ### Benefits of This Approach
 
 1. **Version isolation:** v1 generator knows v1 internals, v2 generator knows v2 internals
-2. **Go becomes version-agnostic:** Just calls `pgmi_test_generate()`, doesn't know table names
+2. **The binary becomes version-agnostic:** Just calls `pgmi_test_generate()`, doesn't know table names
 3. **SQL generation in SQL:** More natural, easier to maintain and test
 4. **Testable:** Unit test the generator function independently
 5. **Consistent behavior:** Generated code is deterministic and versioned
 
 ---
 
-## Go Implementation
+## Implementation
 
-### New Package: `internal/contract`
-
-```go
-// internal/contract/contract.go
-package contract
-
-import "embed"
-
-//go:embed api-v1.sql
-//go:embed api-v2.sql
-var embeddedAPIs embed.FS
-
-type Version string
-
-const (
-    V1      Version = "1"
-    Latest  Version = V1  // Update when new version released
-)
-
-var supportedVersions = map[Version]string{
-    V1: "api-v1.sql",
-}
-
-type Contract struct {
-    Version Version
-    SQL     string
-}
-
-// Load returns the API contract for the specified version.
-// Returns error if version is not supported.
-func Load(version string) (*Contract, error) {
-    v := Version(version)
-    if v == "" {
-        v = Latest
-    }
-
-    filename, ok := supportedVersions[v]
-    if !ok {
-        return nil, fmt.Errorf("unsupported API version %q; supported: %v",
-            version, SupportedVersions())
-    }
-
-    content, err := embeddedAPIs.ReadFile(filename)
-    if err != nil {
-        return nil, fmt.Errorf("failed to load API v%s: %w", version, err)
-    }
-
-    return &Contract{Version: v, SQL: string(content)}, nil
-}
-
-// SupportedVersions returns list of supported API versions.
-func SupportedVersions() []Version {
-    versions := make([]Version, 0, len(supportedVersions))
-    for v := range supportedVersions {
-        versions = append(versions, v)
-    }
-    sort.Slice(versions, func(i, j int) bool {
-        return versions[i] < versions[j]
-    })
-    return versions
-}
-```
-
-### CLI Flag Addition
-
-In `internal/cli/deploy.go`:
-
-```go
-var compat string
-
-func init() {
-    deployCmd.Flags().StringVar(&compat, "compat", "",
-        "Compatibility level (default: latest)")
-}
-```
-
-### Deployer Integration
-
-In `internal/services/deployer.go`, after executing `schema.sql`:
-
-```go
-// Load and execute API contract
-contract, err := contract.Load(cfg.Compat)
-if err != nil {
-    return fmt.Errorf("API contract error: %w", err)
-}
-
-if _, err := conn.Exec(ctx, contract.SQL); err != nil {
-    return fmt.Errorf("failed to initialize API v%s: %w", contract.Version, err)
-}
-```
+The binary embeds one contract file per version (`shared/contract/api-v1.sql`).
+`--compat` names the version; an empty value means the latest, and a version
+the binary does not ship is refused before connecting (exit 10,
+`unsupported API version "99"; supported: 1`). After `schema.sql`, pgmi runs
+the chosen contract file in the session.
 
 ### Execution Order
 
 ```
 1. schema.sql          → Creates internal tables (_pgmi_*), internal functions
-2. Go inserts files    → _pgmi_source via pgmi_register_file()
-3. Go inserts params   → _pgmi_parameter
+2. pgmi inserts files  → _pgmi_source via pgmi_register_file()
+3. pgmi inserts params → _pgmi_parameter
 4. api-v{N}.sql        → Creates versioned views, public functions, pgmi_test_generate()
-5. Go preprocessor     → Calls pgmi_test_generate() to expand macros in deploy.sql
+5. preprocessor        → Calls pgmi_test_generate() to expand macros in deploy.sql
 6. deploy.sql executes → Uses views (pgmi_source_view, pgmi_plan_view, etc.)
 ```
 
 **Critical:** Step 4 (api-v{N}.sql) must execute BEFORE step 5 (preprocessing) because the preprocessor calls `pgmi_test_generate()` which is defined in the API contract.
 
-### Loader Code Updates
-
-`internal/files/loader/loader.go` directly references table names for batch inserts:
-
-| Current | New |
-|---------|-----|
-| `pg_temp.pgmi_test_source` | `pg_temp._pgmi_test_source` |
-| `pg_temp.pgmi_test_directory` | `pg_temp._pgmi_test_directory` |
-
-The `pgmi_register_file()` function (stays in `schema.sql`) handles `_pgmi_source` internally, so loader code calling it doesn't need changes for that table.
-
----
 
 ## Template Updates
 
@@ -445,72 +323,10 @@ Update embedded documentation to reference the public API only.
 
 ## Testing Strategy
 
-### Unit Tests (`internal/contract/contract_test.go`)
-
-```go
-func TestLoad_ValidVersion(t *testing.T) {
-    c, err := contract.Load("1")
-    require.NoError(t, err)
-    assert.Equal(t, contract.V1, c.Version)
-    assert.Contains(t, c.SQL, "pgmi_source_view")
-}
-
-func TestLoad_EmptyVersionUsesLatest(t *testing.T) {
-    c, err := contract.Load("")
-    require.NoError(t, err)
-    assert.Equal(t, contract.Latest, c.Version)
-}
-
-func TestLoad_UnsupportedVersion(t *testing.T) {
-    _, err := contract.Load("99")
-    require.Error(t, err)
-    assert.Contains(t, err.Error(), "unsupported API version")
-}
-
-func TestSupportedVersions(t *testing.T) {
-    versions := contract.SupportedVersions()
-    assert.Contains(t, versions, contract.V1)
-}
-```
-
-### Integration Tests
-
-1. **Template deployment with default version:**
-   - Run existing `TestTemplateDeployment` - should pass unchanged
-
-2. **Template deployment with explicit version:**
-   ```go
-   func TestTemplateDeployment_ExplicitCompat(t *testing.T) {
-       // Deploy with --compat=1
-       // Verify views exist
-       // Verify deploy.sql can query pgmi_source_view
-   }
-   ```
-
-3. **Unsupported version error:**
-   ```go
-   func TestDeploy_UnsupportedCompat(t *testing.T) {
-       // Deploy with --compat=99
-       // Expect clear error message listing supported versions
-   }
-   ```
-
-4. **View functionality:**
-   ```go
-   func TestAPIViews_MatchTableContent(t *testing.T) {
-       // Insert test data into _pgmi_source
-       // Query pgmi_source_view
-       // Verify identical results
-   }
-   ```
-
-### Regression Tests
-
-Run full test suite to ensure nothing breaks:
-```bash
-make test-all
-make test-integration
-```
+The unit tests cover loading a valid version, the latest for an empty value,
+and the refusal of an unsupported one. The integration tests deploy both
+templates with and without `--compat=1` and check that each view returns what
+its internal table holds.
 
 ---
 
@@ -536,35 +352,17 @@ make test-integration
    - Move `pgmi_plan_view` from `schema.sql` (update to reference `_pgmi_*`)
    - Add simple views: `pgmi_source_view`, `pgmi_parameter_view`, etc.
    - Move public functions: `pgmi_test_plan()`, etc. (Note: `pgmi_get_param()` and `pgmi_declare_param()` were removed)
-   - Add `pgmi_test_generate()` function (migrate logic from Go preprocessor)
+   - Add `pgmi_test_generate()` function (migrate logic from the preprocessor)
    - Add `pgmi_test_callback()` default callback
 
-4. **Update loader code (`internal/files/loader/loader.go`):**
-   - `pgmi_test_source` → `_pgmi_test_source`
-   - `pgmi_test_directory` → `_pgmi_test_directory`
+4. **Update the file loader** to insert into `_pgmi_test_source` and `_pgmi_test_directory`.
 
-### Phase 2: Go Infrastructure
+### Phase 2: Loading the contract
 
-5. **Create `internal/contract` package:**
-   - Embed `api-v1.sql`
-   - `Load(version)` function
-   - `SupportedVersions()` function
-   - Unit tests
-
-6. **Update deployer (`internal/services/deployer.go`):**
-   - Execute `schema.sql` first
-   - Execute `api-v{N}.sql` second
-   - Pass API version from config
-
-7. **Update preprocessor (`internal/preprocessor/`):**
-   - Remove inline SQL generation
-   - Call `pgmi_test_generate()` to get replacement code
-   - Simplify to: find macro → call function → replace
-
-8. **Add `--compat` CLI flag:**
-   - Add to `internal/cli/deploy.go`
-   - Wire through config to deployer
-   - Default to latest
+5. Load `api-v{N}.sql` for the requested version after `schema.sql`.
+6. Expand `CALL pgmi_test()` by calling `pgmi_test_generate()`, with no SQL
+   generated in the binary.
+7. Add the `--compat` flag, defaulting to the latest version.
 
 ### Phase 3: Templates and Testing
 
@@ -607,7 +405,7 @@ make test-integration
 
 ### Macro Expansion
 - [x] `CALL pgmi_test()` expands via `pgmi_test_generate()` function call
-- [x] Go preprocessor no longer contains inline SQL generation
+- [x] The preprocessor no longer contains inline SQL generation
 - [x] Generated code references internal tables (`_pgmi_test_source`)
 
 ### Templates
@@ -630,7 +428,7 @@ make test-integration
 | Performance overhead from views | Views are simple `SELECT *` - optimizer eliminates overhead |
 | Complexity of maintaining multiple versions | Start with v1 only; add v2 when actually needed |
 | Forgetting to update templates | Integration tests catch missing view references |
-| `pgmi_test_generate()` SQL correctness | Port existing Go tests; verify generated SQL matches current output |
+| `pgmi_test_generate()` SQL correctness | Port the existing preprocessor tests; verify generated SQL matches current output |
 | Preprocessor now requires DB connection | Already true (files loaded before preprocessing) |
 
 ---
@@ -641,59 +439,3 @@ make test-integration
 - **Version deprecation warnings:** `RAISE WARNING 'API v1 deprecated, migrate to v2'`
 - **Version discovery:** `pgmi --supported-api-versions` command
 - **Per-project version pinning:** `.pgmi.yaml` with `api-version: 1`
-
----
-
-## Estimated Effort
-
-| Phase | Effort |
-|-------|--------|
-| Phase 1: SQL Refactoring | 3-4 hours |
-| Phase 2: Go Infrastructure | 3-4 hours |
-| Phase 3: Templates and Testing | 2-3 hours |
-| Phase 4: Documentation | 1-2 hours |
-| **Total** | **9-13 hours** |
-
-**Note:** The `pgmi_test_generate()` function is the most complex piece - it must produce identical output to the current Go preprocessor. Recommend implementing incrementally with comparison tests.
-
----
-
-## References
-
-### Files to Modify
-
-| File | Changes |
-|------|---------|
-| `shared/session/schema.sql` | Rename tables to `_pgmi_*`, update internal function references |
-| `internal/params/api-v1.sql` | **NEW:** Views, public functions, `pgmi_test_generate()` |
-| `internal/files/loader/loader.go` | Update table references to `_pgmi_*` |
-| `internal/preprocessor/preprocessor.go` | Replace inline SQL with `pgmi_test_generate()` call |
-| `internal/services/deployer.go` | Execute `api-v{N}.sql` after schema, before preprocessing |
-| `internal/cli/deploy.go` | Add `--compat` flag |
-| `internal/contract/contract.go` | **NEW:** API version management |
-| `shared/templates/advanced/deploy.sql` | `pgmi_source` → `pgmi_source_view` |
-| `shared/templates/basic/deploy.sql` | `pgmi_source` → `pgmi_source_view` |
-| `CLAUDE.md` | Update session model documentation |
-| `shared/ai/` | Update embedded AI documentation |
-
-### Key Test Files
-
-| File | Purpose |
-|------|---------|
-| `internal/contract/contract_test.go` | **NEW:** Version loading tests |
-| `internal/preprocessor/preprocessor_test.go` | Update for new expansion approach |
-| `internal/scaffold/integration_test.go` | Template deployment verification |
-| `internal/params/schema_test.go` | Schema object tests |
-
-### Grep Commands for Discovery
-
-```bash
-# Find all references to pgmi_source (not _pgmi_source)
-grep -r "pgmi_source" --include="*.go" --include="*.sql" | grep -v "_pgmi_source"
-
-# Find all references to pgmi_parameter
-grep -r "pgmi_parameter" --include="*.go" --include="*.sql" | grep -v "_pgmi_parameter"
-
-# Find preprocessor SQL generation
-grep -r "pgmi_test" internal/preprocessor/
-```

@@ -14,14 +14,14 @@ A pgmi project has four parts. Only the first one is pgmi.
 
 | Part | What it is | Who owns it | Runs when |
 |---|---|---|---|
-| [pgmi core](#pgmi-core) | The binary, its session API, the execution contract, the test macro, `pgmi ai`, `pgmi serve`, the Go library | pgmi; upgrades with the binary | Deploy time |
+| [pgmi core](#pgmi-core) | The binary, its session API, the execution contract, the test macro, `pgmi ai`, `pgmi serve` | pgmi; upgrades with the binary | Deploy time |
 | [Template code](#template-code) | The files `pgmi init` wrote: minimal, basic or advanced | You, from the moment it lands | Deploy time, through your `deploy.sql` |
 | [Agent guidance](#agent-guidance) | `AGENTS.md`, `CLAUDE.md` and `.agents/skills/` (basic and advanced only) | You | While an agent develops the project |
 | [Application features](#application-features) | The advanced template's handlers, sessions, row-level security and gateways | You | Runtime, on every request |
 
 ## pgmi core
 
-The Go binary, and the session contract it creates before your `deploy.sql`
+The binary, and the session contract it creates before your `deploy.sql`
 runs. This is what changes when you install a new pgmi.
 
 The session contract consists of:
@@ -30,8 +30,8 @@ The session contract consists of:
 |-------|---------|
 | Internal tables | `_pgmi_parameter`, `_pgmi_runtime`, `_pgmi_source`, `_pgmi_source_metadata`, `_pgmi_test_directory`, `_pgmi_test_source` |
 | Public views | `pgmi_source_view`, `pgmi_parameter_view`, `pgmi_runtime_view`, `pgmi_plan_view`, `pgmi_test_source_view`, `pgmi_test_directory_view`, `pgmi_source_metadata_view` |
-| Functions | `pgmi_test_plan(p_pattern)`, `pgmi_test_generate(p_pattern, p_callback)`, `pgmi_register_file(...)`, `pgmi_test_callback(event)` |
-| Preprocessor macro | `CALL pgmi_test()` — expanded by Go before SQL reaches PostgreSQL |
+| Functions | `pgmi_test_plan(p_pattern)`, `pgmi_test_generate(p_pattern, p_callback)`, `pgmi_register_file(...)`, `pgmi_run_file(path)`, `pgmi_test_callback(event)` |
+| Preprocessor macro | `CALL pgmi_test()` — expanded by pgmi before SQL reaches PostgreSQL |
 | Types | `pgmi_test_event` composite type for test lifecycle callbacks |
 
 The rest of core:
@@ -49,8 +49,8 @@ The rest of core:
 - **Tooling for coding agents.** `pgmi ai` and `pgmi ai contract` print what an
   agent needs to know about this binary's session API. `pgmi serve` offers the
   CLI commands as MCP tools over stdio, so an agent can deploy a project and check its metadata and plan.
-- **The Go library.** `pkg/pgmi/deploy` runs the same deploy from your own Go
-  program ([Go library](GO-LIBRARY.md)).
+- **No library.** The Go library ended with 0.14; pin the `go-legacy` tag, or
+  call `pgmi deploy --json` from your program.
 
 pgmi keeps no migration history of its own. What has run, and what may run
 again, is decided by your `deploy.sql`. That is where the templates come in.

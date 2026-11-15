@@ -40,7 +40,7 @@ the SQL side:
 - **No daemons, schedulers, or servers** in the deployment path. One
   invocation, one session, one exit code.
 
-The one place pgmi's Go code reads your SQL to decide *how* to execute it —
+The one place pgmi reads your SQL to decide *how* to execute it —
 the [first top-level transaction terminator](../DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-contract)
 that splits atomic head from psql-mode tail — is deliberately a ceiling, not
 a precedent: one token class, read to preserve PostgreSQL's own semantics,

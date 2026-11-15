@@ -15,7 +15,7 @@ func TestCICDGuidePinsNewestRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	newest := regexp.MustCompile(`(?m)^## (v\d+\.\d+\.\d+) — \d{4}-\d{2}-\d{2}`).FindSubmatch(releases)
+	newest := regexp.MustCompile(`(?m)^## (v\d+\.\d+\.\d+) — (\d{4}-\d{2}-\d{2}|TBD)`).FindSubmatch(releases)
 	if newest == nil {
 		t.Fatal("no release heading in RELEASES.md")
 	}

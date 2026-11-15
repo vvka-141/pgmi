@@ -40,121 +40,89 @@ For security vulnerabilities, please see [SECURITY.md](SECURITY.md). Do not open
 
 ## Development setup
 
-You need:
+pgmi is one Rust binary, `rust/pgmi`, with the files it embeds (templates,
+skills, the session SQL) in the `shared` crate. You need:
 
-- Go 1.27 or the version declared by `go.mod`
-- Docker, or `PGMI_TEST_CONN` pointing to a PostgreSQL test database, for
-  integration tests
-- golangci-lint 2.15.0 for `make lint`
+- `rustup`; it installs the toolchain pinned in `rust-toolchain.toml`, with
+  rustfmt and clippy. No C compiler is needed: every dependency is pure Rust,
+  and `rust/check-no-c.sh` keeps it that way. The minimum supported Rust
+  version is `rust-version` in the root `Cargo.toml`.
+- `cargo-deny` 0.20.2 (`cargo install --locked cargo-deny@0.20.2`)
+- A PostgreSQL 18 server for the database tests, named by `PGMI_TEST_CONN`
+- `uv` for the black-box suite
 
 Start with:
 
 ```bash
-make doctor
-make test
-make build
+cargo build --locked --release -p pgmi     # target/release/pgmi
+cargo test --locked --workspace            # database tests skip without PGMI_TEST_CONN
 ```
 
-`make test` runs the short unit suite and does not require PostgreSQL.
-`make test-integration` runs the full suite and starts a PostgreSQL
-Testcontainer when `PGMI_TEST_CONN` is not set.
-`make blackbox` runs the built binary from outside against PostgreSQL and
-checks exit codes, output and database state; it needs `uv`. A change in what
-pgmi does from a user's point of view gets a case there
-([blackbox/README.md](blackbox/README.md)).
+The tests that deploy templates take more locks than PostgreSQL allows by
+default, so start the test server with `-c max_locks_per_transaction=256`:
+
+```bash
+docker run -d --name pgmi-test -p 5432:5432 -e POSTGRES_PASSWORD=postgres \
+  postgres:18 -c max_locks_per_transaction=256
+export PGMI_TEST_CONN=postgresql://postgres:postgres@127.0.0.1:5432/postgres
+export PGMI_REQUIRE_DB=1     # fail, rather than skip, when the database is missing
+```
+
+### The black-box suite
+
+`blackbox/` runs the built binary from outside against PostgreSQL and checks
+exit codes, output and database state. A change in what pgmi does from a
+user's point of view gets a case there ([blackbox/README.md](blackbox/README.md)):
+
+```bash
+cd blackbox
+PGMI_IMPL=rust PGMI_BIN="$PWD/../target/release/pgmi" uv run pytest
+PGMI_IMPL=rust PGMI_BIN="$PWD/../target/release/pgmi" uv run pytest -k 13-sql   # one case
+```
+
+`PGMI_IMPL=rust` applies a case's `expect.rust` keys. CI deselects the few
+cases listed in `rust/blackbox-skip.txt`.
+
+### The gates CI runs
+
+The `Rust` job in `.github/workflows/ci.yml` runs, and a change passes, all of:
+
+```bash
+cargo fmt --all --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo clippy --locked -p pgmi --features testhooks --all-targets -- -D warnings
+cargo test --locked --workspace
+cargo test --locked -p pgmi --features testhooks --test panic --test google_cloud_sql
+cargo deny --locked check          # advisories, licences, no C
+rust/check-no-c.sh                 # no C compiler on any release target
+rust/check-package.sh              # packaged shared files equal tracked files
+```
+
+Other jobs run the black-box suite on PostgreSQL 18 and 15, check the
+workspace with the minimum Rust version, run the unit tests on macOS and
+Windows, and fuzz the parsers for two minutes each with a pinned nightly
+(`cd rust/pgmi/fuzz && cargo +nightly fuzz run conn_parse`; the targets are
+in `rust/pgmi/fuzz/fuzz_targets/`). The design records behind the code are in
+[rust/docs/decisions/](rust/docs/decisions/README.md).
+
+The Go 0.14 sources are kept until switch day for reference; they will move to
+the `go-legacy` tag.
 
 ## Code Style
 
-### Error Wrapping
+### Errors
 
-**Always use context-first error wrapping** with `fmt.Errorf`:
-
-```go
-// ✅ Good: Context first, then %w
-return fmt.Errorf("failed to connect to database: %w", err)
-return fmt.Errorf("invalid configuration: %w", ErrInvalidConfig)
-
-// ❌ Bad: Error first
-return fmt.Errorf("%w: failed to connect", err)
-return fmt.Errorf("%w: invalid configuration", ErrInvalidConfig)
-```
-
-**Rationale**: Context-first makes error messages more readable in logs and stack traces. The error chain naturally flows from general to specific when errors bubble up.
-
-### Naming Conventions
-
-- **Constants**: Use `PascalCase` for exported constants, `camelCase` for unexported
-- **Interfaces**: Use descriptive names ending in `-er` when appropriate (`Connector`, `Approver`, `Logger`)
-- **Test Files**: Use `_test.go` suffix for unit tests, `_integration_test.go` for integration tests
-
-### Dependency Injection
-
-All services use constructor injection with explicit dependencies:
-
-```go
-func NewDeploymentService(
-    connectorFactory func(*db.ConnectionConfig) (db.Connector, error),
-    approver pgmi.Approver,
-    logger pgmi.Logger,
-    // ... other dependencies
-) *DeploymentService {
-    // Validate all dependencies are non-nil
-    if connectorFactory == nil {
-        panic("connectorFactory cannot be nil")
-    }
-    // ...
-}
-```
-
-**Panic on nil dependencies**: Constructor panic is acceptable for programmer errors (misconfigured DI). Document this behavior in godoc.
+Every failure is a `crate::error::Error` with a `Kind`, and the kind alone
+decides the exit code (`rust/pgmi/src/error.rs`; record
+[0002](rust/docs/decisions/0002-errors-and-exit-codes.md)). A message gives
+context first and names the next step; secrets never reach it.
 
 ### Testing
 
-- Write table-driven tests using `[]struct` pattern
-- Use descriptive test names: `TestFunctionName_Scenario`
-- Prefer in-memory implementations for external dependencies (filesystem, database) when possible
-- Integration tests should use the repository's Testcontainers helpers or
-  `PGMI_TEST_CONN`
-
-Example:
-
-```go
-func TestParser_ParseConnectionString(t *testing.T) {
-    tests := []struct {
-        name    string
-        input   string
-        want    ConnectionConfig
-        wantErr bool
-    }{
-        {
-            name: "valid PostgreSQL URI",
-            input: "postgresql://user:pass@localhost:5432/mydb",
-            want: ConnectionConfig{
-                Host: "localhost",
-                Port: 5432,
-                Username: "user",
-                Password: "pass",
-                Database: "mydb",
-            },
-            wantErr: false,
-        },
-        // ... more test cases
-    }
-
-    for _, tt := range tests {
-        t.Run(tt.name, func(t *testing.T) {
-            got, err := Parse(tt.input)
-            if (err != nil) != tt.wantErr {
-                t.Errorf("Parse() error = %v, wantErr %v", err, tt.wantErr)
-                return
-            }
-            if !reflect.DeepEqual(got, tt.want) {
-                t.Errorf("Parse() = %v, want %v", got, tt.want)
-            }
-        })
-    }
-}
-```
+- Unit tests sit next to the code; tests that need a database or the built
+  binary are in `rust/pgmi/tests/` and use the helpers in `tests/common/`.
+- Test names say the behaviour: `a_token_without_an_expiry_is_fetched_for_every_connection`.
+- A regression test fails without the fix: prove it once by reverting the fix.
 
 ### Agent skills
 
@@ -169,12 +137,13 @@ it **in the same commit**:
    file paths.
 2. Rewrite each hit to the new shape, or drop it. Do not keep the old name as a
    "retired" note; say what to do now.
-3. Add each removed name to `retiredAPIs` in
-   `internal/scaffold/skill_snippet_guard_test.go`, with one planted line in
-   `TestRetiredAPIHitsFlagsEachTerm`. `TestSkillsNameNoRetiredAPI` then keeps it
-   out of every shipped skill.
+3. Add each removed name to `RETIRED_APIS` in
+   `rust/pgmi/src/content_tests/snippets.rs`, with one planted line in
+   `retired_api_hits_flags_each_term`. `skills_name_no_retired_api` then keeps
+   it out of every shipped skill.
 4. A test or SQL example that changed runs: mark it `sql runnable target=...`
-   so `TestSkillBlocksDeploy` deploys it, or check it against a live database.
+   so `rust/pgmi/tests/skill_blocks.rs` deploys it, or check it against a live
+   database.
 5. Examples that teach template patterns use project, task and document.
 6. Run `make sync-ai` to refresh the local mirror in `.claude/skills/` from the
    scaffold trees.
@@ -218,26 +187,15 @@ Examples:
 
 1. Create a feature branch from `main`
 2. Implement your changes with tests
-3. Run `make test` and `make lint`
-4. Run `make test-integration` (requires Docker or `PGMI_TEST_CONN`)
-5. Run `make build`
-6. If the change affects scaffolding templates, embedded SQL, or deploy/test
-   execution, run `make build-clean` and
-   `go test ./internal/scaffold -v -run TestTemplateDeployment -timeout 5m`
-7. Update documentation in the same change as the behavior it describes
-8. Submit a PR to `main` with a clear description and verification notes
+3. Run the gates above, with `PGMI_TEST_CONN` and `PGMI_REQUIRE_DB=1` set
+4. Run the black-box suite against your build
+5. If the change affects scaffolding templates, embedded SQL, or deploy/test
+   execution, the template tests in `cargo test` must have run against a
+   database, not skipped (`cargo test --locked -p pgmi --test template_deploy`)
+6. Update documentation in the same change as the behavior it describes
+7. Submit a PR to `main` with a clear description and verification notes
 
-On Windows without `make`, the core equivalents are:
-
-```powershell
-go test -short -tags pgmi_testhooks ./...
-go test -tags pgmi_testhooks ./...
-golangci-lint run
-go build -o pgmi.exe ./cmd/pgmi
-```
-
-Set `PGMI_REQUIRE_DB=1` for the full integration run when a missing database
-must fail rather than skip.
+The same commands work in PowerShell on Windows.
 
 ## Reading release download counts
 

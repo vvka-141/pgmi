@@ -1,7 +1,7 @@
 # pgmi
 
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
-[![Go Version](https://img.shields.io/badge/Go-1.27+-00ADD8?logo=go)](https://go.dev/)
+[![Rust MSRV](https://img.shields.io/badge/Rust-1.94.1+-B7410E?logo=rust)](https://www.rust-lang.org/)
 [![CI](https://github.com/vvka-141/pgmi/actions/workflows/ci.yml/badge.svg)](https://github.com/vvka-141/pgmi/actions/workflows/ci.yml)
 [![Watch Introduction](https://img.shields.io/badge/▶_Watch-Introduction-red?logo=youtube)](https://youtu.be/0txwCsGRyyE)
 
@@ -169,6 +169,8 @@ before the deployment commits
 > **Status:** pgmi is pre-1.0. The session API may change in a minor release. Every change is listed under "Upgrading" in the release notes, and a snapshot test makes each change deliberate. Pin the pgmi version in CI.
 
 > **Requirements:** a deploy needs PostgreSQL 15+ (the advanced template 18+ — [compatibility matrix](docs/PRODUCTION.md#postgresql-compatibility)) and a **direct** connection or session-mode pooler. Transaction-mode poolers (PgBouncer txn mode, RDS Proxy) reassign connections between statements and destroy the session temp tables a deploy depends on — [details](docs/PRODUCTION.md#connection-requirements). The advanced template sets each request's context per transaction, so this limit applies to the deploy alone.
+>
+> **CPU:** the pgmi binary needs a CPU from about 2014 on: on x86-64, AES-NI, PCLMULQDQ, SSSE3, AVX, AVX2, BMI1, BMI2 and ADX (Intel Broadwell, AMD Zen and later); on arm64, NEON, AES, PMULL and SHA2 (Apple silicon, AWS Graviton, Raspberry Pi 5; not Raspberry Pi 4). Without them, TLS (`sslmode=require` and up) and cloud sign-in stop with exit 10 and name the missing features; `prefer`, the default, connects without TLS and warns.
 
 ## The entire model in one file
 
@@ -210,7 +212,7 @@ Filter by directory, branch on a `--param`, skip files whose checksum already ra
 
 **Why it feels different:**
 
-- **Your SQL owns the deploy** — transactions, execution order and idempotency live in `deploy.sql`, not in the tool. pgmi retries connection attempts; your pipeline decides whether to retry a failed deploy.
+- **Your SQL owns the deploy** — transactions, execution order and idempotency live in `deploy.sql`, not in the tool. pgmi retries connecting, and reruns a deploy from the start after a transient failure (a lost connection, a deadlock, a server restart) only while nothing has committed; `retry: false` in `pgmi.yaml` turns that off.
 - **The CLI is infrastructure-only** — connections, parameters, auth. No `--dry-run`, no `--rollback`, no orchestration flags to learn.
 - **You place the commits** — everything through the first top-level `COMMIT` runs in one transaction; without one, the whole file is atomic. The basic and advanced templates commit after the test gate and before the final banner, so a statement appended after that `COMMIT` autocommits on its own (as `CREATE INDEX CONCURRENTLY` needs) unless you group it in a `BEGIN ... COMMIT` of its own ([the execution contract](docs/DEPLOY-GUIDE.md#atomic-mode-then-psql-mode-the-execution-contract)).
 
@@ -225,7 +227,8 @@ model) gets tools from pgmi and stays in control of what to change:
   `init`, `metadata_plan`, `metadata_validate`, `templates_list`,
   `ai_overview` and `ai_contract`. Tests run inside `deploy`; there is no
   separate test tool. A deploy that would drop the database must repeat its
-  name ([CLI reference](docs/CLI.md#pgmi-serve)).
+  name, and runs only when the operator started `pgmi serve` with
+  `PGMI_SERVE_ALLOW_OVERWRITE=1` ([CLI reference](docs/CLI.md#pgmi-serve)).
 - The binary carries the facts that must match its version, so agents read them on demand instead of guessing:
 
   ```bash
@@ -281,19 +284,28 @@ curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.s
 irm https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.ps1 | iex
 ```
 
-For CI and production, use a package manager or verify the downloaded release's build provenance:
+Both scripts check the download against the release's `checksums.txt`. For CI and production, use Homebrew or check the download's build provenance:
 
 **Homebrew (macOS):**
 ```bash
 brew install --cask vvka-141/pgmi/pgmi
 ```
 
-**Direct download:** grab an archive or a Debian/Ubuntu `.deb` package from [GitHub Releases](https://github.com/vvka-141/pgmi/releases) and verify its build provenance with `gh attestation verify <downloaded-file> -R vvka-141/pgmi` (`checksums.txt` is not signed). Install a `.deb` with `sudo apt install ./pgmi_<version>_linux_amd64.deb`.
+**Direct download:** grab an archive (`pgmi_<version>_<os>_<arch>.tar.gz`, `.zip` on Windows) or a Debian/Ubuntu `.deb` package from [GitHub Releases](https://github.com/vvka-141/pgmi/releases). To check that a file was built by pgmi's release workflow from this repository, run the GitHub CLI on it:
 
-**From source** (requires Go 1.27+):
 ```bash
-go install github.com/vvka-141/pgmi/cmd/pgmi@latest
+gh attestation verify pgmi_<version>_linux_amd64.tar.gz --repo vvka-141/pgmi
 ```
+
+It prints the workflow run and the commit. `checksums.txt` lists the SHA-256 of every file (`sha256sum -c checksums.txt --ignore-missing` checks the ones you downloaded), and each release carries a CycloneDX SBOM, `pgmi_<version>_sbom.cdx.json`. Install a `.deb` with `sudo apt install ./pgmi_<version>_linux_amd64.deb`; there is no APT repository, so install each new release the same way.
+
+**From source** (the Rust toolchain pinned in `rust-toolchain.toml` installs itself through `rustup`; pgmi compiles no C code, but the build needs the platform linker: `cc` on Linux, the Xcode command-line tools on macOS, the MSVC build tools on Windows):
+```bash
+git clone https://github.com/vvka-141/pgmi.git && cd pgmi
+cargo build --release -p pgmi    # the binary is target/release/pgmi
+```
+
+`go install` no longer installs current pgmi: 0.14 was the last Go release. Go programs that embedded its library (`pkg/pgmi`) pin the `go-legacy` tag.
 
 Then follow the [Getting Started Guide](docs/QUICKSTART.md) for a complete walkthrough, or the [CI/CD Guide](docs/CICD.md) to deploy from a pipeline.
 
@@ -349,7 +361,6 @@ A poor fit when:
 | [Metadata](docs/METADATA.md) | Optional script tracking and ordering |
 | [Security](docs/SECURITY.md) | Secrets and CI/CD patterns |
 | [CI/CD](docs/CICD.md) | Deploy from GitHub Actions and other pipelines |
-| [Go library](docs/GO-LIBRARY.md) | Run a deploy from your own Go program |
 | [Production Guide](docs/PRODUCTION.md) | Performance, rollback, monitoring, [compatibility matrix](docs/PRODUCTION.md#postgresql-compatibility) |
 | [Advanced template](docs/advanced/README.md) | An application layer you own: one handler registry → REST+RPC+MCP+OpenAPI, per-route transaction policy, sessions and RLS, audit trails, reference gateways in five languages |
 | [Advanced-template MCP gateway](docs/advanced/MCP.md) | Expose your deployed application to AI assistants |
@@ -361,7 +372,7 @@ What pgmi guarantees in CI, from a scheduler or under an agent; deploy.sql's tra
 - **Timeouts and signals cancel the running statement** on the server and roll back the open transaction: `--timeout` (default 3m) exits 16, SIGINT/SIGTERM 130.
 - **Deploys never interleave.** A second deploy against the same database exits 15 at once.
 - **Configuration checks run before connecting.** Path, parameter syntax, `--compat`, `pgmi.yaml` and an empty `PGMI_PARAM_*` secret exit 10, and nothing is created or changed. Required parameters (the templates' `env`) are checked by deploy.sql once connected.
-- **Connecting is retried, deploying is not.** Up to four connection attempts with backoff; re-running a failed deploy is the pipeline's job.
+- **Transient failures are retried inside `--timeout`.** Up to four connection attempts per run. A deploy that reached the server and failed on a transient error (class 08, a deadlock, a server restart, `max_connections`) runs again from the start, waiting 1 s doubling to 30 s, as long as nothing has committed; any other error ends the run. `retry: false` in `pgmi.yaml` turns it off.
 - **`--json` reports each run:** the failing file, line, SQLSTATE and what committed, with passwords redacted.
 - **Cloud authentication:** Azure and AWS tokens refresh for long deploys and never travel without TLS.
 - **`--overwrite`** restores the database's settings and privileges, or refuses before dropping anything.

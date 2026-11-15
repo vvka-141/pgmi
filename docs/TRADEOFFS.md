@@ -99,9 +99,9 @@ Documentation is `README.md`, these docs, `pgmi ai`, and the agent skills the ba
 
 ## File loading has practical limits
 
-pgmi loads all project files into Go memory, then batch-inserts them into PostgreSQL session-scoped temporary tables. This means:
+pgmi loads all project files into its own memory, then batch-inserts them into PostgreSQL session-scoped temporary tables. This means:
 
-- A 100 MB project uses ~100 MB Go memory + wire transfer time + PostgreSQL storage for temp tables
+- A 100 MB project uses ~100 MB of pgmi's memory + wire transfer time + PostgreSQL storage for temp tables
 - PostgreSQL temp tables use local buffers (`temp_buffers`, default 8 MB) and automatically spill to disk when data exceeds the buffer — there is no inherent RAM limitation on temp table size
 - Files are loaded as text and assumed to be UTF-8
 - A file with a NUL byte or invalid UTF-8 fails the deploy before pgmi connects, naming the file

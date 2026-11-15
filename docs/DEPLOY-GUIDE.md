@@ -12,7 +12,7 @@ This guide covers patterns for writing `deploy.sql` — from basic file executio
 
 For the session API reference (views, columns, functions), see [Session API](session-api.md).
 
-![The session API surface: Go writes internal _pgmi_* temp tables, your deploy.sql reads the stable pgmi_*_view views and test functions](diagrams/d03-session-api-surface.drawio.svg)
+![The session API surface: pgmi writes internal _pgmi_* temp tables, your deploy.sql reads the stable pgmi_*_view views and test functions](diagrams/d03-session-api-surface.drawio.svg)
 
 The whole deployment is one connection with a numbered failure surface:
 
@@ -525,7 +525,10 @@ Two consequences to internalize:
 - **A mid-tail failure stops the deploy but keeps earlier tail statements.**
   Autocommitted work before the failing statement stays applied (a failure
   *inside* an explicit tail `BEGIN ... COMMIT` rolls back that transaction
-  only). Make tail statements idempotent so a re-run converges.
+  only). Make tail statements idempotent so a re-run converges. pgmi does not
+  rerun the deploy itself after a tail statement committed, unless
+  `pgmi.yaml` sets `retry_after_commit: true`
+  ([Time box and retries](CLI.md#time-box-and-retries)).
 
 A script that ends inside an open `BEGIN` — a missing final `COMMIT` — applies
 nothing from that transaction: pgmi rolls it back and fails the deploy with
@@ -617,8 +620,9 @@ until it finishes, and a blanket sweep would drop it out from under them.
 `REINDEX INDEX CONCURRENTLY` is the other supported recovery.
 
 `--timeout` (default 3m) covers the whole deploy, tail included. A concurrent
-build that outlives it is cancelled: pgmi exits 16 and leaves the index
-`INVALID`. Raise `--timeout` for large tables; the reap step above cleans up
+build that outlives it is cancelled: pgmi exits 16, and says that an `INVALID`
+index may be left and how to find and drop it (also in the `--json` `hint`).
+Raise `--timeout` for large tables; the reap step above cleans up
 on the next run.
 
 A head that ends its implicit transaction with a bare `COMMIT` (no `BEGIN`)

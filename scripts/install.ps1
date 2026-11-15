@@ -102,6 +102,7 @@ function Install-Pgmi {
             throw "Checksum mismatch for ${fileName}: expected $expectedHash, got $actualHash"
         }
         Write-Ok "Checksum verified."
+        Write-Status "To check build provenance by hand: download $fileName and run gh attestation verify $fileName --repo $Repo"
 
         Write-Status "Extracting to $InstallDir..."
         if (-not (Test-Path $InstallDir)) {

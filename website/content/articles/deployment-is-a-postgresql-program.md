@@ -240,7 +240,7 @@ There is one other, narrower inspection, and both are worth naming rather than h
 
 ### Where the handover stops
 
-The first stop is a rewrite. `CALL pgmi_test()` is a macro, expanded in Go, and its
+The first stop is a rewrite. `CALL pgmi_test()` is a macro, expanded by pgmi, and its
 expansion contains `SAVEPOINT`. PostgreSQL does not allow savepoints in the implicit
 transaction block it creates for a multi-statement query, so the generated test SQL requires
 an explicit `BEGIN ... COMMIT` block around it.

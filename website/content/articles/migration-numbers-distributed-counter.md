@@ -232,7 +232,7 @@ in depth.
 This is not hypothetical: the repository's CI job does precisely this against
 an ephemeral PostgreSQL service. Stripped to its two essential commands
 — the full [`example-execution-order` job](https://github.com/vvka-141/pgmi/blob/main/.github/workflows/examples.yml)
-adds checkout, Go build, service wiring, and cleanup:
+adds checkout, the pgmi build, service wiring, and cleanup:
 
 ```bash
 pgmi deploy . -d catalog_demo --force       # success path: must exit 0

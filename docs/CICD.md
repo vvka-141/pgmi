@@ -38,7 +38,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      PGMI_VERSION: v0.14.1         # pin to a specific release tag
+      PGMI_VERSION: v0.20.0         # pin to a specific release tag
       DB_NAME: myapp
     steps:
       - uses: actions/checkout@v5
@@ -62,10 +62,11 @@ jobs:
 
 Why these choices:
 
-- **Pinned, checksum-verified binary** — no Go toolchain, reproducible runs, and the
-  download is integrity-checked against the release `checksums.txt`. Prefer this over
-  `go install …@latest`, which recompiles every run and lets a new release silently
-  change your deploy.
+- **Pinned, checksum-verified binary** — no toolchain, reproducible runs, and the
+  download is integrity-checked against the release `checksums.txt`. To also check
+  that the file was built by pgmi's release workflow, run
+  `gh attestation verify "${file}" --repo vvka-141/pgmi`. Never install
+  "latest": a new release would silently change your deploy.
 - **The pinned binary pins the session API.** Before pgmi 1.0 the session API
   may change in a minor release — a view, column or function added, renamed or
   removed — and every change is listed under **Upgrading** in that release's
@@ -142,9 +143,17 @@ Treat exit 15 as "another deploy is running", not as a broken deploy.
 Everything else pgmi guarantees in an unattended run is listed in
 [Running unattended](PRODUCTION.md#running-unattended).
 
-`--timeout` (default 3m) covers the whole deploy, including the autocommit tail.
-A `CREATE INDEX CONCURRENTLY` that outlives it is cancelled: pgmi exits 16 and
-the index is left `INVALID`. Raise `--timeout` for large tables, and write the
+`--timeout` (default 3m) covers the whole run, including the autocommit tail
+and every retry. A transient failure (a failover, a restart, a deadlock with
+live traffic) runs the deploy again from the start inside that time box, so the
+pipeline needs no retry step of its own; a broken migration fails on the first
+attempt with its own exit code. Give the job a `timeout-minutes` above
+`--timeout`, so pgmi, not the runner, decides when to stop and reports why.
+What is retried and what never is: [Time box and retries](CLI.md#time-box-and-retries).
+
+A `CREATE INDEX CONCURRENTLY` that outlives the time box is cancelled: pgmi
+exits 16, says an `INVALID` index may be left and how to find and drop it (also
+in the `--json` `hint`). Raise `--timeout` for large tables, and write the
 build so a re-run reaps the leftover (see
 [making a concurrent index re-runnable](DEPLOY-GUIDE.md#making-a-concurrent-index-re-runnable)).
 
@@ -163,7 +172,7 @@ pgmi first picks one connection string, then resolves each connection field.
 | Host, port, user, database, sslmode, TLS paths | flag > the field in the connection string > its `PG*` variable > `pgmi.yaml` > built-in default. With a connection string, `pgmi.yaml` fills only the database ([why](CONFIGURATION.md#precedence-chain)). |
 | Parameters | `--param` > `--params-file` (later file wins) > `PGMI_PARAM_*` > `pgmi.yaml` `params` |
 | Timeout | `--timeout` > `pgmi.yaml` `timeout` > 3m |
-| Project `.env` | A variable already set in the environment wins over the same name in `<project>/.env`. Only `pgmi deploy` reads `.env`; `pgmi serve` ignores it. |
+| Project `.env` | A variable already set in the environment wins over the same name in `<project>/.env`. Only `pgmi deploy` reads `.env`; `pgmi serve` ignores it. A `.env` may not set a key that locates credentials, endpoints, proxies or trust roots (`PGPASSFILE`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`, `PGSERVICEFILE`, `PGSYSCONFDIR`, `AWS_PROFILE`, `AWS_CONFIG_FILE`, `AZURE_FEDERATED_TOKEN_FILE`, `GOOGLE_APPLICATION_CREDENTIALS`, `DATABRICKS_HOST`, `SSL_CERT_*`, `*_PROXY` and the like): each one is skipped and named on the `.env applied:` line. Set those in the environment pgmi runs in. A `.env` that exists but cannot be read exits 10. |
 
 In CI, set variables from the secret store and keep `.env` out of the
 checkout. The basic and advanced templates already ignore `*.env` in git.
@@ -194,11 +203,11 @@ above, and pgmi names each one that replaces a `pgmi.yaml` value.
 | `PGSSLKEY` | no; protect the key file | Client private key path |
 | `PGSSLPASSWORD` | yes | Passphrase of an encrypted client key |
 | `PGAPPNAME` | no | `application_name` (default `pgmi`) |
-| `PGCONNECT_TIMEOUT` | no | Connect timeout in seconds |
+| `PGCONNECT_TIMEOUT` | no | Connect timeout in seconds, per host and attempt |
 
-**Read by the driver.** pgx applies these to every connection pgmi opens. pgmi
-does not resolve or report them, except `PGOPTIONS`, which it names on stderr
-because it changes every session's settings.
+**Applied to every connection.** pgmi does not report these, except
+`PGOPTIONS`, which it names on stderr because it changes every session's
+settings.
 
 None of them is a secret, and a setting in the connection string outranks
 each one.
@@ -210,11 +219,14 @@ each one.
 | `PGTARGETSESSIONATTRS` | `target_session_attrs`, e.g. `read-write` with several hosts |
 | `PGREQUIREAUTH`, `PGCHANNELBINDING` | Refuse authentication methods, require SCRAM channel binding |
 | `PGSSLNEGOTIATION`, `PGSSLSNI`, `PGSSLCERTMODE` | TLS handshake details |
-| `PGMINPROTOCOLVERSION`, `PGMAXPROTOCOLVERSION` | Protocol version range |
+| `PGMINPROTOCOLVERSION`, `PGMAXPROTOCOLVERSION` | Protocol version range (`3.2` and `latest` are refused, exit 10) |
+| `PGCLIENTENCODING` | The session's `client_encoding`; without it the deploy uses the database's encoding. `auto` exits 10 |
 
-**Read by the cloud SDKs**, only with `--azure`, `--aws` or `--google`. The
-flags `--azure-tenant-id`, `--azure-client-id` and `--aws-region` outrank their
-variables; among credentials, each SDK's own default chain decides.
+**Read by the cloud sign-in**, only with `--azure`, `--aws`, `--google` or
+`--databricks`. The flags `--azure-tenant-id`, `--azure-client-id`,
+`--aws-region` and `--databricks-endpoint` outrank their variables; among
+credentials, each provider's default chain decides, in the order its own SDKs
+use.
 
 | Variable | Secret | Effect |
 |----------|--------|--------|
@@ -226,17 +238,22 @@ variables; among credentials, each SDK's own default chain decides.
 | `AWS_PROFILE`, `AWS_ROLE_ARN` | no | Profile and role for the AWS default credential chain |
 | `AWS_WEB_IDENTITY_TOKEN_FILE` | no; protect the file | Web identity token (Kubernetes, OIDC) |
 | `GOOGLE_APPLICATION_CREDENTIALS` | no; protect the file | Service account key for Cloud SQL IAM |
+| `PGMI_DATABRICKS_ENDPOINT` | no | Lakebase endpoint, when `--databricks-endpoint` is not given |
+| `DATABRICKS_HOST`, `DATABRICKS_CONFIG_PROFILE`, `DATABRICKS_CONFIG_FILE`, `DATABRICKS_AUTH_TYPE` | no | Workspace and sign-in method for `--databricks` ([Lakebase](LAKEBASE.md#sign-in-with---databricks)) |
+| `DATABRICKS_TOKEN`, `DATABRICKS_CLIENT_SECRET` (with `DATABRICKS_CLIENT_ID`) | yes | Personal access token, or OAuth M2M for a service principal |
 
-**Not supported.** pgmi uses pgx, not libpq, so not every libpq variable
+**Not supported.** pgmi does not use libpq, so not every libpq variable
 works:
 
 | Variable | What happens |
 |----------|--------------|
 | `PGSERVICE` | Refused with exit 10; give host, port and database instead |
 | `PGSERVICEFILE` | Ignored (no service files) |
-| `PGHOSTADDR` | Ignored; put the address in `PGHOST` |
-| `PGSSLCRL`, `PGSSLCRLDIR`, `PGSSLMINPROTOCOLVERSION`, `PGSSLMAXPROTOCOLVERSION`, `PGSSLCOMPRESSION`, `PGGSSENCMODE`, `PGKRBSRVNAME`, `PGGSSLIB`, `PGLOADBALANCEHOSTS` | Ignored |
-| `PGCLIENTENCODING`, `PGDATESTYLE`, `PGGEQO` | Ignored; set them through `PGOPTIONS`, e.g. `-c datestyle=ISO` |
+| `PGHOSTADDR` | Ignored; put the address in `PGHOST`, or `hostaddr=` in the connection string |
+| `PGSSLCRL`, `PGSSLCRLDIR` | Not checked: a `WARNING` on stderr and in `--json` `warnings`, then the deploy goes on. Under `sslmode=verify-ca` or `verify-full` they are refused, exit 10 |
+| `PGREQUIREPEER` | Not checked: a `WARNING` on stderr and in `--json` `warnings`, then the deploy goes on |
+| `PGSSLMINPROTOCOLVERSION`, `PGSSLMAXPROTOCOLVERSION`, `PGSSLCOMPRESSION`, `PGGSSENCMODE`, `PGKRBSRVNAME`, `PGGSSLIB`, `PGLOADBALANCEHOSTS` | Ignored; their connection-string keys work where pgmi supports them ([Connections](CONNECTIONS.md#connection-string-formats)) |
+| `PGDATESTYLE`, `PGGEQO` | Ignored; set them through `PGOPTIONS`, e.g. `-c datestyle=ISO` |
 
 ### What the log shows
 
@@ -301,7 +318,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     env:
-      PGMI_VERSION: v0.14.1
+      PGMI_VERSION: v0.20.0
       DB_NAME: myapp
     steps:
       - uses: actions/checkout@v5
@@ -415,7 +432,7 @@ deploy-db:
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   variables:
-    PGMI_VERSION: v0.14.1
+    PGMI_VERSION: v0.20.0
     DB_NAME: myapp
     PGMI_PARAM_ENV: prod
     PGMI_PARAM_UPGRADE: "true"
@@ -446,13 +463,10 @@ The three steps — install, connect via secret, `pgmi deploy … --compat 1` �
 anywhere. Alternatives for the install step:
 
 - **Install script, pinned:**
-  `curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | PGMI_VERSION=v0.14.1 bash`
+  `curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | PGMI_VERSION=v0.20.0 bash`
   (verifies the download against `checksums.txt`). The `PGMI_VERSION` prefix must sit on
   `bash`, not `curl`, or the script falls back to the latest release.
-- **Debian/Ubuntu runners (.deb):**
-  `gh release download v0.14.1 -R vvka-141/pgmi -p 'pgmi_*_linux_amd64.deb' -p checksums.txt && sha256sum --ignore-missing -c checksums.txt && sudo apt install -y ./pgmi_*_linux_amd64.deb`.
-- **Go-based pipelines only:** `go install github.com/vvka-141/pgmi/cmd/pgmi@v0.14.1`
-  — pin the tag (never `@latest`); note this requires the Go toolchain and compiles
-  from source, so it is slower and less reproducible than a release binary.
+- **Debian/Ubuntu runners (.deb from the release):**
+  `gh release download v0.20.0 -R vvka-141/pgmi -p 'pgmi_*_linux_amd64.deb' -p checksums.txt && sha256sum --ignore-missing -c checksums.txt && sudo apt install -y ./pgmi_*_linux_amd64.deb`.
 
 For a complete GitLab CI job, see [GitLab CI](#gitlab-ci).

@@ -18,8 +18,9 @@ This guide takes you from zero to a working deployment in about 10 minutes. The 
 **What you need:**
 - PostgreSQL 15 or newer (18 or newer for the advanced template) running on `localhost:5432` (the default), reachable over a **direct connection** or a session-mode pooler — transaction-mode poolers (PgBouncer txn mode, RDS Proxy) break pgmi's session temp tables; see [Connection Requirements](PRODUCTION.md#connection-requirements)
 - A PostgreSQL user with database creation rights (typically `postgres`)
+- On x86-64, a CPU from about 2014 on (Intel Broadwell, AMD Zen or later); on arm64, Apple silicon, AWS Graviton or Raspberry Pi 5. An older CPU lacks the instructions pgmi's TLS uses: under the default `sslmode=prefer` pgmi then connects without TLS and warns, and `sslmode=require` or a cloud sign-in stops with exit 10.
 
-No Go toolchain required — the quickstart installs a prebuilt binary. (Installing from source with `go install` is an optional alternative; see Step 1.)
+No toolchain required — the quickstart installs a prebuilt binary. (Building from source is an optional alternative; see Step 1.)
 
 ---
 
@@ -117,7 +118,7 @@ Clean up with `docker rm -f pgmi-demo`, and clear the connection string before c
 
 ## Step 1: Install pgmi
 
-Install the prebuilt binary — no Go toolchain needed.
+Install the prebuilt binary — no toolchain needed.
 
 **macOS / Linux:**
 ```bash
@@ -129,7 +130,7 @@ curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.s
 irm https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.ps1 | iex
 ```
 
-Prefer a package manager or a checksum-verified download? `brew install --cask vvka-141/pgmi/pgmi` (macOS), or a [GitHub Releases](https://github.com/vvka-141/pgmi/releases) archive or `.deb` package all work — see the [full install options](https://github.com/vvka-141/pgmi#install).
+Both scripts check the download against the release's `checksums.txt`. Prefer a package manager or a download you check yourself? `brew install --cask vvka-141/pgmi/pgmi` (macOS), or a [GitHub Releases](https://github.com/vvka-141/pgmi/releases) archive or `.deb` package all work — see the [full install options](https://github.com/vvka-141/pgmi#install).
 
 Verify the installation:
 
@@ -147,20 +148,16 @@ Commit: <sha>, Built: <date>, Platform: <os>/<arch>
 > **If `pgmi` is not found**, the install directory is not on your PATH. The install script prints the location it used; add that directory to your PATH and restart your terminal.
 
 <details>
-<summary>Install from source (optional — requires Go 1.27+)</summary>
+<summary>Build from source (optional — requires rustup)</summary>
 
 ```bash
-go install github.com/vvka-141/pgmi/cmd/pgmi@latest
+git clone https://github.com/vvka-141/pgmi.git && cd pgmi
+cargo build --release -p pgmi
 ```
 
-`pgmi --version` then reports `Commit: unknown, Built: unknown`: a module-proxy build carries no VCS stamp.
+`rustup` installs the toolchain pinned in `rust-toolchain.toml`. pgmi compiles no C code, but the build needs the platform linker (`cc` on Linux, the Xcode command-line tools on macOS, the MSVC build tools on Windows). The binary is `target/release/pgmi` (`pgmi.exe` on Windows): copy it into a directory on your PATH. `pgmi --version` then reports `Commit: unknown, Built: unknown`, because only release builds are stamped.
 
-If `pgmi` is then not found, your Go bin directory is not on your PATH:
-
-- **Linux/macOS**: add `export PATH="$PATH:$(go env GOPATH)/bin"` to your `~/.bashrc` or `~/.zshrc`, then restart your terminal.
-- **Windows PowerShell**: add `$env:Path += ";$(go env GOPATH)\bin"`, or set it permanently via System Settings → Environment Variables.
-
-Run `go env GOPATH` to see where Go installs binaries; `pgmi` is in the `bin` subfolder.
+`go install` no longer installs current pgmi: 0.14 was the last Go release.
 
 </details>
 
@@ -177,12 +174,14 @@ brew install --cask vvka-141/pgmi/pgmi
 <details>
 <summary>Debian/Ubuntu (.deb)</summary>
 
-Download the `.deb` for your architecture from [GitHub Releases](https://github.com/vvka-141/pgmi/releases), check it against `checksums.txt`, and install it:
+Download the `.deb` for your architecture from [GitHub Releases](https://github.com/vvka-141/pgmi/releases), check it, and install it:
 
 ```bash
-sha256sum --ignore-missing -c checksums.txt
+gh attestation verify pgmi_<version>_linux_amd64.deb --repo vvka-141/pgmi
 sudo apt install ./pgmi_<version>_linux_amd64.deb
 ```
+
+`gh attestation verify` prints the workflow run and the commit that built the file. Without the GitHub CLI, `sha256sum --ignore-missing -c checksums.txt` checks it against the release's checksums.
 
 There is no APT repository, so `apt upgrade` does not pick up new releases; install the next `.deb` the same way.
 </details>
@@ -190,7 +189,7 @@ There is no APT repository, so `apt upgrade` does not pick up new releases; inst
 <details>
 <summary>Windows (direct download)</summary>
 
-Download the latest `.zip` from [GitHub Releases](https://github.com/vvka-141/pgmi/releases), extract it, and add the folder to your PATH.
+Download the latest `.zip` from [GitHub Releases](https://github.com/vvka-141/pgmi/releases), check it with `gh attestation verify pgmi_<version>_windows_amd64.zip --repo vvka-141/pgmi`, extract it, and add the folder to your PATH.
 </details>
 
 ---
@@ -283,7 +282,7 @@ connection:
   database: mydb              # Target database (change this!)
   host: localhost             # PostgreSQL host
   port: 5432                  # PostgreSQL port
-  sslmode: prefer             # SSL mode: disable, allow, prefer, require, verify-ca, verify-full
+  # sslmode: verify-full      # Default: prefer; TLS only with cloud sign-in (--azure, --aws, --google)
   # username: postgres        # PostgreSQL user (default: current OS user)
 
 # Parameters passed to deploy.sql (accessible via current_setting('pgmi.key', true))
@@ -529,7 +528,7 @@ The directory pgmi was installed into is not on your PATH:
 
 - **install.sh**: `/usr/local/bin`, or whatever you set `INSTALL_DIR` to.
 - **install.ps1**: `%LOCALAPPDATA%\pgmi`, or `PGMI_INSTALL_DIR` if you set it. The script adds it to your user PATH; terminals that were already open need a restart.
-- **go install**: `$(go env GOPATH)/bin` — see [Step 1](#step-1-install-pgmi).
+- **Built from source**: `target/release/` in your clone, until you copy the binary onto your PATH — see [Step 1](#step-1-install-pgmi).
 
 ### "connection refused" or "could not connect to server"
 

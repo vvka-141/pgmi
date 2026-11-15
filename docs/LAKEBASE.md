@@ -50,7 +50,68 @@ right before the deploy. Lakebase checks its expiry only at login, so a deploy
 that is already connected may run past the hour.
 
 A plain Microsoft Entra access token is refused as the password, so pgmi's
-`--azure` does not work against Lakebase; get the credential first, as above.
+`--azure` does not work against Lakebase; get the credential first, as above,
+or let pgmi get it (next section).
+
+## Sign in with `--databricks`
+
+pgmi can get the database credential itself:
+
+```bash
+export DATABRICKS_HOST=https://<workspace host>     # or a ~/.databrickscfg profile
+pgmi deploy . --databricks \
+  --databricks-endpoint projects/<project>/branches/production/endpoints/primary \
+  --connection "host=<endpoint host> port=5432 dbname=databricks_postgres user=<you>" \
+  -d myapp --param env=dev
+```
+
+> **Checked on real Lakebase** on 2026-11-11 (Azure Databricks, PostgreSQL 18):
+> the Azure CLI sign-in, a personal access token, and OAuth M2M from a
+> workstation and from a serverless job, each deploying with `verify-full`
+> and no `PGPASSWORD`. Checked on 2026-11-12: the Databricks CLI route
+> (after `databricks auth login`), and a job running as a service principal
+> with only the job's own token. The credential lasts one hour.
+
+- **The endpoint** comes from `--databricks-endpoint`, else
+  `PGMI_DATABRICKS_ENDPOINT`, in the form
+  `projects/<project>/branches/<branch>/endpoints/<endpoint>`.
+- **The workspace** comes from `DATABRICKS_HOST`, else a profile in
+  `~/.databrickscfg`: `DATABRICKS_CONFIG_PROFILE`, else the file's
+  `default_profile`, else `DEFAULT` (`DATABRICKS_CONFIG_FILE` moves the file).
+  It must be `https`.
+- **The sign-in**, first match, as the Databricks SDKs order it:
+  1. `DATABRICKS_TOKEN`, a personal access token;
+  2. `DATABRICKS_CLIENT_ID` and `DATABRICKS_CLIENT_SECRET`, OAuth M2M for a
+     service principal (a CI pipeline or a job);
+  3. the Databricks CLI (`databricks auth login` beforehand; pgmi runs
+     `databricks auth token`);
+  4. on Azure Databricks, pgmi's Azure sign-in (the Azure CLI, managed
+     identity, `AZURE_*` service principal), as for `--azure`.
+
+  `DATABRICKS_AUTH_TYPE` picks one: `pat`, `oauth-m2m`, `databricks-cli`,
+  or `azure-cli`, `azure-msi`, `azure-client-secret` (each means pgmi's Azure
+  sign-in; the SDKs' `ARM_*` variables are not read).
+- **Refresh.** pgmi reuses the credential for every connection of the deploy
+  and gets a new one when less than five minutes are left, so a long deploy
+  that connects again does not present an expired credential.
+- **The user** is still yours to name (`user=` above, or `-U`): the
+  Databricks identity's Postgres role, as in the table above. A credential the
+  database refuses fails with exit 11 and a hint naming Databricks, the user
+  and `--username`.
+- **TLS.** Without an sslmode pgmi uses `verify-full` against the system trust
+  store, and the endpoint's certificate passes it. `disable`, `allow` and
+  `prefer` are refused.
+- **From a job.** pgmi started as a subprocess of a job sees no Databricks
+  credentials of its own. The job's script sets `DATABRICKS_HOST`, and either
+  `DATABRICKS_TOKEN` (for example from the SDK's `w.config.authenticate()`, the
+  job's identity) or a service principal's `DATABRICKS_CLIENT_ID` and
+  `DATABRICKS_CLIENT_SECRET` from a secret scope.
+- **Failures.** No endpoint, no workspace, an `http` workspace or an unknown
+  `DATABRICKS_AUTH_TYPE` stop the deploy before connecting (exit 10). A
+  workspace that refuses (401, 403, 404) or stays unavailable after three
+  tries is exit 11, with the reason the API gave. An invalid personal access
+  token is answered with 403, not 401. No token is printed, also
+  not with `--verbose` or `--json`.
 
 Only the identity that created the project has a Postgres role from the start.
 Another user or service principal needs one before it can connect: after
@@ -101,13 +162,13 @@ resources:
 import argparse, hashlib, os, platform, subprocess, tarfile, tempfile, urllib.parse, urllib.request
 from databricks.sdk import WorkspaceClient
 
-VERSION = "0.14.1"
+VERSION = "0.20.0"
 BASE = f"https://github.com/vvka-141/pgmi/releases/download/v{VERSION}"
 ASSET = {"aarch64": f"pgmi_{VERSION}_linux_arm64.tar.gz",
          "x86_64": f"pgmi_{VERSION}_linux_amd64.tar.gz"}[platform.machine()]
 # From the release's checksums.txt, after `gh attestation verify <archive> -R vvka-141/pgmi`.
-SHA256 = {"pgmi_0.14.1_linux_arm64.tar.gz": "<sha256>",
-          "pgmi_0.14.1_linux_amd64.tar.gz": "<sha256>"}
+SHA256 = {"pgmi_0.20.0_linux_arm64.tar.gz": "<sha256>",
+          "pgmi_0.20.0_linux_amd64.tar.gz": "<sha256>"}
 
 p = argparse.ArgumentParser()
 for a in ("--db-dir", "--endpoint", "--database"):
@@ -166,9 +227,9 @@ What was observed on the serverless runtime:
 
 ### The advanced template in a job
 
-The advanced template needs more than `env`: the provider settings below, and
-with `env=test` or `env=prod` an admin password. Pass the settings as
-`--param` entries. Read the password from a Databricks secret and add it to
+The advanced template needs more than `env`: with `env=test` or `env=prod` an
+admin password (with `env=dev` on Lakebase it generates one, since Lakebase
+refuses a weak password). Read the password from a Databricks secret and add it to
 the environment of the `pgmi` call as `PGMI_PARAM_DATABASE_ADMIN_PASSWORD`,
 never as a `--param`. This combination has not been run as a job yet.
 
@@ -178,14 +239,15 @@ Observed, though not in the Databricks documentation: every database carries
 event triggers that grant Lakebase's own roles (`databricks_reader_<id>`,
 `databricks_writer_<id>`, `databricks_superuser`, `databricks_gateway`) on every
 new schema, table, view and sequence, and a schema `__db_system`. The advanced
-template's grant guards refuse that until you name them:
+template detects Lakebase by those two marks (`deploy/providers.sql`) and
+sets the parameters its grant guards need itself:
 
 ```text
 provider_role_pattern=databricks\_%
 provider_schemas=["__db_system"]
 ```
 
-With both set, the deploy revokes the provider roles' `CREATE` on the
+Pass them as `--param` only to override the detection. With both set, the deploy revokes the provider roles' `CREATE` on the
 template's schemas and their `TRUNCATE`, `REFERENCES`, `TRIGGER` and `MAINTAIN`
 on its tables, and the unmodified template deploys and redeploys with all its
 tests. [Grants a provider makes on its own](PRODUCTION.md#grants-a-provider-makes-on-its-own)
@@ -206,10 +268,10 @@ What this means for your own tables:
   password logins unless the project
   [allows them](https://learn.microsoft.com/azure/databricks/oltp/projects/manage-roles#block-connections),
   which was not tested here. Sign in with your Databricks identity.
-- **Pass a strong admin password even with `env=dev`.** Lakebase checks
-  passwords set in SQL for strength, and the template's `env=dev` default,
-  `postgres`, was not tried there. The tested runs passed 48 random hex
-  characters.
+- **Admin passwords are strong even with `env=dev`.** Lakebase checks
+  passwords set in SQL for strength, so with `env=dev` the template sets a
+  generated one there instead of its local default `postgres`, and warns.
+  Set `PGMI_PARAM_DATABASE_ADMIN_PASSWORD` to choose one.
 
 ## A test gate on a branch
 

@@ -106,6 +106,7 @@ install_pgmi() {
     cd "$TMP_DIR"
     echo "Verifying SHA256 checksum..."
     verify_checksum "$FILENAME" "checksums.txt"
+    echo "To check build provenance by hand: download ${FILENAME} and run gh attestation verify ${FILENAME} --repo ${REPO}"
 
     echo "Extracting..."
     tar -xzf "$FILENAME"

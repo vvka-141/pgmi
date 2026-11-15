@@ -153,7 +153,7 @@ myapp/
   END IF;
   ```
 
-- **No Java dependency**: pgmi is a single Go binary.
+- **No Java dependency**: pgmi is a single self-contained binary.
 
 ### Concrete differences in Flyway terms
 

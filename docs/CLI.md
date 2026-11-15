@@ -47,7 +47,7 @@ in psql. `--verbose` prefixes every line with the elapsed time.
 | `-p, --port` | `$PGPORT` or `5432` | PostgreSQL server port |
 | `-U, --username` | `$PGUSER` or OS user | PostgreSQL user |
 | `-d, --database` | `$PGDATABASE` or from connection string | Target database name |
-| `--sslmode` | `$PGSSLMODE` or `prefer` | SSL mode: `disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`. With `--azure`/`--aws` only `require` and stronger are accepted, and the default is `verify-full` (AWS: `require` without `--sslrootcert`); see [TLS with token authentication](CONNECTIONS.md#tls-with-token-authentication) |
+| `--sslmode` | `$PGSSLMODE` or `prefer` | SSL mode: `disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`. With `--azure`, `--aws` or `--databricks` only `require` and stronger are accepted, and the default is `verify-full` (AWS: `require` without `--sslrootcert`); see [TLS with token authentication](CONNECTIONS.md#tls-with-token-authentication) |
 | `--sslcert` | `$PGSSLCERT` | Path to client SSL certificate file |
 | `--sslkey` | `$PGSSLKEY` | Path to client SSL private key file |
 | `--sslrootcert` | `$PGSSLROOTCERT` | Path to root CA certificate for server verification |
@@ -58,7 +58,7 @@ in psql. `--verbose` prefixes every line with the elapsed time.
 |------|-------------|
 | `--overwrite` | Drop and recreate the target database before deploying. **Local development only.** |
 | `--force` | Replace interactive confirmation with a 5-second countdown, cancellable with Ctrl+C. Without a terminal the countdown is skipped and one line is logged instead. |
-| `--timeout` | Catastrophic failure protection (default: `3m`). Examples: `30s`, `5m`, `1h30m` |
+| `--timeout` | The time box of the whole run (default: `3m`): signing in, connecting, every attempt and every wait between them. `0` sets none; a negative value exits 2. Examples: `30s`, `5m`, `1h30m`. See [Time box and retries](#time-box-and-retries) |
 | `--compat` | Session API version deploy.sql was written against (default: latest). Refuses a version the binary does not ship; before 1.0 it does not freeze columns, so pin the binary too. |
 | `--json` | Emit structured JSON to stdout after deployment, on success **and** on failure. |
 
@@ -75,7 +75,8 @@ returned cleanly.
 The human failure line says the same: `✗ myapp: failed after 0.05s — nothing
 committed`, `(unit 3 of 4 failed; 2 earlier unit(s) already committed)` after a
 mid-file `COMMIT`, and `created database "myapp", left empty` when this deploy
-created it.
+created it. A unit the server never answered reads `whether it committed is
+unknown, check the database`.
 
 | Field | Notes |
 |-------|-------|
@@ -98,6 +99,9 @@ created it.
 | `recreated` | `true` when `--overwrite` dropped the target and created it again; after a failure it is left empty, its old data gone |
 | `executionUnits`, `unitsCommitted` | Present once deploy.sql execution begins. `executionUnits` is the total count; `unitsCommitted` is how many committed: a unit inside an open `BEGIN` that the failure rolled back does not count (equals `executionUnits` on success) |
 | `executionMode` | `"atomic"` (nothing committed, everything rolled back) or `"psql"` (earlier units already committed). Present only on failure |
+| `outcomeUnknown` | `true` when a unit was sent and the server never answered: it may have committed, so check the database before deploying again |
+| `attempts`, `timeUsedMs` | Present once an attempt started. `attempts` lists each run of the deploy, in order, with `startedAt`, `durationMs`, `unitsCommitted` when it committed units, and the `sqlstate` and `message` of a failed one; `timeUsedMs` is the part of the time box used ([Time box and retries](#time-box-and-retries)) |
+| `warnings` | pgmi's own `WARNING:` lines (an unsupported libpq variable that is set, a connection made without TLS because the CPU lacks the features TLS needs). Absent when there are none |
 | `error` | Failure message. Note the key is `error`, not `message` |
 | `notices`, `noticesTruncated` | The deploy's notices, on success and on failure: the first 50, up to 200 `WARNING`s from the middle and the last 150, each as `{severity, message}`, plus `detail` and `hint` when the notice has them; `noticesTruncated` counts the rest and is absent when nothing was dropped. stderr still prints every one |
 | `sqlstate` | PostgreSQL error code |
@@ -117,7 +121,7 @@ the only record of it: keep it as CI output.
   "status": "failed",
   "exitCode": 13,
   "schemaVersion": 1,
-  "pgmiVersion": "0.14.0",
+  "pgmiVersion": "0.20.0",
   "contractVersion": "1",
   "serverVersion": "18.1",
   "tls": {"enabled": true, "version": "TLS 1.3", "sslmode": "verify-full"},
@@ -144,6 +148,71 @@ the only record of it: keep it as CI output.
   "scriptExpanded": false
 }
 ```
+
+#### Time box and retries
+
+`--timeout` (default `3m`; `pgmi.yaml` `timeout`; the flag wins) is the
+wall-clock budget of the whole run. `--timeout 0` sets no time box.
+
+When an attempt fails for a transient reason, pgmi closes its session and runs
+the deploy again from the start on a new connection: a new session, the
+project files loaded again, deploy.sql from its first line. A retry is a
+redeploy: run-once files are skipped by their ledger, everything else is
+rerunnable by design. PostgreSQL does not undo sequence advances, and nothing
+undoes effects outside the database.
+
+Only a deploy that has reached the server is retried. When the first attempt
+never connects (the server refuses, cannot be reached, stays busy, or the
+sign-in gives up), pgmi fails at once with exit 11, so a wrong host or port is
+reported in a second, not after the whole time box.
+
+| Retried | Typical cause |
+|---|---|
+| SQLSTATE class 08; a connection closed, reset or refused mid-run | network, restart, failover |
+| 57P01, 57P02, 57P03 | server shutdown, crash or recovery |
+| 53300 | the server is at `max_connections` |
+| 40001, 40P01 | serialization failure or deadlock with live traffic |
+| 55P03 | a `lock_timeout` or `NOWAIT` in a lock-safe deploy |
+| 25006, only while the server reports `in_hot_standby = on` and the connection did not ask for a standby | a failover left pgmi on a standby |
+| a cloud sign-in or a connect retry that gives up, after an earlier attempt connected | the token endpoint is down, a restart takes longer |
+
+Never retried: any other SQL error (syntax, constraint, permission, a
+`RAISE EXCEPTION` of the project's own), every failure inside a test,
+configuration errors (exit 10), a refused sign-in, another deploy holding the
+lock (exit 15), a session an administrator ended with `pg_terminate_backend`
+while the server kept running, and anything after Ctrl-C or SIGTERM.
+
+Once a unit has committed (the head's `COMMIT`, or any statement of the
+autocommit tail), a failure is final unless `pgmi.yaml` sets
+`retry_after_commit: true`. A connection lost while a unit of deploy.sql runs
+is never retried, not even then: whether it committed is unknown, so pgmi
+says so and exits 13. Nor is a failed unit that is one `CALL`, or one `DO`
+block that says `COMMIT`: it may have committed inside itself. Check the
+database, then deploy again. A connection lost before deploy.sql starts is
+still retried.
+
+The wait before attempt n+1 is `min(30 s, 1 s * 2^(n-1))`, times a random
+factor between 0.8 and 1.2. Inside the default 3m box a deploy that fails fast
+gets about 9 attempts; with `--timeout 0` pgmi stops after 5. Each retried
+attempt prints one line on stderr:
+
+```
+pgmi: attempt 2 failed (40P01 deadlock detected); retrying in 2.1s, 2m51s left
+```
+
+| How a run ends | Exit code |
+|---|---|
+| an attempt succeeded | 0 |
+| a failure that is never retried | its own (11, 13, ...) |
+| the next wait would end after the deadline | the last error's, with `stopped after N attempts: the next retry would pass the 3m time box; last error: ...` |
+| the deadline passed while SQL ran | 16; the statement is cancelled on the server and rolled back |
+| the deadline passed while connecting | 11 |
+| the connection was lost once the session was open | 13; 11 only when no session ever opened |
+| Ctrl-C or SIGTERM, during an attempt or a wait | 130 at once |
+
+`pgmi.yaml` `retry: false` turns retrying off for a project whose deploy must
+never run twice. There is no flag: whether a deploy may run twice is the
+project's property.
 
 #### Understanding `--compat` (API Versioning)
 
@@ -195,7 +264,7 @@ pgmi: error: unsupported API version "99"; supported: 1
 **Version 1** (Current)
 - Changes within v1 before pgmi 1.0 are listed in the release notes' Upgrading sections
 - Views: `pgmi_source_view`, `pgmi_plan_view`, `pgmi_parameter_view`, `pgmi_runtime_view`, `pgmi_test_source_view`, `pgmi_test_directory_view`, `pgmi_source_metadata_view`
-- Functions: `pgmi_test_plan()`, `pgmi_test_generate()`, `pgmi_is_sql_file()`, `pgmi_persist_test_plan()`
+- Functions: `pgmi_test_plan()`, `pgmi_test_generate()`, `pgmi_is_sql_file()`, `pgmi_persist_test_plan()`, `pgmi_run_file()`
 - Preprocessor macro: `CALL pgmi_test()`
 
 See [Session API](session-api.md) for complete API documentation.
@@ -246,8 +315,8 @@ unset; the countdown needs a human who could press Ctrl-C. In CI and piped logs
 `--overwrite` **without** `--force` does not prompt there either — it refuses:
 
 ```
-pgmi: error: approval denied: --overwrite must be confirmed at a terminal, and
-this is not one; pass --force to drop and recreate "myapp" from a script or CI job
+pgmi: error: --overwrite must be confirmed at a terminal, and this is not one;
+pass --force to drop and recreate "myapp" from a script or CI job
 ```
 
 Exit code 12, immediately. It used to block on the prompt until `--timeout`
@@ -307,6 +376,13 @@ Environment variables named `PGMI_PARAM_<NAME>` are parameters too: `PGMI_PARAM_
 |------|-------------|
 | `--google` | Enable Google Cloud SQL IAM database authentication. Uses Application Default Credentials (gcloud auth, service account, etc.) |
 | `--google-instance` | Cloud SQL instance connection name (format: `project:region:instance`). Required when `--google` is specified. |
+
+### Databricks Lakebase Flags
+
+| Flag | Description |
+|------|-------------|
+| `--databricks` | Sign in to Databricks Lakebase: a database credential from the workspace in `DATABRICKS_HOST` or `~/.databrickscfg`, refreshed before it expires. See [Lakebase](LAKEBASE.md#sign-in-with---databricks) |
+| `--databricks-endpoint` | Lakebase endpoint, `projects/<project>/branches/<branch>/endpoints/<endpoint>` (overrides `$PGMI_DATABRICKS_ENDPOINT`) |
 
 ### Password
 
@@ -648,7 +724,18 @@ claude mcp add pgmi -- pgmi serve
 ```
 
 The server reads JSON-RPC from stdin, writes responses to stdout, and sends all
-diagnostics to stderr. It exits cleanly on EOF or SIGINT.
+diagnostics to stderr. It exits cleanly on EOF or SIGINT; a second SIGINT or
+SIGTERM while answers are written ends it at once with exit 130. Closing stdin
+is how an MCP client shuts the server down, so a deploy still running then is
+cancelled and rolls back what it had not committed; other tool calls finish
+and answer. A script that pipes a deploy call into `pgmi serve` must keep stdin
+open until the answer arrives.
+
+**Limits.** A request line may hold at most 16 MiB (a longer one gets
+`-32600`, and the session goes on), at most 32 tool calls run at once (the
+next gets `-32000`), and a client that leaves 1024 answers unread is
+disconnected. A `tools/call` whose id is still running is refused with
+`-32600`.
 
 **Failure handling.** A tool that fails — including one that panics — answers
 with `isError: true` and the session continues; a panic also carries its stack in
@@ -718,10 +805,56 @@ call's text ends with its exit code and, when known, its phase. `verbose: true` 
 `metadata_*` tools are read-only, so a client need not ask before calling them;
 `deploy` is destructive and reaches a database.
 
-**Destructive deploys need an echo-back.** `deploy` with `overwrite: true` drops
-the target database, and this path auto-approves (there is no TTY to prompt). It
-therefore also requires `confirmDatabaseName` to equal the resolved target
-database exactly:
+**Whose credentials a deploy may use.** An MCP client is an agent, and an
+agent can be talked into naming a server. `pgmi serve` therefore sends the
+credentials of the account it runs as only to servers that account chose:
+
+- the `host:port` its own environment resolves to (`PGHOST`/`PGPORT`,
+  `PGMI_CONNECTION_STRING`, the defaults; `PGDATABASE` need not be set), and
+- every entry of `PGMI_SERVE_HOSTS`, a comma-separated list of `host` (any
+  port), `host:port`, `[ipv6]` or `[ipv6]:port`, read when `pgmi serve`
+  starts. An IPv6 address must be in brackets: an entry such as `::1:5432`
+  is refused at start with exit 10. Host names compare without case,
+  addresses by value, ports exactly.
+
+For any other server a deploy tool call still runs, but pgmi uses neither
+`PGPASSWORD`, nor a password file (`passfile`, `PGPASSFILE`, `~/.pgpass`),
+nor a cloud sign-in (`--azure`, `--aws`, `--google`, `--databricks`, or
+`auth_method` in the project's `pgmi.yaml`; a cloud sign-in is refused with
+exit 10). A password the tool call types in its own connection string is
+used. stderr names the server that was not allowed, and when the server then
+asks for a password, the tool result says the operator's password was not
+used for that host because it is not on the list.
+
+On an allowed server the operator's credentials go only with settings at
+least as strict as the operator's own: a tool call's `sslmode` and
+`channel_binding` are raised to the operator's (disable < allow < prefer <
+require < verify-ca < verify-full; disable < prefer < require), and its
+`require_auth` becomes the operator's when it set none. A `require_auth` that
+allows a method the operator's does not is refused, exit 10. A tool call that
+types its own password keeps its own settings. A tool call may not set
+`hostaddr` or `passfile` in its connection string.
+
+```json
+{"mcpServers": {"pgmi": {"command": "pgmi", "args": ["serve"],
+  "env": {"PGMI_SERVE_HOSTS": "db.internal,staging.example.com:6432"}}}}
+```
+
+**Which files a deploy may read.** A `paramsFile` must lie inside the project,
+or inside a directory of `PGMI_SERVE_ROOTS`, a comma-separated list read when
+`pgmi serve` starts; any other file is refused with exit 10 before connecting,
+so a call cannot load an arbitrary `KEY=VALUE` file into the session. When
+`PGMI_SERVE_ROOTS` is set, the project path must lie inside one of its
+directories too.
+
+The plain `pgmi deploy` command is not affected by any of these rules.
+
+**Destructive deploys are off unless the operator turns them on.** `deploy`
+with `overwrite: true` drops the target database, so it is refused (exit 12,
+before connecting) unless the operator starts `pgmi serve` with
+`PGMI_SERVE_ALLOW_OVERWRITE=1`. This path auto-approves (there is no TTY to
+prompt), so the call must then also set `confirmDatabaseName` to the resolved
+target database exactly:
 
 ```json
 {"name": "deploy", "arguments": {
@@ -790,7 +923,12 @@ pgmi respects standard PostgreSQL environment variables and its own:
 | `PGAPPNAME` | `deploy` | `application_name` reported in `pg_stat_activity` (default: `pgmi`) |
 | `PGCONNECT_TIMEOUT` | `deploy` | Connection timeout in seconds (libpq convention) |
 | `PGPASSFILE` | `deploy` | Path to `.pgpass` (default: `~/.pgpass` or `%APPDATA%\postgresql\pgpass.conf`) |
+| `PGCLIENTENCODING` | `deploy` | The session's `client_encoding` (default: the database's encoding) |
 | `PGMI_PARAM_<NAME>` | `deploy`, `serve` | Deploy parameter `<name>` (lower-cased); empty value exits 10 |
+| `PGMI_SERVE_HOSTS` | `serve` | Servers, besides the operator's own, that may receive the operator's credentials (`host`, `host:port`, `[ipv6]:port`, comma-separated). See [pgmi serve](#pgmi-serve) |
+| `PGMI_SERVE_ROOTS` | `serve` | Directories a deploy tool call's `paramsFile` and project may lie in, besides the project (comma-separated) |
+| `PGMI_SERVE_ALLOW_OVERWRITE` | `serve` | `1` lets a deploy tool call drop and recreate a database (`overwrite: true`); otherwise exit 12 |
+| `PGMI_MAX_FILE_SIZE` | `deploy` | Per-file cap in bytes for project files, params files and `.env` (default 10 MiB) |
 | `PGMI_NON_INTERACTIVE` | any | Set to `1` to disable TUI wizards |
 | `CI` | any | Any non-empty value disables TUI wizards |
 | `NO_COLOR` | any | Disables ANSI colors (wizards still run; accessibility signal per https://no-color.org). A stderr that is no terminal (a CI log, a pipe, `TERM=dumb`) gets no colors or glyphs either: the summary line reads `ok` or `FAILED` |
@@ -800,10 +938,13 @@ pgmi respects standard PostgreSQL environment variables and its own:
 | `AZURE_TENANT_ID` | `deploy` | Azure AD tenant ID |
 | `AZURE_CLIENT_ID` | `deploy` | Azure AD client ID |
 | `AZURE_CLIENT_SECRET` | `deploy` | Azure AD client secret |
+| `AZURE_CLIENT_CERTIFICATE_PATH` | `deploy` | Azure AD client certificate (PEM or PKCS#12), instead of a secret |
 | `AWS_REGION` | `deploy` | AWS region for RDS IAM auth |
 | `AWS_DEFAULT_REGION` | `deploy` | Fallback AWS region |
+| `PGMI_DATABRICKS_ENDPOINT` | `deploy` | Lakebase endpoint for `--databricks` |
+| `DATABRICKS_HOST`, `DATABRICKS_TOKEN`, `DATABRICKS_CLIENT_ID`, `DATABRICKS_CLIENT_SECRET` | `deploy` | Workspace and sign-in for `--databricks` ([Lakebase](LAKEBASE.md#sign-in-with---databricks)) |
 
-pgmi uses the [`jackc/pgx`](https://github.com/jackc/pgx) driver (Go-native, no libpq dependency), so not every libpq variable works: `PGSERVICE` is refused, and `PGHOSTADDR` and `PGSSLCRL` are ignored. The driver also reads `PGOPTIONS`, `PGTZ`, `PGTARGETSESSIONATTRS`, `PGREQUIREAUTH` and `PGCHANNELBINDING`. The full list, with which variables are secrets, what outranks each one and the cloud SDK variables, is the [environment reference](CICD.md#environment-reference).
+pgmi does not use libpq, so not every libpq variable works: `PGSERVICE` is refused, `PGHOSTADDR` is ignored, and `PGSSLCRL`, `PGSSLCRLDIR` and `PGREQUIREPEER` are not checked: pgmi warns and goes on, and refuses a revocation list under `sslmode=verify-ca` or `verify-full` (exit 10). pgmi also reads `PGOPTIONS`, `PGTZ`, `PGTARGETSESSIONATTRS`, `PGREQUIREAUTH` and `PGCHANNELBINDING`. The full list, with which variables are secrets, what outranks each one and the cloud SDK variables, is the [environment reference](CICD.md#environment-reference).
 
 ### Precedence
 
@@ -893,14 +1034,14 @@ after connecting, before any create or drop.
 
 | Error | Cause | Solution |
 |-------|-------|----------|
-| `database name is required` | No `-d`, no database in the connection string, no `PGDATABASE` | Add `-d mydb` |
+| `database name is required` | No `-d`, no database in the connection string, no `PGDATABASE` | Add `-d mydb`. `deploy` never opens the connection wizard, also on a terminal |
 | `invalid parameter format` | `--param` without `=` | Use `--param key=value` |
 | `failed to load pgmi.yaml` | Unparseable `pgmi.yaml` | Fix the YAML syntax |
 | `unsupported API version` | Invalid `--compat` value | Use `--compat=1` (currently only v1 supported) |
 | `failed to read/parse params file` | `--params-file` missing or malformed | Check the path and the `KEY=VALUE` format |
 | `environment variable PGMI_PARAM_X is set but empty` | A CI secret mapped to it is missing or misspelled | Fix the secret mapping, or unset the variable |
 | `--params-file - (stdin) given 2 times` | `-` repeated | Read stdin once |
-| `cannot use multiple cloud authentication methods` | More than one of `--azure`/`--aws`/`--google` | Choose one |
+| `cannot use multiple cloud authentication methods` | More than one of `--azure`/`--aws`/`--google`/`--databricks` | Choose one |
 
 > **Parameter errors raised by your SQL are exit 13, not exit 10.** A
 > `Missing required parameter(s)` or `Unknown parameters` message from a

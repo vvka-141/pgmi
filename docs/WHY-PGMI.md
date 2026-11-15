@@ -110,8 +110,8 @@ pgmi is a good fit when:
 - See [deploy.sql guide](DEPLOY-GUIDE.md#loading-json-configuration) for data ingestion patterns
 
 **You target multiple cloud PostgreSQL providers.**
-- The same `deploy.sql` targets self-hosted PostgreSQL and the managed services. CI tests self-hosted PostgreSQL; Azure was tested by hand, the other services are expected to work ([compatibility matrix](PRODUCTION.md#postgresql-compatibility))
-- Native auth integration (Azure Entra ID, AWS IAM, Google Cloud SQL IAM) — no credential translation layer
+- The same `deploy.sql` targets self-hosted PostgreSQL and the managed services. CI tests self-hosted PostgreSQL; Azure and Databricks Lakebase were tested by hand, the other services are expected to work ([compatibility matrix](PRODUCTION.md#postgresql-compatibility))
+- Native auth integration (Azure Entra ID, AWS IAM, Google Cloud SQL IAM, Databricks Lakebase) — no credential translation layer
 - See [Connections](CONNECTIONS.md) for the full connection architecture
 
 **You want fast iteration with disposable databases.**
@@ -147,7 +147,7 @@ pgmi is PostgreSQL-only by design. It leverages PostgreSQL-specific features (te
 | Debugging | PostgreSQL-native (RAISE, pg_catalog) | Tool-specific logs |
 | Portability | PostgreSQL only | Often multi-database |
 | Data ingestion | Built-in (JSON, XML, CSV via deploy.sql) | External tools or plugins |
-| Cloud auth | Native (Azure, AWS, GCP IAM); Azure tested by hand against a real cloud, AWS and GCP not ([connections](CONNECTIONS.md)) | Varies by tool |
+| Cloud auth | Native (Azure, AWS, GCP IAM, Databricks Lakebase); Azure and Lakebase tested by hand against the real service, AWS and GCP not ([connections](CONNECTIONS.md)) | Varies by tool |
 | File loading | Session temp tables (disk-backed), suited for schema + reference data | Varies |
 | Connection poolers | Direct connection required | Usually transparent |
 | Test gate location | Where `deploy.sql` calls it: inside the deploy transaction, against the target, post-migration — a failing test aborts the commit | A separate command against a dev database, before the apply (Atlas [`migrate test`](https://atlasgo.io/testing/migrate)); or assertions embedded in migration files (Flyway [transaction testing](https://www.red-gate.com/hub/product-learning/flyway/testing-flyway-migrations-using-transactions)) |
@@ -167,7 +167,7 @@ The full engineering decision records — including what was rejected and why �
 
 ### PostgreSQL is the deployment engine
 
-pgmi doesn't implement migration logic in Go. It loads your files into PostgreSQL and lets PostgreSQL run your deployment script. This means:
+pgmi doesn't implement migration logic of its own. It loads your files into PostgreSQL and lets PostgreSQL run your deployment script. This means:
 
 - You can use any PostgreSQL feature: `pg_advisory_lock`, system catalogs, extensions
 - Errors are PostgreSQL errors with standard SQLSTATE codes

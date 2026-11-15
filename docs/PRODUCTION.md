@@ -34,18 +34,18 @@ The minimum PostgreSQL version depends on which layer you use:
 
 | Layer | Min PostgreSQL | What drives the floor |
 |-------|----------------|-----------------------|
-| pgmi core / CLI | 15+ | Session-scoped temp tables and a session-mode connection (no transaction pooler). Set deliberately in the Go core. |
+| pgmi core / CLI | 15+ | Session-scoped temp tables and a session-mode connection (no transaction pooler). Set deliberately in pgmi. |
 | basic template | 15+ | Plain SQL tables, views and functions — no extensions, roles, or version-specific syntax. |
 | advanced template | 18+ | `deploy.sql` refuses an older server before any schema work. The template relies on PostgreSQL 18 features: `uuidv7()`, temporal keys (`WITHOUT OVERLAPS`, `PERIOD` foreign keys), virtual generated columns and `RETURNING OLD`. Also needs the `uuid-ossp` / `pgcrypto` / `pg_trgm` / `hstore` / `btree_gist` extensions, and a role with `CREATEROLE` + `CREATEDB`; `deploy.sql` grants itself the roles it creates. **No superuser required** (tested in CI). |
 | API / MCP features | 18+ | Ship inside the advanced template, so they share its floor. |
 
-The 15+ figure applies to the CLI and the basic scaffold (set in the Go core — see the [core minimum](#connection-requirements)). The advanced template raises the floor to **18+**, and its `deploy.sql` checks it first: on an older server it fails with `This project's code was written for PostgreSQL 18; this server runs <version>. pgmi itself works on PostgreSQL 15 and newer: adapt the code to your version, then deploy again.` and exit code 13, before it creates anything.
+The 15+ figure applies to the CLI and the basic scaffold (set in pgmi — see the [core minimum](#connection-requirements)). The advanced template raises the floor to **18+**, and its `deploy.sql` checks it first: on an older server it fails with `This project's code was written for PostgreSQL 18; this server runs <version>. pgmi itself works on PostgreSQL 15 and newer: adapt the code to your version, then deploy again.` and exit code 13, before it creates anything.
 
 Both floors are tested, not asserted. CI runs the core suite and the basic
 template against PostgreSQL 15, and everything against 18, so a construct that
 raises either floor fails the build. A server below 15 is refused before any
-schema work with `invalid configuration: this server reports PostgreSQL
-<version>, and pgmi requires 15 or newer` and exit code 10. 15 is the oldest
+schema work with `this server reports PostgreSQL <version>, and pgmi
+requires 15 or newer` and exit code 10. 15 is the oldest
 release PostgreSQL supports once 14 reaches end of life on 2026-11-12; a
 project on an older server stays on pgmi v0.13.
 
@@ -69,7 +69,7 @@ The deploy grants itself the roles it creates, so no further grant is needed. Ke
 
 ### Grants a provider makes on its own
 
-Some providers grant their own roles on every new schema and table, through event triggers they own, and keep a schema of their own in every database. Databricks Lakebase does both: `databricks_reader_<id>`, `databricks_writer_<id>`, `databricks_superuser` and `databricks_gateway` get grants on each new schema and table, three functions in `public` stay executable by `PUBLIC`, and every database holds a schema `__db_system`. The advanced template's guards hold grants to an exact list, so on such a provider they fail the deploy until it names the provider's roles and schemas:
+Some providers grant their own roles on every new schema and table, through event triggers they own, and keep a schema of their own in every database. Databricks Lakebase does both: `databricks_reader_<id>`, `databricks_writer_<id>`, `databricks_superuser` and `databricks_gateway` get grants on each new schema and table, three functions in `public` stay executable by `PUBLIC`, and every database holds a schema `__db_system`. The advanced template's guards hold grants to an exact list, so on such a provider they need the provider's roles and schemas named. On Lakebase the template detects the host (`deploy/providers.sql`) and sets them itself; on another provider pass them as parameters:
 
 ```text
 provider_role_pattern=databricks\_%
@@ -88,7 +88,7 @@ Entity lifecycle standards (`created_at` / `deleted_at` on tables marked `object
 | Azure Database for PostgreSQL — Flexible Server | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
 | Azure Cosmos DB for PostgreSQL (formerly Citus) | Expected | Not validated for sharded tables | Citus-specific semantics need project-level validation. |
 | Google Cloud SQL for PostgreSQL | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
-| Databricks Lakebase | Tested by hand | Tested by hand, with `provider_role_pattern` and `provider_schemas` | Manual runs in 2026-11, not in CI. See [Databricks Lakebase](LAKEBASE.md). |
+| Databricks Lakebase | Tested by hand | Tested by hand; the template sets `provider_role_pattern` and `provider_schemas` itself | Manual runs in 2026-11, not in CI. See [Databricks Lakebase](LAKEBASE.md). |
 | Google AlloyDB | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
 | Supabase | Expected | Not supported | No PostgreSQL 18 offering found, and the advanced template refuses older servers. |
 | Neon | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
@@ -599,19 +599,23 @@ PGMI_CONNECTION_STRING="postgresql://deployer:${DB_PASSWORD}@db-server:5432/mydb
 
 What `pgmi deploy` guarantees when nobody is watching: in CI, from a
 scheduler, or under an agent. pgmi handles stopping, concurrency, the checks
-before connecting, connection retries and the run's record. deploy.sql
+before connecting, retries and the run's record. deploy.sql
 decides the transaction boundaries, so it decides what a failure leaves
 applied.
 
 **Timeouts and signals cancel the running statement.**
 
 - `--timeout` (default 3m; `0` means no limit; `timeout:` in `pgmi.yaml`)
-  bounds the whole deploy, the autocommit tail included. When it runs out,
-  pgmi sends PostgreSQL a cancel request for the running statement, waits up
-  to two seconds for the server to stop it, and exits 16. A query is not left
-  running on the server after pgmi has gone.
+  bounds the whole run: signing in, connecting, every attempt and every wait
+  between attempts, the autocommit tail included. When it runs out while SQL
+  runs, pgmi sends PostgreSQL a cancel request for the running statement,
+  waits up to two seconds for the server to stop it, and exits 16 (11 when it
+  runs out while connecting). A query is not left running on the server after
+  pgmi has gone.
 - SIGINT and SIGTERM (the signal a CI job cancel sends) do the same and exit
-  130. A second signal quits at once.
+  130; so do SIGHUP (a closed terminal or SSH session), SIGQUIT, SIGUSR1 and
+  SIGUSR2. A second signal quits at once. A stderr reader that went away does
+  not stop the deploy.
 - Either way the open transaction rolls back. What deploy.sql already
   committed, such as statements in the autocommit tail after its first
   `COMMIT`, stays applied
@@ -637,14 +641,21 @@ dropped or changed. Required parameters, such as the templates' `env`, are
 deploy.sql's to check once connected: a missing one exits 13 (SQLSTATE 22023),
 after a new target database was created.
 
-**Connecting is retried; deploying is not.** A connection that fails with a
-transient error (connection exceptions, too many connections, the server
-starting up, network errors) is retried three times, up to four attempts in
-all, with exponential backoff from 100 ms. Each retry is printed on stderr.
-The count is fixed: no flag or setting changes it. The Google Cloud SQL
-connector does not retry. pgmi never retries a deploy or a statement:
-re-running a failed deploy is the pipeline's job, and retrying inside a
-deploy (a serialization failure, a lock timeout) is deploy.sql's.
+**A transient failure runs the deploy again inside the time box.** A
+connection that fails with a transient error (connection exceptions, too many
+connections, the server starting up, network errors) is retried three times,
+up to four attempts in all, with exponential backoff from 100 ms, on every
+route, Google Cloud SQL included. Past that, a deploy that has reached the
+server and then fails for a transient reason (a lost connection, a server
+restart, a failover to a standby, a deadlock or serialization failure, a lock
+timeout) runs again from the start, exactly like a redeploy, waiting 1 s
+doubling to 30 s, until it succeeds or the time box ends. A failing test or
+any other SQL error is never retried. Once a unit has committed, a failure is
+final unless `pgmi.yaml` sets `retry_after_commit: true`, and a unit whose
+answer was lost is never retried, since whether it committed is unknown.
+`retry: false` in `pgmi.yaml` turns it off. Each retry is printed on stderr
+and listed in the `--json` `attempts`, so a pipeline needs no retry step of
+its own ([Time box and retries](CLI.md#time-box-and-retries)).
 
 **`--json` reports each run's result.** With `--json`, pgmi prints one JSON
 object on stdout for a success and for a failure, including failures before
@@ -652,24 +663,28 @@ the deploy starts. It gives the exit code, SQLSTATE, the failing file and
 line, the phase (`deploy` or `test`), and `unitsCommitted`: how many of
 deploy.sql's execution units (the transactional head, then each statement of
 the autocommit tail) committed before the failure, which tells you whether a
-re-run starts from a clean slate. It also names where the connection came
+re-run starts from a clean slate. `outcomeUnknown: true` says a unit got no
+answer and may have committed: check the database first. It also names where the connection came
 from (`connectionSource`), which `pgmi.yaml` values an environment variable
 replaced (`overrides`), and the pgmi, contract and server versions. Keep it
 as a build artifact: a database table written by deploy.sql loses the
 failed run's rows when the transaction rolls back, so this is often the only
 record of a failure ([Reading the result](CICD.md#reading-the-result)).
 
-**pgmi redacts connection passwords and SQL `PASSWORD '...'` literals from
-its output.** That covers every error message and the JSON record, whose
+**pgmi redacts connection passwords, sign-in tokens and SQL `PASSWORD '...'`
+literals from its output.** That covers every notice, error message and the
+JSON record, whose
 target never carries the user, password or token. A secret your SQL expands
 inside `EXECUTE` can still reach an error's context: catch errors around such
 statements and raise your own message
 ([Security](SECURITY.md#your-sql-controls-its-own-logging)). Where secrets go
 in a pipeline: the [environment reference](CICD.md#environment-reference).
 
-**Cloud authentication supports long deploys.** With `--azure` or `--aws`, pgmi gets
-a fresh token for each new connection and caps a connection's lifetime at its
-token's, so a deploy can outlast the token (15 minutes for RDS). It refuses
+**Cloud authentication supports long deploys.** With `--azure`, `--aws` or
+`--databricks`, pgmi signs in before it connects and gives each later
+connection (a retry, a reconnect) a token with more than five minutes left,
+getting a new one when needed. A token is checked only at login, so a deploy
+that is already connected can outlast it (15 minutes for RDS). pgmi refuses
 an `sslmode` that could send the token in plain text.
 
 **`--overwrite` restores what it drops.** The re-created database keeps its

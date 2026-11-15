@@ -10,7 +10,7 @@ weight: 160
 
 > **Example layout.** The examples on this page assume SQL files under `migrations/`, `schemas/` and `seeds/`. The scaffolded templates use `physical/` and `semantic/` instead. Change the path in a `WHERE` to your project's folder: a filter that matches no folder selects nothing and runs nothing, without an error.
 
-![The session API surface: Go writes internal _pgmi_* temp tables, your deploy.sql reads the stable pgmi_*_view views and test functions](diagrams/d03-session-api-surface.drawio.svg)
+![The session API surface: pgmi writes internal _pgmi_* temp tables, your deploy.sql reads the stable pgmi_*_view views and test functions](diagrams/d03-session-api-surface.drawio.svg)
 
 ## How pgmi Actually Works
 
@@ -41,7 +41,7 @@ pgmi uses a two-tier naming convention for session objects:
 
 | Tier | Naming | Purpose | Example |
 |------|--------|---------|---------|
-| **Internal** | `_pgmi_*` prefix | Used by pgmi Go code | `_pgmi_source`, `_pgmi_parameter` |
+| **Internal** | `_pgmi_*` prefix | Used by pgmi itself | `_pgmi_source`, `_pgmi_parameter` |
 | **Public** | `*_view` suffix | Stable API for deploy.sql | `pgmi_source_view`, `pgmi_plan_view` |
 
 **Why this matters:**
@@ -75,7 +75,7 @@ These views and functions are the API for deploy.sql. Use these instead of query
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `pgmi_version` | text | The binary's version, as `pgmi version` prints it (`0.14.0`; `dev` for an untagged build) |
+| `pgmi_version` | text | The binary's version, as `pgmi version` prints it (`0.20.0`) |
 | `contract_version` | text | Session API version applied: `--compat`, or the latest the binary ships |
 
 The PostgreSQL version is already in SQL: `current_setting('server_version_num')`.
@@ -533,7 +533,7 @@ WHERE depth > 0;
 
 **Executes tests with automatic savepoint isolation.**
 
-The `CALL pgmi_test()` is a **preprocessor macro** that Go expands before sending SQL to PostgreSQL:
+The `CALL pgmi_test()` is a **preprocessor macro** that pgmi expands before sending SQL to PostgreSQL:
 
 ```sql
 -- Run all tests with default callback
@@ -588,7 +588,7 @@ With `--verbose`, DEBUG messages show rollback and teardown events (`[pgmi] Roll
 
 **Generates the SQL code for `pgmi_test()` macro expansion.**
 
-This is an internal function called by the Go preprocessor. It returns the complete SQL text that replaces the `CALL pgmi_test()` macro.
+This is an internal function called by pgmi's preprocessor. It returns the complete SQL text that replaces the `CALL pgmi_test()` macro.
 
 ```sql
 -- See what SQL the macro generates (for debugging)

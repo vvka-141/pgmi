@@ -55,10 +55,17 @@ params:                  # Key-value parameters passed to deploy.sql
   env: dev
   max_connections: "100"
 
-timeout: 5m              # Deployment timeout (e.g., 30s, 5m, 1h)
+timeout: 5m              # Time box of the whole run (e.g., 30s, 5m, 1h; 0 = none)
+retry: true              # Run the deploy again after a transient failure (default: true)
+retry_after_commit: false  # Also retry once a unit has committed (default: false)
 ```
 
-All fields are optional. Missing fields fall back to built-in defaults or libpq environment variables. Unknown keys are an error, not a silent fallback — a typo like `usernmae:` fails the load rather than quietly deploying against a default.
+All fields are optional. Missing fields fall back to built-in defaults or libpq environment variables. Unknown keys are an error, not a silent fallback — a typo like `usernmae:` fails the load rather than quietly deploying against a default; the error names the line, the column and the keys expected. A file with two YAML documents, `port: 0` and a negative `timeout` are refused too (exit 10). A quoted port (`port: "5433"`) is accepted.
+
+`retry` and `retry_after_commit` decide whether a transient failure (a lost
+connection, a failover, a deadlock) runs the deploy again inside the time box.
+They are the project's property, so there is no flag for them. See
+[Time box and retries](CLI.md#time-box-and-retries).
 
 ### `auth_method`
 
@@ -79,7 +86,7 @@ connection:
   azure_tenant_id: 00000000-0000-0000-0000-000000000000
 ```
 
-The companion keys only supply defaults; the matching flag or environment
+`--databricks` has no `auth_method`; pass the flag. The companion keys only supply defaults; the matching flag or environment
 variable outranks them (`--azure-tenant-id` > `$AZURE_TENANT_ID` >
 `azure_tenant_id`, and for AWS `--aws-region` > `$AWS_REGION` >
 `$AWS_DEFAULT_REGION` > `aws_region`).
@@ -158,8 +165,10 @@ pgmi deploy . --connection "postgresql://other.host"
 This is deliberate: merging `sslmode: require` from `pgmi.yaml` into a string
 pointing at a *different* host would apply one host's trust policy to another.
 Name the fields you need in the string, or use `-d` and the granular flags,
-which do compose. Pinned by `TestResolveConnectionParams_ConnectionStringReplacesProjectConfig`
-and `TestResolveConnectionString_FillsOmittedFromEnvironment`.
+which do compose. Pinned by the unit tests
+`a_string_replaces_the_pgmi_yaml_connection_block` and
+`a_string_takes_what_it_omits_from_the_environment` in
+`rust/pgmi/src/conn/resolve_tests.rs`.
 
 pgmi reads no libpq service files: `service=` in a connection string and a set
 `PGSERVICE` are refused with exit 10 rather than ignored.
@@ -176,7 +185,7 @@ names the target, and every `PG*` variable or connection string that replaces a
 `pgmi.yaml` value prints one line, e.g. `database: from PGDATABASE (staging_db), not pgmi.yaml (myapp)`,
 `database: from PGMI_CONNECTION_STRING (postgres), not pgmi.yaml (myapp)`
 or `sslmode: from PGSSLMODE (disable), not pgmi.yaml (verify-full)`. The same
-holds for `sslcert`, `sslkey` and `sslrootcert`. A set `PGOPTIONS`, which pgx applies to every
+holds for `sslcert`, `sslkey` and `sslrootcert`. A set `PGOPTIONS`, which pgmi applies to every
 session, prints `session options: from PGOPTIONS` (the name only).
 
 Example:
@@ -289,7 +298,7 @@ pgmi deploy .              # Uses 10m from pgmi.yaml
 pgmi deploy . --timeout 30m  # Uses 30m, ignores pgmi.yaml
 ```
 
-If neither pgmi.yaml nor `--timeout` specifies a value, the built-in default (3 minutes) applies.
+If neither pgmi.yaml nor `--timeout` specifies a value, the built-in default (3 minutes) applies. A `timeout` in pgmi.yaml that is not a duration is refused (exit 10) even when `--timeout` is given: a broken file is reported whatever overrides it.
 
 ## Security Design
 
@@ -313,10 +322,12 @@ connection:
   database: mydb
   host: localhost
   port: 5432
-  sslmode: prefer
 
 timeout: 3m
 ```
+
+No `sslmode` is written, so the default applies: `prefer`, or TLS only with
+cloud sign-in (`--azure`, `--aws`, `--databricks`).
 
 `env` is required and deliberately not set: pass `--param env=dev` locally and
 `PGMI_PARAM_ENV` in CI, so a deploy that forgets it fails instead of seeding
@@ -329,7 +340,6 @@ connection:
   database: mydb
   host: localhost
   port: 5432
-  sslmode: prefer
 
 timeout: 5m
 ```
@@ -387,6 +397,18 @@ key. A `PGMI_CONNECTION_STRING` set only in `.env` outranks the pipeline's real
 `connection: from PGMI_CONNECTION_STRING (set by ./.env) (...)`, one line lists
 the keys `.env` set (names only, never values), and `--json` carries them as
 `dotenvKeys`.
+
+A checked-out project's `.env` may not redirect credentials: keys that locate
+credentials, endpoints, proxies or trust roots (`PGPASSFILE`, `PGSSLROOTCERT`,
+`PGSSLCERT`, `PGSSLKEY`, `PGSERVICEFILE`, `PGSYSCONFDIR`, `AWS_PROFILE`,
+`AWS_CONFIG_FILE`, `AZURE_FEDERATED_TOKEN_FILE`,
+`GOOGLE_APPLICATION_CREDENTIALS`, `DATABRICKS_HOST`, `SSL_CERT_FILE`,
+`HTTPS_PROXY` and the like) are skipped, and the `.env applied:` line names
+each one. Set them in the environment pgmi runs in. `PGSSLMODE` is allowed. A
+`.env` that exists but cannot be read, or that is larger than
+`PGMI_MAX_FILE_SIZE`, stops the deploy with exit 10; one that does not parse is
+not applied at all, with a warning naming the file. A leading UTF-8
+byte-order mark is ignored.
 
 ### CI/CD Pipeline
 

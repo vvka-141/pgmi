@@ -121,7 +121,6 @@ The templates are optional starting points that become your project's code; a ha
 
 ### Operations
 - **[CI/CD](CICD.md)** — Deploy from GitHub Actions and other pipelines
-- **[Go library](GO-LIBRARY.md)** — Run a deploy from your own Go program
 - **[Production](PRODUCTION.md)** — Performance, rollback strategies, monitoring
 - **[Databricks Lakebase](LAKEBASE.md)** — Credentials, bundle jobs, the advanced template, a test gate on a branch
 

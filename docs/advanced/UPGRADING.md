@@ -32,13 +32,17 @@ upgraded to last.
 ## 2. Scaffold the base and the target
 
 `pgmi init` writes only the templates built into the running binary, so the
-base needs the base version's binary. Install it next to your current one:
+base needs the base version's binary. Take it from that release's archive on
+GitHub and unpack it next to your current one:
 
 ```bash
-GOBIN=/tmp/pgmi-base go install github.com/vvka-141/pgmi/cmd/pgmi@v0.13.0
+mkdir -p /tmp/pgmi-base
+gh release download v0.14.1 -R vvka-141/pgmi -p 'pgmi_*_linux_amd64.tar.gz' -O - \
+  | tar -xz -C /tmp/pgmi-base pgmi
 ```
 
-Or take the binary from that release's archive on GitHub. Then scaffold both
+For a base of 0.14 or older, which were Go programs, `GOBIN=/tmp/pgmi-base go
+install github.com/vvka-141/pgmi/cmd/pgmi@v0.13.0` works too. Then scaffold both
 templates. `pgmi init` names the project after its directory, so give both the
 name of your project's directory (here `myapp`) and the files they write match
 yours:
@@ -57,9 +61,9 @@ project:
 ```bash
 git switch --orphan pgmi-template
 cp -r /tmp/base/myapp/. .
-git add -A && git commit -m "template: advanced, pgmi 0.13.0"
+git add -A && git commit -m "template: advanced, pgmi 0.14.1"
 git rm -rq . && cp -r /tmp/target/myapp/. .
-git add -A && git commit -m "template: advanced, pgmi 0.14.0"
+git add -A && git commit -m "template: advanced, pgmi 0.20.0"
 
 git switch main
 git cherry-pick pgmi-template
@@ -81,6 +85,10 @@ adds, removes or renames.
 Every release that changes the template lists what a merge alone cannot do in
 its **Upgrading** section of [`RELEASES.md`](../../RELEASES.md): a parameter
 that went away, data to review, a step to run once. Do those before you deploy.
+
+A project merged to the 0.20 template runs its files through
+`pg_temp.pgmi_run_file`, which pgmi 0.14 does not create: deploy it with a 0.20
+binary, in CI too.
 
 ## From v0.13 to v0.14: a new database
 

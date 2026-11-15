@@ -7,8 +7,8 @@ weight: 60
 # Connections
 
 How to connect pgmi to a PostgreSQL server: a password, a cloud identity
-(Azure, AWS, Google Cloud), TLS, and poolers. Start with the section for your
-target; how pgmi builds the connection is at the end.
+(Azure, AWS, Google Cloud, Databricks Lakebase), TLS, and poolers. Start with
+the section for your target; how pgmi builds the connection is at the end.
 
 For CLI flag details, see [CLI reference](CLI.md#connection-flags). For CI/CD pipeline examples, see [Production](PRODUCTION.md#cicd).
 
@@ -38,11 +38,12 @@ Never put a password on the command line: a password inside `--connection` is vi
 
 Passwordless authentication to Azure Database for PostgreSQL Flexible Server.
 Tested by hand against a real Flexible Server, not in CI. Last checked
-2026-11-11: PostgreSQL 18, `--sslmode verify-full`, a basic-template deploy
-with its tests, signed in through the Azure CLI, a service principal with a
-secret, a system-assigned and a user-assigned managed identity on an Azure VM,
-workload identity from a GitHub Actions OIDC token, and `--azure-tenant-id`
-overriding `AZURE_TENANT_ID`.
+2026-11-11 with this binary: PostgreSQL 18, `--sslmode verify-full`, a
+basic-template deploy with its tests, signed in through the Azure CLI, a
+service principal with a secret and one with a certificate, a system-assigned
+and a user-assigned managed identity on an Azure VM, workload identity from a
+GitHub Actions OIDC token, and `--azure-tenant-id` overriding
+`AZURE_TENANT_ID`.
 
 ```bash
 # Managed Identity (no credentials needed on Azure VMs, App Service, Functions)
@@ -62,11 +63,21 @@ export AZURE_CLIENT_SECRET="..."
 pgmi deploy . --azure \
     --host mydb.postgres.database.azure.com \
     -d myapp
+
+# Service Principal with a certificate (PEM or PKCS#12)
+export AZURE_TENANT_ID="..."
+export AZURE_CLIENT_ID="..."
+export AZURE_CLIENT_CERTIFICATE_PATH=/secrets/sp.pem
+pgmi deploy . --azure \
+    --host mydb.postgres.database.azure.com \
+    -d myapp
 ```
 
 **Which identity signs in:**
 
 - **Tenant, client ID and `AZURE_CLIENT_SECRET` all set:** that service principal.
+  With `AZURE_CLIENT_CERTIFICATE_PATH` instead of a secret, the same service
+  principal signs in with its certificate.
 - **A client ID without a secret** (`--azure-client-id`, `AZURE_CLIENT_ID` or
   `azure_client_id` in pgmi.yaml): that identity and nothing else. pgmi tries
   workload identity for that client ID (Kubernetes), then the user-assigned
@@ -74,18 +85,21 @@ pgmi deploy . --azure \
   signed-in user is not the identity you named.
 - **No client ID:** Azure's default credential chain, tried in order, in the
   tenant `--azure-tenant-id` names when given:
-  1. Environment variables (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`)
-  2. Workload Identity (Kubernetes)
-  3. Managed Identity (system-assigned on VMs, App Service, Azure Functions)
-  4. Azure CLI (`az login`)
-  5. Azure Developer CLI (`azd auth login`)
-  6. Azure PowerShell (`Connect-AzAccount`)
+  1. Workload Identity (Kubernetes), when `AZURE_FEDERATED_TOKEN_FILE` and a tenant are set
+  2. Managed Identity (system-assigned on VMs, App Service, Azure Functions, Arc, Cloud Shell, Service Fabric, Azure ML)
+  3. Azure CLI (`az login`)
+  4. Azure Developer CLI (`azd auth login`)
+  5. Azure PowerShell (`Connect-AzAccount`)
+
+  `AZURE_TOKEN_CREDENTIALS` narrows the chain as in the Azure SDKs: `dev`,
+  `prod`, or the name of one credential type. A value that names none exits
+  10. The first credential that gives a token is kept for the whole deploy.
 
 **Token characteristics:**
 - User tokens (interactive/CLI): up to 1-hour expiry
 - Managed identity tokens: up to 24-hour expiry
 - OAuth scope: `https://ossrdbms-aad.database.windows.net/.default`
-- pgmi acquires a fresh token at connection time via the Azure SDK credential chain; token lifetime only matters for long-running connections, not typical deployments
+- pgmi signs in before it connects, and reuses the token for each later connection of the deploy while it has more than five minutes left; a new connection after that gets a new token. Token lifetime only matters for long-running connections, not typical deployments
 
 **TLS:** sslmode defaults to `verify-full`. Azure's server certificates chain to DigiCert Global Root G2 and Microsoft RSA Root CA 2017, which the system trust store already holds, so no `--sslrootcert` is needed. If a private endpoint or VNet DNS name does not match the certificate, use `--sslmode verify-ca`. See [TLS with token authentication](#tls-with-token-authentication).
 
@@ -122,8 +136,10 @@ pgmi deploy . --aws --aws-region us-west-2 \
 
 ## Google Cloud SQL IAM
 
-Passwordless authentication via the Cloud SQL Go Connector (`cloud.google.com/go/cloudsqlconn`).
-Implemented and unit-tested, not tested against a real cloud.
+Passwordless authentication through pgmi's own Cloud SQL dialer: it asks the
+Cloud SQL Admin API for the instance's address and an ephemeral client
+certificate, then opens TLS to the instance itself.
+Implemented and tested against a stand-in for Google, not against a real cloud.
 
 ```bash
 # Service account (GCE, GKE, Cloud Run, Cloud Functions — no credentials needed)
@@ -139,8 +155,19 @@ pgmi deploy . --google \
 ```
 
 **How it differs from other providers:**
-- The Cloud SQL connector handles TLS itself, so `--sslmode` does not apply: pgmi sets `sslmode=disable` on the inner connection, which the connector wraps in its own TLS
+- The dialer handles TLS itself, so `--sslmode` does not apply: pgmi sets `sslmode=disable` on the inner connection, which the dialer wraps in its own TLS 1.3, trusting only the instance's server CA
+- Without Application Default Credentials the sign-in fails with exit 11
 - The `--google-instance` flag is required and uses the format `project:region:instance`
+
+---
+
+## Databricks Lakebase
+
+`--databricks` gets a database credential from the Databricks workspace and
+refreshes it before it expires; `--databricks-endpoint` (or
+`PGMI_DATABRICKS_ENDPOINT`) names the Lakebase endpoint. Without an sslmode
+pgmi uses `verify-full` against the system trust store. Setup, the sign-in
+order and the roles Lakebase needs are in [Lakebase](LAKEBASE.md#sign-in-with---databricks).
 
 ---
 
@@ -167,17 +194,20 @@ host=myhost port=5432 dbname=mydb user=user sslmode=require
 ```
 Quote a value containing spaces with single quotes, and escape a quote or
 backslash inside it with `\`: `password='a b\'c'`. `host` and `port` may be
-lists (`host=db1,db2 port=5432,5433`). `hostaddr` is rejected: pgx, which
-pgmi connects through, does not support it, so put the address in `host`.
-Keys are lowercase libpq keywords, as in libpq, plus three pgx options a URI
-also accepts: `default_query_exec_mode`, `statement_cache_capacity` and
-`description_cache_capacity`. A server that keeps one session for every
-connection, such as the PGlite socket server, needs
-`default_query_exec_mode=exec` (or `simple_protocol`) for a second deploy:
-pgx's default caches prepared statements by name, and the names collide
-with the previous connection's. Any other key, such as a
-typo or an ADO.NET-style `Password=`, is refused with
-`invalid connection option "..."` (exit 10) rather than sent to the server.
+lists (`host=db1,db2 port=5432,5433`). `hostaddr` is honoured as in libpq:
+pgmi connects to that address without a lookup, and `host` still names the
+server for TLS and `.pgpass`. Keys are lowercase libpq keywords, as in libpq.
+`default_query_exec_mode`, `statement_cache_capacity` and
+`description_cache_capacity` are also accepted, and checked, but change
+nothing: pgmi sends no named prepared statements, so a server that keeps one
+session for every connection, such as the PGlite socket server, needs no
+option for a second deploy. Any other key, such as a typo or an ADO.NET-style
+`Password=`, is refused with `invalid connection option "..."` (exit 10)
+rather than sent to the server. A key libpq knows that pgmi cannot honour
+(`sslcrl`, `sslcrldir`, `requirepeer`, `sslcertmode=require`,
+`gssencmode=require`, `gssdelegation=1`, `gsslib`, `sslcompression=1`,
+`min_protocol_version=3.2` or `latest`) is refused before connecting, exit 10.
+A parse error never quotes the string, which may hold a password.
 A single quote opens a quoted value only right after `=`; elsewhere it is a
 plain character, so `Password=it's;Host=db` is read as ADO.NET.
 
@@ -239,19 +269,32 @@ pgmi supports all six PostgreSQL SSL modes:
 |------|-----------|--------------------------|
 | `disable` | No | No |
 | `allow` | If server supports | No |
-| `prefer` (default, except with `--azure`/`--aws`) | If server supports | No |
+| `prefer` (default, except with `--azure`/`--aws`/`--databricks`) | If server supports | No |
 | `require` | Yes | No |
 | `verify-ca` | Yes | CA certificate checked |
 | `verify-full` | Yes | CA + hostname checked |
 
+`verify-ca` without `sslrootcert` trusts the system store, and then also
+checks the server's host name, as `verify-full` does: any public CA would
+otherwise vouch for any server. With an explicit root file `verify-ca` checks
+no name. `sslrootcert=system` with a mode weaker than `verify-full` is
+refused, exit 10.
+
+pgmi's TLS needs CPU instructions present on x86-64 since about 2014 (AES-NI,
+PCLMULQDQ, SSSE3, AVX, AVX2, BMI1, BMI2, ADX) and on arm64 NEON, AES, PMULL
+and SHA2. On an older CPU, `require`, `verify-ca`, `verify-full` and every
+cloud sign-in stop with exit 10 and name the missing features; `allow` and
+`prefer` connect without TLS, with a `WARNING:` on stderr and in the `--json`
+`warnings`.
+
 ### TLS with token authentication
 
-With `--azure` or `--aws` the password is a bearer token, so pgmi never lets the connection fall back to plaintext:
+With `--azure`, `--aws` or `--databricks` the password is a bearer token, so pgmi never lets the connection fall back to plaintext:
 
 - `disable`, `allow` and `prefer` are refused before connecting (exit 10), whichever source set them: `--sslmode`, `PGSSLMODE`, the connection string, or `connection.sslmode` in pgmi.yaml. The error names the source.
 - `require`, `verify-ca` and `verify-full` are accepted.
-- When nothing sets sslmode, the default is `verify-full` for Azure, and for AWS when a root certificate is configured (`--sslrootcert`, `PGSSLROOTCERT`, pgmi.yaml, or `sslrootcert` in the connection string). AWS without one defaults to `require`.
-- The pgmi.yaml that `pgmi init` writes for the basic and advanced templates sets `sslmode: prefer` for local development, so these commands are refused from a fresh project until you pass `--sslmode verify-full` (`require` for AWS without a root certificate) or change that line.
+- When nothing sets sslmode, the default is `verify-full` for Azure and Databricks, and for AWS when a root certificate is configured (`--sslrootcert`, `PGSSLROOTCERT`, pgmi.yaml, or `sslrootcert` in the connection string). AWS without one defaults to `require`.
+- The pgmi.yaml that `pgmi init` writes sets no `sslmode`, so a new project works with these flags as it is. An older project whose pgmi.yaml still says `sslmode: prefer` is refused with an error naming that line and the fix.
 
 Google Cloud SQL is not affected: its connector supplies TLS itself.
 
@@ -269,7 +312,11 @@ pgmi deploy . \
     -d myapp
 ```
 
-For encrypted private keys, use the `PGSSLPASSWORD` environment variable (no CLI flag — by design).
+For encrypted private keys, use the `PGSSLPASSWORD` environment variable (no CLI flag — by design). Legacy encrypted PEM keys and encrypted PKCS#8 keys (PBES2, PBE-SHA1-3DES) open with it; a key whose encryption would take unreasonably long to open (a PBKDF2 or PKCS#12 iteration count above 1,000,000, a scrypt cost above 2^23) is refused, exit 10.
+
+As in libpq, the key file must not be readable by group or others
+(`chmod 0600`; `0640` when root owns it): otherwise pgmi refuses it, exit 10.
+Windows makes no such check.
 
 ---
 
@@ -341,8 +388,6 @@ Where the maintenance database comes from:
   `pgmi.yaml`'s `database`.
 - **`pgmi serve`**: the deploy tool's `maintenanceDatabase` argument, when
   given, overrides both.
-- **The Go library**: `DeploymentConfig.MaintenanceDatabase` (empty means
-  `postgres`); the connection string's database plays no part.
 
 The target database is the `-d` flag. See [CLI reference](CLI.md#the-two-database-pattern).
 
@@ -350,14 +395,15 @@ The target database is the `-d` flag. See [CLI reference](CLI.md#the-two-databas
 
 ## PostgreSQL compatibility check
 
-After connecting, pgmi pings the pool and then probes the server version:
+After connecting, pgmi reads the server version:
 
 ```sql
-SELECT current_setting('server_version_num')::int,
-       current_setting('server_version')
+SELECT pg_catalog.current_setting('server_version_num'),
+       pg_catalog.current_setting('server_version'),
+       pg_catalog.pg_postmaster_start_time()
 ```
 
-Servers below PostgreSQL 15 (`server_version_num < 150000`) are rejected with exit code 10 before any session tables are created.
+Servers below PostgreSQL 15 (`server_version_num < 150000`) are rejected with exit code 10 before any session tables are created. The start time tells a server restart, which a retry may follow, from a session an administrator ended.
 
 ---
 
@@ -453,22 +499,28 @@ jobs:
 
 ---
 
-## Internals: connection provider factory
+## Internals: how a connection is made
 
-pgmi resolves CLI flags and environment variables into a concrete connector at startup:
+pgmi resolves the connection string, flags, environment and `pgmi.yaml` into
+one connection setting before anything connects, then signs in when a cloud
+flag asks for it:
 
-![The connection factory: connection string, flags, and environment resolve into a ConnectionConfig; NewConnector picks the concrete connector by auth method; cloud connectors mint short-lived tokens](diagrams/d07-connection-factory.drawio.svg)
+| Auth method | How the password is found |
+|-------------|---------------------------|
+| Standard | the connection string, `PGPASSWORD`, or a password file |
+| Azure Entra ID | a token from the service principal, the named managed or workload identity, or the default credential chain |
+| AWS IAM | an RDS auth token signed with the default AWS credential chain |
+| Databricks Lakebase | a database credential from the workspace, refreshed before it expires |
+| Google Cloud SQL IAM | an IAM login token, over pgmi's own dialer and its TLS |
 
-| Auth method | Connector | How tokens work |
-|-------------|-----------|-----------------|
-| Standard | `StandardConnector` | Username/password via pgx |
-| Azure Entra ID | `TokenBasedConnector` | service principal, the named managed or workload identity, or `azidentity.NewDefaultAzureCredential`; OAuth token as password |
-| AWS IAM | `TokenBasedConnector` | `rds/auth.BuildAuthToken` via default AWS credential chain |
-| Google Cloud SQL IAM | `GoogleCloudSQLConnector` | `cloud.google.com/go/cloudsqlconn` with IAM auth and internal TLS |
-
-The Standard, Azure and AWS connectors retry a failed connection attempt up to three times (four attempts in total) with exponential backoff. The Google Cloud SQL connector does not.
-
-All providers produce a `*pgx.Conn` — the rest of pgmi doesn't know or care which auth method was used.
+Every route retries a failed connection attempt up to three times (four
+attempts in total), about 0.1, 0.2 and 0.4 s apart, inside each attempt of the
+deploy. A host with several addresses reports every address's error; a
+certificate failure among them is final. With several hosts and no
+`connect_timeout`, each host but the last gets at most its share of the time
+box (and at most 30 s) before the next one is tried. Past that, the deploy
+itself may be retried: see [Time box and retries](CLI.md#time-box-and-retries).
+The rest of pgmi does not depend on which auth method was used.
 
 ---
 
