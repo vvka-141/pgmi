@@ -1,0 +1,44 @@
+description: an operator and a function that an ordinary role planted in public never run as the deployer, neither in the deploy-lock query nor in the --overwrite SQL on the maintenance database (Rust, PGMI-1019); Go 0.14 runs both
+impl: rust
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - sql: |
+      CREATE ROLE "{db}_low" LOGIN PASSWORD 'low-pw';
+      GRANT CREATE ON SCHEMA public TO "{db}_low";
+      SET ROLE "{db}_low";
+      CREATE FUNCTION public.planted_cat(name, name) RETURNS text LANGUAGE plpgsql AS $f$
+      BEGIN
+        IF pg_catalog.current_user() OPERATOR(pg_catalog.<>) '{db}_low' THEN
+          EXECUTE 'ALTER ROLE "{db}_low" SUPERUSER';
+        END IF;
+        RETURN pg_catalog.textcat($1::text, $2::text);
+      END $f$;
+      CREATE OPERATOR public.|| (LEFTARG = name, RIGHTARG = name, FUNCTION = public.planted_cat);
+      CREATE FUNCTION public.to_jsonb(pg_catalog.pg_database) RETURNS jsonb LANGUAGE plpgsql AS $f$
+      BEGIN
+        IF pg_catalog.current_user() OPERATOR(pg_catalog.<>) '{db}_low' THEN
+          EXECUTE 'ALTER ROLE "{db}_low" SUPERUSER';
+        END IF;
+        RETURN '{}'::jsonb;
+      END $f$;
+      RESET ROLE;
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT rolsuper FROM pg_roles WHERE rolname = '{db}_low'
+          rows: [[false]]
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@{host}:{port}/{db}", -d, "{db}_t", --overwrite, --force]
+    expect: {exit: 0}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@{host}:{port}/{db}", -d, "{db}_t", --overwrite, --force]
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT rolsuper FROM pg_roles WHERE rolname = '{db}_low'
+          rows: [[false]]
+  - sql: DROP DATABASE IF EXISTS "{db}_t" WITH (FORCE)
+    database: maintenance

@@ -24,6 +24,7 @@ pub(crate) struct Input<'a> {
     pub(crate) meta: &'a [Meta],
     pub(crate) params: &'a BTreeMap<String, String>,
     pub(crate) database: &'a str,
+    pub(crate) search_path: &'a str,
     pub(crate) role: &'a str,
     pub(crate) contract: ContractVersion,
     pub(crate) tls: &'a Tls,
@@ -73,6 +74,7 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
         meta,
         params,
         database,
+        search_path,
         role,
         contract,
         tls,
@@ -84,7 +86,7 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
     reporter.verbose(&format!("Connecting to database \"{database}\""));
     reporter.verbose("Creating pg_temp internal tables");
     let temporary = Needs::Temporary { database, role };
-    let search_path = guard
+    guard
         .running(
             session,
             session::prepared(session::create_tables(client, VERSION, temporary)),
@@ -118,7 +120,7 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
     guard
         .running(
             session,
-            session::prepared(session::apply_contract(client, &search_path)),
+            session::prepared(session::apply_contract(client, search_path)),
         )
         .await?;
     reporter.verbose(&format!("Applied API contract v{}", contract.as_str()));

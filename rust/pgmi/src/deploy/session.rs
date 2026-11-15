@@ -53,20 +53,28 @@ pub(crate) struct Load<'a> {
 
 const BATCH_BYTES: usize = 8 << 20;
 
-pub(crate) async fn create_tables(
-    client: &Client,
-    version: &str,
-    temporary: Needs<'_>,
-) -> Result<String> {
-    let row = client
-        .query_one(
+/// Pins the session's `search_path` to `pg_catalog, pg_temp` and returns the
+/// one it had, which deploy.sql gets back (`apply_contract`).
+pub(crate) async fn pin(client: &Client) -> Result<String> {
+    let rows = client
+        .query_typed(
             "SELECT pg_catalog.current_setting('search_path'), \
              pg_catalog.set_config('search_path', 'pg_catalog, pg_temp', false)",
             &[],
         )
         .await
         .map_err(|e| failed("pin the search_path", e, None))?;
-    let search_path: String = row.get(0);
+    rows.first()
+        .ok_or_else(|| Error::internal("the search_path query returned no row"))?
+        .try_get(0)
+        .map_err(|e| failed("pin the search_path", e, None))
+}
+
+pub(crate) async fn create_tables(
+    client: &Client,
+    version: &str,
+    temporary: Needs<'_>,
+) -> Result<()> {
     client
         .batch_execute(shared_sql("session/schema.sql")?)
         .await
@@ -76,8 +84,7 @@ pub(crate) async fn create_tables(
         "INSERT INTO pg_temp._pgmi_runtime (pgmi_version, contract_version) SELECT $1::text::jsonb->>0, '1'",
         json!([version]),
     )
-    .await?;
-    Ok(search_path)
+    .await
 }
 
 pub(crate) async fn load_params(client: &Client, params: &BTreeMap<String, String>) -> Result<()> {

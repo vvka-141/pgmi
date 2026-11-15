@@ -151,6 +151,10 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   schema on the deployer's `search_path` (`public` up to PostgreSQL 14 and on
   clusters upgraded from it) could have pgmi run its function with the
   deployer's rights during session set-up. **pgmi 0.14 (Go) is affected too.**
+  The pin is the first statement on every session pgmi opens, so it also
+  covers the deploy-lock query and the SQL `--overwrite` runs on the
+  maintenance database, which name every built-in and operator by
+  `pg_catalog` as well. In 0.14 a planted operator or function ran there too.
 
 ## Known issues (lines for the notes)
 

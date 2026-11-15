@@ -840,7 +840,7 @@ async fn matches_attrs(
         return Ok(true);
     }
     let rows = c
-        .simple_query("SELECT current_setting('transaction_read_only'), pg_is_in_recovery()::text")
+        .simple_query("SELECT pg_catalog.current_setting('transaction_read_only'), pg_catalog.pg_is_in_recovery()::pg_catalog.text")
         .await?;
     let row = rows.iter().find_map(|m| match m {
         tokio_postgres::SimpleQueryMessage::Row(r) => Some(r),

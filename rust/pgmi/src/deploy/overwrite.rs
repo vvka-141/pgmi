@@ -133,7 +133,7 @@ pub(crate) async fn claim(maintenance: &Session, db: &str) -> Result<bool> {
     let c = &maintenance.client;
     let held = rows(
         c,
-        "SELECT pg_catalog.pg_try_advisory_lock(pg_catalog.hashtextextended('pgmi.overwrite.' || $1, 0))",
+        "SELECT pg_catalog.pg_try_advisory_lock(pg_catalog.hashtextextended(pg_catalog.concat('pgmi.overwrite.', $1), 0))",
         db,
     )
     .await?;
@@ -145,7 +145,7 @@ pub(crate) async fn claim(maintenance: &Session, db: &str) -> Result<bool> {
     }
     let template = rows(
         c,
-        "SELECT datistemplate FROM pg_database WHERE datname = $1",
+        "SELECT d.datistemplate FROM pg_catalog.pg_database d WHERE d.datname OPERATOR(pg_catalog.=) $1",
         db,
     )
     .await?;
@@ -408,7 +408,7 @@ pub(crate) async fn unlock(maintenance: &Session, db: &str) {
         Type::TEXT,
     )];
     let unlocked = maintenance.client.query_typed(
-        "SELECT pg_catalog.pg_advisory_unlock(pg_catalog.hashtextextended('pgmi.overwrite.' || $1, 0))",
+        "SELECT pg_catalog.pg_advisory_unlock(pg_catalog.hashtextextended(pg_catalog.concat('pgmi.overwrite.', $1), 0))",
         &params,
     );
     if !matches!(tokio::time::timeout(CLEANUP, unlocked).await, Ok(Ok(_))) {
@@ -536,7 +536,9 @@ mod tests {
         let sent = server.await.unwrap();
         let parse = &sent.iter().find(|(t, _)| *t == b'P').unwrap().1;
         assert!(
-            parse.contains("pg_catalog.hashtextextended('pgmi.overwrite.' || $1, 0)"),
+            parse.contains(
+                "pg_catalog.hashtextextended(pg_catalog.concat('pgmi.overwrite.', $1), 0)"
+            ),
             "{parse}"
         );
         assert!(!parse.contains("o'app"), "{parse}");

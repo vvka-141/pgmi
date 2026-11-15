@@ -75,3 +75,48 @@ fn functions_planted_in_public_never_run_inside_pgmi_session_setup() {
     let out = pg.deploy(&p, &db).run();
     assert_eq!(out.code, 0, "{}", out.stderr);
 }
+
+const LOCK_SHADOWS: &str = r"
+CREATE FUNCTION public.shadow() RETURNS void LANGUAGE plpgsql AS
+  $$BEGIN RAISE EXCEPTION 'pgmi ran an object planted in public'; END$$;
+CREATE FUNCTION public.shadow_cat(name, name) RETURNS text LANGUAGE plpgsql AS
+  $$BEGIN PERFORM public.shadow(); RETURN NULL; END$$;
+CREATE OPERATOR public.|| (LEFTARG = name, RIGHTARG = name, FUNCTION = public.shadow_cat);
+";
+
+const MANAGER_SHADOWS: &str = r"
+CREATE FUNCTION public.shadow() RETURNS void LANGUAGE plpgsql AS
+  $$BEGIN RAISE EXCEPTION 'pgmi ran an object planted in public'; END$$;
+CREATE FUNCTION public.to_jsonb(pg_catalog.pg_database) RETURNS jsonb LANGUAGE plpgsql AS
+  $$BEGIN PERFORM public.shadow(); RETURN NULL; END$$;
+CREATE FUNCTION public.shadow_ne(oid, integer) RETURNS boolean LANGUAGE plpgsql AS
+  $$BEGIN PERFORM public.shadow(); RETURN NULL; END$$;
+CREATE OPERATOR public.<> (LEFTARG = oid, RIGHTARG = integer, FUNCTION = public.shadow_ne);
+CREATE FUNCTION public.shadow_get(jsonb, jsonb) RETURNS text LANGUAGE plpgsql AS
+  $$BEGIN PERFORM public.shadow(); RETURN NULL; END$$;
+CREATE OPERATOR public.->> (LEFTARG = jsonb, RIGHTARG = jsonb, FUNCTION = public.shadow_get);
+";
+
+#[test]
+fn operators_and_functions_planted_in_public_never_run_in_the_lock_or_overwrite_sql() {
+    let Some(pg) = pg() else { return };
+    let db = pg.database("pgmi_rs_shadowed_lock");
+    let maintenance = pg.database("pgmi_rs_shadowed_maintenance");
+    for d in [&db, &maintenance] {
+        pg.admin()
+            .exec(&format!("CREATE DATABASE {}", ident(d.name())));
+    }
+    db.client().exec(LOCK_SHADOWS);
+    maintenance.client().exec(MANAGER_SHADOWS);
+    let p = Project::empty();
+    p.write("deploy.sql", PATH_CHECK);
+    let out = pg.deploy(&p, &db).run();
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let (server, _) = pg
+        .conn()
+        .rsplit_once('/')
+        .expect("PGMI_TEST_CONN names a database");
+    let through = format!("{server}/{}", maintenance.name());
+    let out = pg.deploy(&p, &db).connection(&through).overwrite().run();
+    assert_eq!(out.code, 0, "{}", out.stderr);
+}

@@ -731,7 +731,7 @@ impl Steps<'_> {
             spec.token = Some(self.signed_in(*provider, options, spec).await?);
         }
         let spec = &*spec;
-        let session = self.open(st, plan.dialer, spec).await?;
+        let (session, search_path) = self.open(st, plan.dialer, spec).await?;
         seen.connected = true;
         let outcome = async {
             seen.started = Some(self.settle(&session, spec).await?);
@@ -750,6 +750,7 @@ impl Steps<'_> {
                 meta: &plan.loaded.meta,
                 params: plan.params,
                 database: &spec.target_db,
+                search_path: &search_path,
                 contract: plan.contract,
                 tls: &server.tls,
                 verbose: self.ctx.verbose,
@@ -984,9 +985,7 @@ impl Steps<'_> {
             "Connecting to maintenance database \"{}\"",
             spec.maintenance_db
         ));
-        let maintenance = guard
-            .connecting(dialer.connect(spec, &spec.maintenance_db))
-            .await?;
+        let (maintenance, _) = self.connect(dialer, spec, &spec.maintenance_db).await?;
         guard
             .running(&maintenance, check_server(&maintenance))
             .await?;
@@ -1050,12 +1049,14 @@ impl Steps<'_> {
 
     /// Connects to the target database, creating it first through the
     /// maintenance database when the server says it does not exist.
-    async fn open(&self, st: &mut Progress, dialer: &Dialer, spec: &Spec) -> Result<Session> {
+    async fn open(
+        &self,
+        st: &mut Progress,
+        dialer: &Dialer,
+        spec: &Spec,
+    ) -> Result<(Session, String)> {
         let guard = self.guard;
-        match guard
-            .connecting(dialer.connect(spec, &spec.target_db))
-            .await
-        {
+        match self.connect(dialer, spec, &spec.target_db).await {
             Err(e) if e.sql_diagnostics().and_then(|d| d.sqlstate.as_deref()) == Some("3D000") => {}
             opened => {
                 if opened.is_ok() && !self.ctx.request.overwrite {
@@ -1073,9 +1074,7 @@ impl Steps<'_> {
             "Connecting to maintenance database \"{}\"",
             spec.maintenance_db
         ));
-        let maintenance = guard
-            .connecting(dialer.connect(spec, &spec.maintenance_db))
-            .await?;
+        let (maintenance, _) = self.connect(dialer, spec, &spec.maintenance_db).await?;
         guard
             .running(&maintenance, check_server(&maintenance))
             .await?;
@@ -1090,20 +1089,25 @@ impl Steps<'_> {
         self.reporter
             .verbose(&format!("Created database \"{}\"", spec.target_db));
         drop(maintenance);
-        guard
-            .connecting(dialer.connect(spec, &spec.target_db))
-            .await
+        self.connect(dialer, spec, &spec.target_db).await
+    }
+
+    /// Opens a session and pins its `search_path` before anything else runs
+    /// on it; the second value is the path the session came with.
+    async fn connect(&self, dialer: &Dialer, spec: &Spec, db: &str) -> Result<(Session, String)> {
+        let session = self.guard.connecting(dialer.connect(spec, db)).await?;
+        let search_path = self
+            .guard
+            .running(&session, session::pin(&session.client))
+            .await?;
+        Ok((session, search_path))
     }
 
     /// Whether a fresh session finds the server that started at `before`:
     /// then a 57P01 came from an administrator, not a restart. A server that
     /// cannot be reached yet is restarting.
     async fn same_server(&self, plan: &Plan<'_>, spec: &Spec, before: &str) -> bool {
-        let Ok(session) = self
-            .guard
-            .connecting(plan.dialer.connect(spec, &spec.target_db))
-            .await
-        else {
+        let Ok((session, _)) = self.connect(plan.dialer, spec, &spec.target_db).await else {
             return false;
         };
         let now = self.guard.running(&session, check_server(&session)).await;
@@ -1226,8 +1230,7 @@ async fn backend(session: &Session) -> Result<Backend> {
     })
 }
 
-const LOCK_KEY: &str =
-    "pg_catalog.hashtextextended('pgmi.deploy.' || pg_catalog.current_database(), 0)";
+const LOCK_KEY: &str = "pg_catalog.hashtextextended(pg_catalog.concat('pgmi.deploy.', pg_catalog.current_database()), 0)";
 
 async fn try_lock(session: &Session) -> Result<bool> {
     let sql = format!("SELECT pg_catalog.pg_try_advisory_lock({LOCK_KEY})");
@@ -1248,9 +1251,9 @@ async fn lock_holder(session: &Session) -> Result<Option<Backend>> {
     let sql = format!(
         "SELECT l.pid, a.backend_start::pg_catalog.text FROM pg_catalog.pg_locks l \
          LEFT JOIN pg_catalog.pg_stat_activity a ON a.pid OPERATOR(pg_catalog.=) l.pid \
-         WHERE l.locktype = 'advisory' AND l.granted AND l.objsubid = 1 \
-         AND l.database = (SELECT d.oid FROM pg_catalog.pg_database d WHERE d.datname = pg_catalog.current_database()) \
-         AND ((l.classid::pg_catalog.int8 << 32) | l.objid::pg_catalog.int8) = {LOCK_KEY}"
+         WHERE l.locktype OPERATOR(pg_catalog.=) 'advisory' AND l.granted AND l.objsubid OPERATOR(pg_catalog.=) 1 \
+         AND l.database OPERATOR(pg_catalog.=) (SELECT d.oid FROM pg_catalog.pg_database d WHERE d.datname OPERATOR(pg_catalog.=) pg_catalog.current_database()) \
+         AND ((l.classid::pg_catalog.int8 OPERATOR(pg_catalog.<<) 32) OPERATOR(pg_catalog.|) l.objid::pg_catalog.int8) OPERATOR(pg_catalog.=) {LOCK_KEY}"
     );
     let rows = session
         .client
