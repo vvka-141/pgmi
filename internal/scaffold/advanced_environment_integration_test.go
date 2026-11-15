@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/vvka-141/pgmi/internal/scaffold"
 	"github.com/vvka-141/pgmi/internal/testhelpers"
@@ -193,7 +194,6 @@ func TestAdvancedTemplate_EnvironmentLabel(t *testing.T) {
 	prodPassword := expect(t, "prod", false)
 
 	refused(t, map[string]string{"env": "dev"}, "env=dev does not match database pgmi_advanced_env_label's environment label (prod)")
-	refused(t, map[string]string{"env": "dev", "relabel_environment": "dev"}, "Missing required parameters: database_admin_password")
 	refused(t, map[string]string{"env": "prod", "relabel_environment": "prod", "database_admin_password": pw}, "is already labelled prod")
 	refused(t, map[string]string{"env": "test", "upgrade": "true", "database_admin_password": pw}, "env=test does not match")
 	if got := expect(t, "prod", false); got != prodPassword {
@@ -207,12 +207,14 @@ func TestAdvancedTemplate_EnvironmentLabel(t *testing.T) {
 	if err := deployAdvanced(t, connString, db, projectPath, false, map[string]string{"env": "test", "relabel_environment": "test", "database_admin_password": pw}); err != nil {
 		t.Fatalf("relabel to test: %v", err)
 	}
-	expect(t, "test", false)
+	testPassword := expect(t, "test", false)
 
-	if err := deployAdvanced(t, connString, db, projectPath, false, map[string]string{"env": "dev", "relabel_environment": "dev", "database_admin_password": pw}); err != nil {
+	if err := deployAdvanced(t, connString, db, projectPath, false, map[string]string{"env": "dev", "relabel_environment": "dev"}); err != nil {
 		t.Fatalf("relabel to dev: %v", err)
 	}
-	expect(t, "dev", true)
+	if got := expect(t, "dev", true); got != testPassword {
+		t.Fatal("a relabel to dev without database_admin_password changed the admin role's password; it must keep it, never default it")
+	}
 	devEntry := func(t *testing.T) (function bool, openDevSessions, strayIssuers int) {
 		t.Helper()
 		pool := testhelpers.GetTestPool(t, connString, db)
@@ -501,5 +503,59 @@ func TestAdvancedTemplate_DeploysWithQuotedOrCustomRoleNames(t *testing.T) {
 				t.Fatalf("deploy: %v", err)
 			}
 		})
+	}
+}
+
+// A SCRAM verifier passed as database_admin_password is stored as given, so
+// the plaintext never reaches the server; the admin signs in with the
+// plaintext. A redeploy without the parameter keeps that password.
+func TestAdvancedTemplate_AcceptsAScramVerifier(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+	projectPath := scaffoldAdvanced(t, nil)
+	const db = "pgmi_advanced_scram_verifier"
+	const plaintext = "Verifier-Plain-123!"
+	const verifier = "SCRAM-SHA-256$4096:cGdtaS0xMDEwLXNhbHQhIQ==$Zw/Bz7gLaLnFwecOLtJjYJRRgKJ0d366nuryyhD4Z2k=:EgGoTM+xrHCReiJ4BI2JffUjyhJ5QsiAaOUHdtGrnvA="
+	server := testhelpers.GetTestPool(t, connString, "postgres")
+	dropRoles := func() {
+		testhelpers.CleanupTestDB(t, connString, db)
+		for _, r := range []string{"_admin", "_api", "_kernel", "_owner"} {
+			_, _ = server.Exec(context.Background(), "DROP ROLE IF EXISTS "+db+r)
+		}
+	}
+	dropRoles()
+	defer dropRoles()
+
+	signIn := func(t *testing.T, password string) error {
+		t.Helper()
+		cfg, err := pgx.ParseConfig(connString)
+		if err != nil {
+			t.Fatalf("parse the connection string: %v", err)
+		}
+		cfg.User, cfg.Password, cfg.Database = db+"_admin", password, db
+		conn, err := pgx.ConnectConfig(context.Background(), cfg)
+		if err != nil {
+			return err
+		}
+		return conn.Close(context.Background())
+	}
+
+	err := deployAdvanced(t, connString, db, projectPath, true, map[string]string{"env": "test"})
+	if err == nil || !strings.Contains(err.Error(), "Missing required parameters: database_admin_password") {
+		t.Fatalf("a first deploy without the admin password must be refused, got: %v", err)
+	}
+	if err := deployAdvanced(t, connString, db, projectPath, true, map[string]string{"env": "test", "database_admin_password": verifier}); err != nil {
+		t.Fatalf("deploy with a SCRAM verifier: %v", err)
+	}
+	if err := signIn(t, plaintext); err != nil {
+		t.Fatalf("the admin must sign in with the verifier's plaintext: %v", err)
+	}
+	if err := deployAdvanced(t, connString, db, projectPath, false, map[string]string{"env": "test"}); err != nil {
+		t.Fatalf("a redeploy without the admin password must keep it: %v", err)
+	}
+	if err := signIn(t, plaintext); err != nil {
+		t.Fatalf("after a redeploy without the parameter the admin must keep its password: %v", err)
+	}
+	if err := signIn(t, "wrong"); err == nil {
+		t.Fatal("the admin signed in with a wrong password")
 	}
 }

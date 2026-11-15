@@ -28,7 +28,7 @@ LANGUAGE sql STABLE AS $declaration$
          'Database admin role (LOGIN, full access)',
          false),
         ('database_admin_password', NULL, NULL, NULL,
-         'Database admin password. Required, except with env=dev on a new or dev-labelled database, where it defaults to postgres',
+         'Database admin password, or a SCRAM verifier of it (SCRAM-SHA-256$...), so the plaintext never reaches the server. Required when the admin role does not exist yet, except with env=dev on a new or dev-labelled database, where it defaults to postgres. Left out once the role exists, the role keeps its password',
          true),
         ('database_api_role', current_database() || '_api', NULL, NULL,
          'API group role (NOLOGIN, permission bundle)',
@@ -263,9 +263,18 @@ BEGIN
     END IF;
 END $$;
 
+-- The admin password is needed only to create the admin role: once the role
+-- exists, a deploy without the parameter keeps its password, so a pipeline
+-- holds the long-lived secret only on the first deploy and on a rotation.
+CREATE FUNCTION pg_temp.admin_password_kept()
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT pg_temp.parameter_value('database_admin_password') IS NULL
+       AND EXISTS (SELECT FROM pg_roles WHERE rolname = pg_temp.parameter_value('database_admin_role'))
+$$;
+
 -- The dev password default is a local convenience, for a new database or one
--- already labelled dev. It reads the label before deploy/ledger.sql relabels: a
--- database relabelled to dev needs explicit passwords. Lakebase refuses a weak
+-- already labelled dev, and only for an admin role that does not exist yet. It
+-- reads the label before deploy/ledger.sql relabels. Lakebase refuses a weak
 -- password when the transaction commits, so there it is a generated one.
 DO $$
 DECLARE
@@ -276,7 +285,7 @@ BEGIN
         SET value = CASE WHEN pg_temp.on_lakebase()
                          THEN replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '')
                          ELSE 'postgres' END
-        WHERE value IS NULL AND key ~ 'password$';
+        WHERE value IS NULL AND key ~ 'password$' AND NOT pg_temp.admin_password_kept();
         GET DIAGNOSTICS v_defaulted = ROW_COUNT;
         IF v_defaulted > 0 AND pg_temp.on_lakebase() THEN
             RAISE WARNING 'pgmi: env=dev on Databricks Lakebase, which refuses a weak password: role password(s) set to a generated value. Set PGMI_PARAM_DATABASE_ADMIN_PASSWORD to choose one.';
@@ -299,7 +308,8 @@ BEGIN
     SELECT string_agg(original_key, ', ' ORDER BY original_key) FILTER (WHERE value IS NULL),
            string_agg('PGMI_PARAM_' || upper(original_key), ', ' ORDER BY original_key) FILTER (WHERE value IS NULL)
     INTO v_missing, v_missing_env
-    FROM pg_temp.deployment_parameter;
+    FROM pg_temp.deployment_parameter
+    WHERE NOT (key = 'database_admin_password' AND pg_temp.admin_password_kept());
 
     IF v_missing IS NOT NULL THEN
         RAISE EXCEPTION 'Missing required parameters: %. Set % (a CI secret) or use --params-file -; never --param for a secret.', v_missing, v_missing_env
@@ -317,6 +327,7 @@ BEGIN
         SELECT p.key, p.original_key, p.value, d.is_secret
         FROM pg_temp.deployment_parameter p
         JOIN pg_temp.parameter_declaration() d USING (key)
+        WHERE p.value IS NOT NULL
         ORDER BY p.key
     LOOP
         PERFORM set_config('pgmi.' || v_param.key, v_param.value, false);

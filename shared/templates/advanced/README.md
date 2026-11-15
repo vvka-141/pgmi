@@ -160,9 +160,25 @@ pgmi deploy . --database myapp --param env=prod
 
 In CI, map the secret straight to the variable
 (`PGMI_PARAM_DATABASE_ADMIN_PASSWORD: ${{ secrets.DB_ADMIN_PASSWORD }}`). A
-missing secret arrives empty and pgmi refuses it (exit 10). Stdin
-(`--params-file -`) and a private params file also work; see the
+missing secret arrives empty and pgmi refuses it (exit 10); a first deploy
+without the password stops before any change and names the variable to set.
+Stdin (`--params-file -`) and a private params file also work; see the
 [pgmi Security Guide](https://github.com/vvka-141/pgmi/blob/main/docs/SECURITY.md#pipeline-patterns).
+A complete pipeline job, with an approval gate and the secret mapping, is in
+[CI/CD: GitHub Actions, full job](https://github.com/vvka-141/pgmi/blob/main/docs/CICD.md#github-actions-full-job).
+
+The password needs to travel only when the admin role is created or rotated:
+once the role exists, a deploy without `database_admin_password` keeps its
+password. So a pipeline's routine deploys need no admin secret at all.
+
+The deploy sets the password with `CREATE ROLE ... PASSWORD`, which is DDL: under
+`log_statement = ddl` or `all` the server log records the plaintext. To keep
+the plaintext off the server entirely, pass a SCRAM verifier instead
+(`SCRAM-SHA-256$4096:<salt>$<StoredKey>:<ServerKey>`): PostgreSQL stores it as
+given, and the admin signs in with the plaintext it was made from. Any SCRAM
+tool computes one; or set the password once with `psql`'s `\password` on a
+scratch server and copy `rolpassword` from `pg_authid`. Not tested on
+Databricks Lakebase, whose weak-password check may refuse it.
 
 ### On a managed host
 
@@ -499,7 +515,7 @@ Any handler may declare a minimum isolation floor (`minTransactionIsolation`); a
 | Parameter | Default | Required | Description |
 |-----------|---------|----------|-------------|
 | `env` | - | **Yes** | `dev`, `test` or `prod`. See [Environments](#environments) |
-| `database_admin_password` | `postgres` when `env=dev` on a new or dev-labelled database (on Lakebase, which refuses a weak password, a generated value) | **Yes**, otherwise | Admin role password |
+| `database_admin_password` | `postgres` when `env=dev` creates the admin role on a new or dev-labelled database (on Lakebase, which refuses a weak password, a generated value) | **Yes**, when the admin role does not exist yet; left out afterwards, the role keeps its password | Admin role password, or a SCRAM verifier of it. Blanked from the session once the role is set |
 | `relabel_environment` | empty | No | Change the database's label; must equal `env` |
 | `upgrade` | `false` | No | `true` refuses unless the database already carries the label `env` names |
 | `platform_operators` | `[]` | No | JSON array of platform operators (`email`, optional `displayName`, `issuer` + `subject`); synced every deploy, a person left out loses the status; an email-only entry names the address's verified holder, or a new verified person (an unverified holder is never promoted); an entry with `issuer` and `subject` names that login's person and verifies the address on it, refused (22023) when another person holds the address verified |
@@ -525,12 +541,18 @@ description, and whether the deploy log masks it. Adding a parameter is one
 row. A parameter without a default is required, a blank value counts as not
 given, and a parameter the list does not declare is refused. Each value is readable in SQL as
 `current_setting('pgmi.<key>')`, or through `pg_temp.deployment_setting('<key>')`
-during the deploy.
+during the deploy. A secret one (`is_secret`) is masked in the log and, once
+`deploy/bootstrap.sql` used it, blanked: its `pgmi.<key>` setting is empty and
+the owner role can no longer read pgmi's `pg_temp.pgmi_parameter_view`, so no
+project file or test prints it by accident. This guards against accidents,
+not a hostile file: a file can `RESET ROLE` to the deploy login, and project
+files are trusted code.
 
-Every deploy sets the admin role's password to `database_admin_password`, so
-the parameter is the password's source of truth: rotating it is a redeploy with
-the new value, for example from a key vault through
-`PGMI_PARAM_DATABASE_ADMIN_PASSWORD`.
+A deploy that gives `database_admin_password` sets the admin role's password
+to it; one that leaves it out keeps the role's password. Rotating is a deploy
+with the new value, for example from a key vault through
+`PGMI_PARAM_DATABASE_ADMIN_PASSWORD`. On `env=dev` a redeploy no longer resets
+the password to `postgres`.
 
 ## Environments
 
@@ -1162,9 +1184,10 @@ CALL pgmi_test('.*/api/.*');
 ## Troubleshooting
 
 ### "Missing required parameter(s)"
-Every deploy needs `env`. Every deploy needs `database_admin_password` too,
-unless `env=dev` targets a new or dev-labelled database. Pass them in a params
-file (see [Deploy](#1-deploy)), not on the command line:
+Every deploy needs `env`. The deploy that creates the admin role needs
+`database_admin_password` too, unless `env=dev` targets a new or dev-labelled
+database. Pass it as `PGMI_PARAM_DATABASE_ADMIN_PASSWORD` or in a params file
+(see [Deploy](#1-deploy)), not on the command line:
 ```bash
 pgmi deploy . -d mydb --params-file prod.params
 ```

@@ -225,6 +225,7 @@ Tests for the framework itself (not your application).
 | `test_response_contract.sql` | Every 409 and 422 carries a code; every page route keeps the page contract |
 | `test_rls_initplan.sql` | Every identity reader in a row policy is wrapped as `(SELECT ...)`, so it runs once per query |
 | `test_schema_enforcement.sql` | Declared schemas are enforced at every depth: MCP tool arguments, REST bodies, RPC `params`, with `accepts` and `produces` |
+| `test_secret_parameters.sql` | A secret parameter is gone once `deploy/bootstrap.sql` used it: its `pgmi.<key>` setting is blank and the owner cannot read pgmi's parameter view or table |
 | `test_tenant_foreign_keys.sql` | A foreign key between two organizations' tables carries the organization column |
 | `test_view_standards.sql` | Every application view is `security_invoker` |
 

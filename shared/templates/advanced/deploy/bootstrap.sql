@@ -144,17 +144,22 @@ BEGIN
     END IF;
 END $$;
 
--- The admin login, with this deploy's password. The handler keeps the
--- expanded statement, password included, out of the error's CONTEXT, which
--- reaches stderr, --json and the server log.
+-- The admin login, with this deploy's password when one was given; without
+-- one an existing role keeps its own (deploy/parameters.sql). A SCRAM verifier
+-- is stored as given. The handler keeps the expanded statement, password
+-- included, out of the error's CONTEXT, which reaches stderr, --json and the
+-- server log.
 DO $$
 DECLARE
     v_admin_role     TEXT := pg_temp.deployment_setting('database_admin_role');
-    v_admin_password TEXT := pg_temp.deployment_setting('database_admin_password');
+    v_admin_password TEXT := pg_temp.deployment_setting('database_admin_password', false);
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_admin_role) THEN
         EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L CONNECTION LIMIT 10', v_admin_role, v_admin_password);
         RAISE NOTICE '[pgmi] Created admin role: %', v_admin_role;
+    ELSIF v_admin_password IS NULL THEN
+        EXECUTE format('ALTER ROLE %I WITH CONNECTION LIMIT 10', v_admin_role);
+        RAISE NOTICE '[pgmi] Admin role % keeps its password (database_admin_password not given)', v_admin_role;
     ELSE
         EXECUTE format('ALTER ROLE %I WITH PASSWORD %L CONNECTION LIMIT 10', v_admin_role, v_admin_password);
     END IF;
@@ -163,6 +168,31 @@ EXCEPTION WHEN OTHERS THEN
         ERRCODE = SQLSTATE,
         MESSAGE = format('setting the password of role %I failed: %s', v_admin_role, SQLERRM);
 END $$;
+
+-- No file needs a secret after this point, so each one leaves the session's
+-- settings, the template's parameter table and PUBLIC's reach of pgmi's own
+-- parameter view and table: a file or test running as the owner cannot print
+-- one by accident (SHOW ALL, a dump of the view). This guards against
+-- accidents, not a hostile file, which can RESET ROLE to this login.
+DO $$
+DECLARE
+    v_param record;
+BEGIN
+    FOR v_param IN
+        SELECT p.key, g.key AS given_key
+        FROM pg_temp.parameter_declaration() d
+        JOIN pg_temp.deployment_parameter p USING (key)
+        LEFT JOIN pg_temp.pgmi_parameter_view g ON pg_temp.parameter_key(g.key) = p.key
+        WHERE d.is_secret
+    LOOP
+        PERFORM set_config('pgmi.' || v_param.key, '', false);
+        IF v_param.given_key IS NOT NULL AND current_setting('pgmi.' || v_param.given_key, true) IS NOT NULL THEN
+            PERFORM set_config('pgmi.' || v_param.given_key, '', false);
+        END IF;
+        UPDATE pg_temp.deployment_parameter SET value = NULL WHERE key = v_param.key;
+    END LOOP;
+END $$;
+REVOKE SELECT ON pg_temp.pgmi_parameter_view, pg_temp._pgmi_parameter FROM PUBLIC;
 
 -- Membership in the api role is the trust gate: only its members' auth.*
 -- settings count (membership.fn_is_trusted_context), and its gateway entry

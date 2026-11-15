@@ -325,10 +325,6 @@ fn environment_label() {
         "env=dev does not match database pgmi_rs_a_env_label's environment label (prod)",
     );
     rejected(
-        &[("env", "dev"), ("relabel_environment", "dev")],
-        "Missing required parameters: database_admin_password",
-    );
-    rejected(
         &[
             ("env", "prod"),
             ("relabel_environment", "prod"),
@@ -372,19 +368,19 @@ fn environment_label() {
             ("database_admin_password", PROD_PW),
         ],
     );
-    expect("test", false);
+    let test_password = expect("test", false);
     deployed(
         &pg,
         &project,
         &db,
         false,
-        &[
-            ("env", "dev"),
-            ("relabel_environment", "dev"),
-            ("database_admin_password", PROD_PW),
-        ],
+        &[("env", "dev"), ("relabel_environment", "dev")],
     );
-    expect("dev", true);
+    assert_eq!(
+        expect("dev", true),
+        test_password,
+        "a relabel to dev without database_admin_password must keep the admin role's password, never default it"
+    );
 
     let dev_entry = || -> (bool, i64, i64) {
         let row = &db.client().query(
@@ -681,4 +677,50 @@ fn deploys_with_quoted_or_custom_role_names() {
         let out = deploy(&pg, &project, &db, true, &params);
         assert_eq!(out.code, 0, "{name}: deploy:\n{}", out.stderr);
     }
+}
+
+/// A SCRAM verifier passed as `database_admin_password` is stored as given,
+/// so the plaintext never reaches the server; the admin signs in with the
+/// plaintext. A redeploy without the parameter keeps that password.
+#[test]
+fn accepts_a_scram_verifier() {
+    const DB: &str = "pgmi_rs_a_scram_verifier";
+    const PLAINTEXT: &str = "Verifier-Plain-123!";
+    const VERIFIER: &str = "SCRAM-SHA-256$4096:cGdtaS0xMDEwLXNhbHQhIQ==$Zw/Bz7gLaLnFwecOLtJjYJRRgKJ0d366nuryyhD4Z2k=:EgGoTM+xrHCReiJ4BI2JffUjyhJ5QsiAaOUHdtGrnvA=";
+    let _serial = adv::serial();
+    let Some(pg) = pg() else { return };
+    let project = scaffold(&[]);
+    let drop_roles = || {
+        let admin = pg.admin();
+        let _ = admin.batch(&format!("DROP DATABASE IF EXISTS {DB} WITH (FORCE)"));
+        for r in ["_admin", "_api", "_kernel", "_owner"] {
+            let _ = admin.batch(&format!("DROP ROLE IF EXISTS {DB}{r}"));
+        }
+    };
+    drop_roles();
+    let db = pg.database(DB);
+    let admin = format!("{DB}_admin");
+
+    refused_with(
+        &deploy(&pg, &project, &db, true, &[("env", "test")]),
+        "Missing required parameters: database_admin_password",
+    );
+    deployed(
+        &pg,
+        &project,
+        &db,
+        true,
+        &[("env", "test"), ("database_admin_password", VERIFIER)],
+    );
+    common::Client::try_connect(&db, &admin, PLAINTEXT)
+        .expect("the admin must sign in with the verifier's plaintext");
+    deployed(&pg, &project, &db, false, &[("env", "test")]);
+    common::Client::try_connect(&db, &admin, PLAINTEXT)
+        .expect("after a redeploy without the parameter the admin must keep its password");
+    assert!(
+        common::Client::try_connect(&db, &admin, "wrong").is_err(),
+        "the admin signed in with a wrong password"
+    );
+    drop(db);
+    drop_roles();
 }
