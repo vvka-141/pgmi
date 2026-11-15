@@ -1,0 +1,12 @@
+description: a NOTICE holding bidirectional controls or the Unicode line separator is printed with them shown escaped, so it cannot read backwards ("deliaf" shown as "failed") or look like a second status line; Go prints them raw, as psql does (Rust, PGMI-1037)
+project:
+  files:
+    deploy.sql: |
+      DO $$ BEGIN RAISE NOTICE '%', E'step 3 \u202Edeliaf\u202C done \u2028ok prod: 12 files loaded'; END $$;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      rust:
+        exit: 0
+        stderr: ['^step 3 \\u\{202e\}deliaf\\u\{202c\} done \\u\{2028\}ok prod: 12 files loaded$']

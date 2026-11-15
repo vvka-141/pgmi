@@ -68,7 +68,7 @@ A test failure or any other SQL error is never retried. Once a unit of deploy.sq
 - **An invalid answer to the TLS request ends the connection.** A server that answers pgmi's TLS request with anything but `S` or `N` is refused with exit 11 before pgmi sends anything else.
 - **The retry never runs committed work again.** A failed deploy is not retried once the server reported a `COMMIT`, nor when deploy.sql is one `CALL`, or one `DO` block that says `COMMIT` or `CALL`.
 - **Secrets stay out of the output.** The connection password and every sign-in token are shown as `***` wherever pgmi prints them: notices, errors, `--json` and `pgmi serve` answers.
-- **Server text cannot drive the terminal.** Escape sequences and other control characters in notices, errors and file names are shown escaped on stderr; the `--json` record keeps the original text.
+- **Server text cannot drive the terminal.** Escape sequences, other control characters, the bidirectional controls and the Unicode line separators in notices, errors and file names are shown escaped on stderr; the `--json` record keeps the original text.
 - **`--json` always ends with a record,** also when a project `.env` cannot be read or the runtime cannot start.
 - **One unreachable host no longer uses the whole time box.** With several hosts and no `connect_timeout`, each host but the last gets at most its share of `--timeout` (and at most 30 s).
 - **A stopped `CREATE INDEX CONCURRENTLY` is named.** pgmi says an INVALID index may be left, and how to find and drop it.

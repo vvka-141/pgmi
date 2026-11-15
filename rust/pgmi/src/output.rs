@@ -386,7 +386,7 @@ impl Reporter {
 /// written as an escape (`\x1b`, `\r`, `\u{9b}`); borrowed when there is
 /// none.
 pub(crate) fn printable(text: &str) -> std::borrow::Cow<'_, str> {
-    let hidden = |c: char| c.is_control() && c != '\t' && c != '\n';
+    let hidden = |c: char| (c.is_control() && c != '\t' && c != '\n') || reorders_or_breaks(c);
     if !text.contains(hidden) {
         return std::borrow::Cow::Borrowed(text);
     }
@@ -404,6 +404,23 @@ pub(crate) fn printable(text: &str) -> std::borrow::Cow<'_, str> {
         }
     }
     std::borrow::Cow::Owned(out)
+}
+
+/// The bidirectional controls, which make text read in another order than it
+/// is stored, and the line and paragraph separators, which some terminals
+/// and logs break a line on. Not all of the format category: emoji and
+/// several scripts need the zero-width joiners.
+fn reorders_or_breaks(c: char) -> bool {
+    matches!(
+        c,
+        '\u{61c}'
+            | '\u{200e}'
+            | '\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{2028}'
+            | '\u{2029}'
+    )
 }
 
 /// The last line of a deploy: what it did, or how far it got.
@@ -609,6 +626,27 @@ mod tests {
         assert_eq!(printable("del\x7f"), "del\\x7f");
         assert_eq!(printable("c1\u{9b}"), "c1\\u{9b}");
         assert_eq!(printable("bell\x07"), "bell\\x07");
+    }
+
+    #[test]
+    fn printable_escapes_bidi_controls_and_line_separators() {
+        for c in [
+            '\u{61c}', '\u{200e}', '\u{200f}', '\u{202a}', '\u{202b}', '\u{202c}', '\u{202d}',
+            '\u{202e}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}', '\u{2028}', '\u{2029}',
+        ] {
+            assert_eq!(
+                printable(&format!("a{c}b")),
+                format!("a\\u{{{:x}}}b", c as u32)
+            );
+        }
+        assert_eq!(
+            printable("step 3 of 3 \u{202e}deliaf\u{202c} done \u{2028}ok prod: 12 files"),
+            "step 3 of 3 \\u{202e}deliaf\\u{202c} done \\u{2028}ok prod: 12 files"
+        );
+        assert!(matches!(
+            printable("family \u{1f468}\u{200d}\u{1f469}\tzwnj \u{200c}\n"),
+            std::borrow::Cow::Borrowed(_)
+        ));
     }
 
     #[test]

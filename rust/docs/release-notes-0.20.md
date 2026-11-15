@@ -52,7 +52,9 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   drop it, also in the `--json` `hint`.
 - **Server text cannot drive the terminal.** Escape sequences and other
   control characters in notices, errors and file names are shown escaped
-  on stderr (`\x1b`); the `--json` record keeps the original text.
+  on stderr (`\x1b`), and so are the bidirectional controls and the Unicode
+  line separators (`\u{202e}`, `\u{2028}`); the `--json` record keeps the
+  original text.
 - **Third-party licence notices ship with pgmi.** Every archive holds
   `THIRD-PARTY-LICENSES`, and the `.deb` installs it in
   `/usr/share/doc/pgmi/`.

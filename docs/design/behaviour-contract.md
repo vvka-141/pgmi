@@ -683,7 +683,11 @@ summary line, only the error.
 On stderr the Rust binary shows every control character in text from the
 server or the project (a notice, an error and its DETAIL, HINT and WHERE, a
 file name) escaped, except tab and newline: ESC as `\x1b`, a carriage return
-as `\r`, a C1 control as `\u{9b}`. A message cannot clear the screen, set the
+as `\r`, a C1 control as `\u{9b}`. The bidirectional controls (U+061C, U+200E,
+U+200F, U+202A to U+202E, U+2066 to U+2069) and the line and paragraph
+separators (U+2028, U+2029) are shown the same way (`\u{202e}`), so text
+cannot be made to read backwards or look like a second line (PGMI-1037, case
+`notices/bidi-and-line-separators`). A message cannot clear the screen, set the
 window title or rewrite an earlier line. pgmi's own colours and progress
 line are unchanged, and the `--json` record keeps the original text. Go
 prints them raw, as psql does (PGMI-1002; cases `notices/escape-sequences`,
