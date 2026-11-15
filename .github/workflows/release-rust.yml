@@ -308,7 +308,7 @@ jobs:
       - name: Third-party licence notices
         run: |
           cargo install --locked --features cli cargo-about@0.9.3
-          cargo about generate --locked --fail -m rust/pgmi/Cargo.toml about.hbs -o THIRD-PARTY-LICENSES
+          rust/release/licenses.sh THIRD-PARTY-LICENSES
       - name: Archives and checksums
         run: |
           rust/release/package.sh "$VERSION" bins dist
