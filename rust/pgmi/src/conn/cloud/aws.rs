@@ -93,6 +93,7 @@ pub(crate) async fn signer(req: &Options, env: &Env) -> Result<Signer> {
     let config = aws_config::defaults(BehaviorVersion::latest())
         .region(Region::new(region.clone()))
         .http_client(http)
+        .retry_config(aws_config::retry::RetryConfig::standard())
         .load()
         .await;
     let provider = config.credentials_provider().ok_or_else(|| {

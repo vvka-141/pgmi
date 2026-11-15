@@ -1,0 +1,37 @@
+description: a bad AWS_MAX_ATTEMPTS or AWS_RETRY_MODE, from the environment, a project .env or the profile, never ends pgmi with "internal error" (exit 3) - sign-in goes on and the token reaches the server (contract "Cloud sign-in", PGMI-1033). The AWS SDK for Rust panics on such values, so pgmi gives the SDK its retry settings itself and the SDK never reads them
+servers: [fakes]
+home:
+  .aws/config: |
+    [profile zero]
+    max_attempts = 0
+project:
+  files:
+    deploy.sql: SELECT 1;
+    .env: "AWS_MAX_ATTEMPTS=0\n"
+steps:
+  - pgmi: [deploy, "{project}", --aws, --aws-region, us-west-2, --connection, "host=127.0.0.1 port={recorder_port} user=retry_env dbname=postgres sslmode=require", -d, "{db}"]
+    env: {AWS_ACCESS_KEY_ID: AKIDEXAMPLE, AWS_SECRET_ACCESS_KEY: not-a-real-secret}
+    timeout: 60
+    expect:
+      exit: 11
+      stderr_not: ["panicked at", "internal error"]
+      files:
+        "{recorder_log}": ['"user": "retry_env", "password": "[^"]*X-Amz-Credential=AKIDEXAMPLE%2F']
+  - pgmi: [deploy, "{project}", --aws, --aws-region, us-west-2, --connection, "host=127.0.0.1 port={recorder_port} user=retry_abc dbname=postgres sslmode=require", -d, "{db}"]
+    env: {AWS_ACCESS_KEY_ID: AKIDEXAMPLE, AWS_SECRET_ACCESS_KEY: not-a-real-secret, AWS_MAX_ATTEMPTS: abc}
+    timeout: 60
+    expect:
+      exit: 11
+      stderr_not: ["panicked at", "internal error"]
+  - pgmi: [deploy, "{project}", --aws, --aws-region, us-west-2, --connection, "host=127.0.0.1 port={recorder_port} user=retry_mode dbname=postgres sslmode=require", -d, "{db}"]
+    env: {AWS_ACCESS_KEY_ID: AKIDEXAMPLE, AWS_SECRET_ACCESS_KEY: not-a-real-secret, AWS_MAX_ATTEMPTS: "3", AWS_RETRY_MODE: bogus}
+    timeout: 60
+    expect:
+      exit: 11
+      stderr_not: ["panicked at", "internal error"]
+  - pgmi: [deploy, "{project}", --aws, --aws-region, us-west-2, --connection, "host=127.0.0.1 port={recorder_port} user=retry_profile dbname=postgres sslmode=require", -d, "{db}"]
+    env: {AWS_ACCESS_KEY_ID: AKIDEXAMPLE, AWS_SECRET_ACCESS_KEY: not-a-real-secret, AWS_MAX_ATTEMPTS: "3", AWS_PROFILE: zero, AWS_CONFIG_FILE: "{home}/.aws/config"}
+    timeout: 60
+    expect:
+      exit: 11
+      stderr_not: ["panicked at", "internal error"]

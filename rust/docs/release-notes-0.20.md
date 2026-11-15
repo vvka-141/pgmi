@@ -151,6 +151,9 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   `--json` lists the `attempts`; `retry: false` in `pgmi.yaml` turns it off.
   Pipelines need no retry step of their own. See
   [Time box and retries](switch-day/timeout-and-retry.md).
+- **`AWS_MAX_ATTEMPTS` and `AWS_RETRY_MODE` are not read.** pgmi sets the
+  AWS SDK's retry settings itself; a bad value no longer ends pgmi with an
+  internal error, and a valid one no longer tunes the SDK's own retries.
 - **A server cannot flood pgmi before it is ready.** More than 1 MiB or
   10,000 messages between sign-in and the first ReadyForQuery ends the
   connection with exit 11. pgmi 0.14 kept every message.
