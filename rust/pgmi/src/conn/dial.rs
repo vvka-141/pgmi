@@ -405,6 +405,7 @@ fn refuses_auth(e: &tap::Error) -> bool {
             | tap::Error::ChannelBinding
             | tap::Error::UnsupportedSasl
             | tap::Error::Oversized(_)
+            | tap::Error::StartupFlood
     )
 }
 
@@ -1809,6 +1810,48 @@ mod tests {
         };
         assert!(started.elapsed() < Duration::from_secs(10));
         session.disconnect();
+    }
+
+    #[tokio::test]
+    async fn a_server_that_floods_before_it_is_ready_is_refused_once_and_not_retried() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (listener, port) = super::fake::listen().await;
+        let accepted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = accepted.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut s, _)) = listener.accept().await else {
+                    return;
+                };
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let mut startup = [0u8; 512];
+                    let _ = s.read(&mut startup).await;
+                    let _ = s.write_all(&[b'R', 0, 0, 0, 8, 0, 0, 0, 0]).await;
+                    let mut status = vec![b'S', 0, 0, 0xea, 0x64];
+                    status.resize(5 + 60_000, b'v');
+                    status[5 + 4] = 0;
+                    *status.last_mut().unwrap() = 0;
+                    while s.write_all(&status).await.is_ok() {}
+                });
+            }
+        });
+        let spec = spec_for(&format!(
+            "host=127.0.0.1 port={port} user=u dbname=d sslmode=disable"
+        ));
+        let outcome =
+            tokio::time::timeout(Duration::from_secs(20), quiet().connect(&spec, "d")).await;
+        let e = outcome
+            .expect("the flood was not stopped")
+            .err()
+            .expect("the flooding server was accepted");
+        assert_eq!(e.exit_code(), 11);
+        assert!(
+            e.text().contains("before it was ready for queries"),
+            "{}",
+            e.text()
+        );
+        assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

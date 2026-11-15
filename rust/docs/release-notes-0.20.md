@@ -151,6 +151,9 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   `--json` lists the `attempts`; `retry: false` in `pgmi.yaml` turns it off.
   Pipelines need no retry step of their own. See
   [Time box and retries](switch-day/timeout-and-retry.md).
+- **A server cannot flood pgmi before it is ready.** More than 1 MiB or
+  10,000 messages between sign-in and the first ReadyForQuery ends the
+  connection with exit 11. pgmi 0.14 kept every message.
 - **A hung Azure CLI no longer holds up sign-in.** `az` and `azd` each get
   10 s; a tool that has not answered is ended, with everything it started,
   and the credential chain goes on. Nothing of it outlives pgmi.

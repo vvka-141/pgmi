@@ -32,6 +32,7 @@ pub enum Error {
     SessionOversized { tag: u8, len: usize, max: usize },
     PlusOnly,
     SslAnswer(u8),
+    StartupFlood,
 }
 
 impl fmt::Display for Error {
@@ -56,6 +57,11 @@ impl fmt::Display for Error {
             Error::UnsupportedSasl => f.write_str("unsupported SASL mechanism"),
             Error::PlusOnly => f.write_str(
                 "the server offers only SCRAM-SHA-256-PLUS, which needs channel binding over TLS; this connection has none (no TLS, or channel_binding=disable)",
+            ),
+            Error::StartupFlood => write!(
+                f,
+                "the server sent more than {} MiB, or more than {STARTUP_FRAMES_MAX} messages, before it was ready for queries; pgmi stops there",
+                STARTUP_BYTES_MAX >> 20
             ),
             Error::SslAnswer(b'E') => f.write_str(
                 "the server answered the TLS request with an error message ('E'), not S or N; pgmi does not read it, because the server is not authenticated yet",
@@ -89,6 +95,11 @@ impl From<ScramError> for Error {
 /// startup traffic is small, and a hostile server could otherwise make the
 /// client reserve gigabytes.
 pub const STARTUP_FRAME_MAX: usize = 64 * 1024;
+/// The most a server may send before its first `ReadyForQuery`: a real
+/// startup is a few dozen messages under 2 KiB, and the driver keeps every
+/// one of them until then.
+const STARTUP_BYTES_MAX: usize = 1 << 20;
+const STARTUP_FRAMES_MAX: usize = 10_000;
 /// PostgreSQL's own limit on one allocation (`MaxAllocSize`), so on a row.
 pub const DATA_FRAME_MAX: usize = 0x3fff_ffff;
 pub const SESSION_FRAME_MAX: usize = 64 * 1024 * 1024;
@@ -454,6 +465,8 @@ struct Startup {
     flush: bool,
     sasl: Sasl,
     finished: bool,
+    frames: usize,
+    bytes: usize,
 }
 
 #[derive(Default)]
@@ -511,6 +524,11 @@ impl Startup {
         parser: &mut Parser,
         end_point: Option<&[u8]>,
     ) -> Result<(), Error> {
+        self.frames += 1;
+        self.bytes += f.len();
+        if self.frames > STARTUP_FRAMES_MAX || self.bytes > STARTUP_BYTES_MAX {
+            return Err(Error::StartupFlood);
+        }
         parser.feed(f, shared)?;
         let login = shared.login.get();
         let code = (f[0] == b'R')
@@ -916,6 +934,78 @@ mod startup_tests {
         )
         .await;
         assert_eq!(tap_error(&e), &Error::Oversized(0x7fff_ffec));
+    }
+
+    /// Reads what the tap passes on until it refuses.
+    async fn refusal(
+        server: impl FnOnce(tokio::io::DuplexStream) -> tokio::task::JoinHandle<()>,
+    ) -> io::Error {
+        let (client, theirs) = tokio::io::duplex(1 << 16);
+        let job = server(theirs);
+        let mut tap = Tap::socket(client, Shared::new(None).unwrap(), Start::Plain);
+        let mut buf = vec![0u8; 1 << 16];
+        let e = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            loop {
+                if let Err(e) = tap.read(&mut buf).await {
+                    return e;
+                }
+            }
+        })
+        .await
+        .expect("the tap refused in time");
+        job.abort();
+        e
+    }
+
+    #[tokio::test]
+    async fn a_flood_of_parameter_status_before_ready_is_refused() {
+        let e = refusal(|mut s| {
+            tokio::spawn(async move {
+                s.write_all(&auth(0, b"")).await.unwrap();
+                for i in 0u32.. {
+                    let mut body = format!("name{i}\0").into_bytes();
+                    body.extend(std::iter::repeat_n(b'v', 60_000));
+                    body.push(0);
+                    if s.write_all(&frame(b'S', &body)).await.is_err() {
+                        return;
+                    }
+                }
+            })
+        })
+        .await;
+        assert_eq!(tap_error(&e), &Error::StartupFlood);
+    }
+
+    #[tokio::test]
+    async fn a_flood_of_tiny_notices_before_ready_is_refused() {
+        let e = refusal(|mut s| {
+            tokio::spawn(async move {
+                let mut flood = auth(0, b"");
+                for _ in 0..=STARTUP_FRAMES_MAX {
+                    flood.extend(frame(b'N', b"\0"));
+                }
+                let _ = s.write_all(&flood).await;
+                std::future::pending::<()>().await;
+            })
+        })
+        .await;
+        assert_eq!(tap_error(&e), &Error::StartupFlood);
+    }
+
+    #[tokio::test]
+    async fn a_startup_of_ordinary_size_passes() {
+        let (client, mut server) = tokio::io::duplex(1 << 20);
+        let shared = Shared::new(None).unwrap();
+        let mut startup = auth(0, b"");
+        for i in 0..40 {
+            startup.extend(frame(b'S', format!("name{i}\0value\0").as_bytes()));
+        }
+        startup.extend(frame(b'Z', b"I"));
+        server.write_all(&startup).await.unwrap();
+        let mut tap = Tap::socket(client, shared, Start::Plain);
+        let mut got = vec![0u8; startup.len()];
+        tap.read_exact(&mut got).await.unwrap();
+        assert_eq!(got, startup);
     }
 
     #[tokio::test]
