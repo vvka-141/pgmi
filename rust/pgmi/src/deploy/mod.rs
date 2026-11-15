@@ -747,7 +747,7 @@ impl Steps<'_> {
             spec.token = Some(self.signed_in(*provider, options, spec).await?);
         }
         let spec = &*spec;
-        let session = self.open(st, plan.dialer, spec).await?;
+        let session = self.open(st, plan.dialer, spec, seen).await?;
         seen.connected = true;
         let outcome = async {
             let search_path = self.pin(&session).await?;
@@ -1067,7 +1067,13 @@ impl Steps<'_> {
 
     /// Connects to the target database, creating it first through the
     /// maintenance database when the server says it does not exist.
-    async fn open(&self, st: &mut Progress, dialer: &Dialer, spec: &Spec) -> Result<Session> {
+    async fn open(
+        &self,
+        st: &mut Progress,
+        dialer: &Dialer,
+        spec: &Spec,
+        seen: &mut retry::Seen,
+    ) -> Result<Session> {
         let guard = self.guard;
         match guard
             .connecting(dialer.connect(spec, &spec.target_db))
@@ -1090,7 +1096,11 @@ impl Steps<'_> {
             "Connecting to maintenance database \"{}\"",
             spec.maintenance_db
         ));
-        let (maintenance, _) = self.connect(dialer, spec, &spec.maintenance_db).await?;
+        let maintenance = guard
+            .connecting(dialer.connect(spec, &spec.maintenance_db))
+            .await?;
+        seen.connected = true;
+        self.pin(&maintenance).await?;
         guard
             .running(&maintenance, check_server(&maintenance))
             .await?;

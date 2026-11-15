@@ -1,0 +1,19 @@
+description: Rust only (contract "Whole-deployment retry"). When the target database does not exist, pgmi creates it through the maintenance database inside the attempt; a connection reset at that session's search_path pin ends the attempt before anything ran, so the deploy runs again and succeeds (PGMI-1046 variant)
+impl: rust
+proxy:
+  - {query: "'pg_catalog, pg_temp'", do: reset, times: 1}
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE marker (id int);
+      INSERT INTO marker VALUES (1);
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    timeout: 30
+    expect:
+      exit: 0
+      stderr: ["^pgmi: attempt 1 failed \\(connection lost\\); retrying in"]
+      stderr_not: ["pin the search_path"]
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[1]]

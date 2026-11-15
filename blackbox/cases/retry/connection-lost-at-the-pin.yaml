@@ -1,0 +1,21 @@
+description: Rust only (contract "Whole-deployment retry"). A connection reset at the first query of a session, the search_path pin, ends that attempt before deploy.sql ran, so the deploy runs again on a new connection and succeeds (PGMI-1046, guards the repair of the PGMI-1019 regression)
+impl: rust
+proxy:
+  - {query: "'pg_catalog, pg_temp'", do: reset, times: 1}
+project:
+  files:
+    deploy.sql: |
+      CREATE TABLE marker (id int);
+      INSERT INTO marker VALUES (1);
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    timeout: 30
+    expect:
+      exit: 0
+      stderr: ["^pgmi: attempt 1 failed \\(connection lost\\); retrying in"]
+      stderr_not: ["pin the search_path"]
+      sql:
+        - query: SELECT count(*) FROM marker
+          rows: [[1]]
