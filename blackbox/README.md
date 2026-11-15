@@ -137,9 +137,10 @@ proxy:
   - {query: "^CREATE DATABASE", do: {delay: 6}}       # hold that query 6 s on its way to the server
   - {at: close, do: {delay: 3}}                       # the client's close reaches the server 3 s late
   - {at: ssl, do: {answer: X}}                        # answer an SSLRequest with that byte, then carry on as after N
+  - {at: sasl-final, do: corrupt}                     # change the server's SCRAM signature on its way to the client
 ```
 
-`at` is `accept`, `ssl`, `startup` or `close`; `query` is a regex on the text of a
+`at` is `accept`, `ssl`, `startup`, `sasl-final` or `close`; `query` is a regex on the text of a
 Query or Parse message (the two are exclusive). `do` is `reset` (RST both
 sides), `cut-client` (RST the client; the server never learns), `freeze`, `{delay: s}` or `{error: SQLSTATE, severity, message}`
 (`FATAL` by default; `ERROR` only for a query, not with `after`). Without

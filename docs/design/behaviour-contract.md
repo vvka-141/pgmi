@@ -537,6 +537,9 @@ and a method it does not know is exit 10 before any host lookup.
 A server that answers the TLS request with a byte other than `S` or `N` is
 refused with exit 11 and gets no startup packet; an `E` answer is not read
 (case `tls/ssl-answer-not-s-or-n`).
+A server whose final SCRAM message carries a wrong signature has not proved
+it knows the password: the sign-in ends with exit 11 and nothing of the deploy
+is sent (case `bad-weather/scram-wrong-server-signature`).
 `--sslmode` replaces the sslmode of a string from the environment. Token
 sign-in (cloud) refuses `disable`, `allow` and `prefer` with exit 10. When that
 sslmode came from `pgmi.yaml`, the Rust binary names the line and the fix

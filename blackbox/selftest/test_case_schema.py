@@ -222,6 +222,8 @@ def test_a_proxy_plan_lists_faults():
         ({"at": "accept", "query": "x", "do": "reset"}, "proxy[0]"),
         ({"at": "connect", "do": "reset"}, "proxy[0].at"),
         ({"at": "ssl", "do": "reset"}, "proxy[0].do"),
+        ({"at": "sasl-final", "do": "reset"}, "proxy[0].do"),
+        ({"at": "sasl-final", "do": "corrupt", "after": 1}, "proxy[0].do"),
         ({"at": "ssl", "do": {"answer": "XY"}}, "proxy[0].do.answer"),
         ({"at": "ssl", "do": {"answer": "X"}, "after": 1}, "proxy[0].do"),
         ({"query": "(", "do": "reset"}, "proxy[0].query"),

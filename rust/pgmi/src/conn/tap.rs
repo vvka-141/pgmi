@@ -1161,6 +1161,39 @@ mod startup_tests {
     }
 
     #[tokio::test]
+    async fn a_wrong_server_signature_ends_the_sign_in() {
+        for binding in [BindingPolicy::Prefer, BindingPolicy::Disable] {
+            let e = read_err(
+                |mut s| {
+                    tokio::spawn(async move {
+                        s.write_all(&auth(10, b"SCRAM-SHA-256\0\0")).await.unwrap();
+                        let nonce = client_first(&mut s).await;
+                        let first = format!("r={nonce}X,s=c2FsdA==,i=4096");
+                        s.write_all(&auth(11, first.as_bytes())).await.unwrap();
+                        let mut head = [0u8; 5];
+                        s.read_exact(&mut head).await.unwrap();
+                        assert_eq!(head[0], b'p');
+                        let len = u32::from_be_bytes([head[1], head[2], head[3], head[4]]);
+                        let mut client_final = vec![0u8; len as usize - 4];
+                        s.read_exact(&mut client_final).await.unwrap();
+                        let wrong = b"v=BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=";
+                        s.write_all(&auth(12, wrong)).await.unwrap();
+                        s.write_all(&auth(0, b"")).await.unwrap();
+                        s.write_all(&frame(b'Z', b"I")).await.unwrap();
+                        std::future::pending::<()>().await;
+                    })
+                },
+                binding,
+            )
+            .await;
+            assert_eq!(
+                tap_error(&e),
+                &Error::Scram(scram::ScramError::ServerSignature.to_string())
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn authentication_ok_before_the_server_proved_itself_is_refused() {
         for step in 0..3 {
             for binding in [BindingPolicy::Prefer, BindingPolicy::Disable] {

@@ -327,6 +327,9 @@ expectation; Rust runs every case but those `rust/blackbox-skip.txt` names, each
 | B06 | a sign-in endpoint that fails briefly: AWS container credentials on 5xx | ✓ `bad-weather/aws-credential-endpoints-retried`; a transport error (reset) before any HTTP answer ✗ the fakes answer HTTP only |
 | B07 | Azure managed identity (App Service, Cloud Shell, Service Fabric) on 5xx and 429 is asked again; a dead endpoint is given up after 4 attempts | ✓ `bad-weather/azure-managed-identity-retries`, `bad-weather/azure-managed-identity-gives-up`, `cloud/azure-msi-retry` |
 | B08 | Cloud SQL Admin API on 5xx | ✗ Go's connector takes no Admin API endpoint, so a fake cannot reach it; Rust unit test `the_admin_api_is_asked_again_after_a_server_error` |
+| review 2026-11-15 | a wrong SCRAM server signature ends the sign-in, exit 11, nothing sent (PGMI-1028) | ✓ `bad-weather/scram-wrong-server-signature` |
+| review 2026-11-15 | an answer to the SSLRequest other than S or N ends the connection (PGMI-1020) | ✓ `tls/ssl-answer-not-s-or-n` |
+| review 2026-11-15 | a hung `az` is given up after 10 s and the chain goes on (PGMI-1026) | ✓ `bad-weather/azure-cli-hangs` (Rust) |
 
 
 ## Whole-deployment retry (PGMI-886)

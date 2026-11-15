@@ -1,0 +1,19 @@
+description: a server whose final SCRAM message carries a wrong signature has not proved it knows the password, so the sign-in ends there (exit 11) and deploy.sql is never sent (contract "TLS"; PGMI-1028 keeps the check under test). The proxy changes the signature of the real server on its way to the client
+proxy:
+  - {at: sasl-final, do: corrupt}
+project:
+  files:
+    deploy.sql: CREATE TABLE reached_an_unproven_server ();
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
+    timeout: 30
+    expect:
+      exit: 11
+      stderr: ["(?i)server ?signature"]
+      files:
+        "{proxy_log}": ["rule 0: corrupt"]
+      sql:
+        - query: SELECT count(*) FROM pg_class WHERE relname = 'reached_an_unproven_server'
+          rows: [[0]]

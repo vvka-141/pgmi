@@ -249,6 +249,8 @@ class Proxy:
                 if head[:1] == b"Z":
                     conn.status = raw[5:6]
                     conn.rewrite = None
+                if head[:1] == b"R" and raw[5:9] == struct.pack("!i", 12) and self._match(conn, "sasl-final"):
+                    raw = _other_signature(raw)
                 if head[:1] == b"D" and conn.rewrite is not None:
                     raw = _rewritten(raw, *conn.rewrite)
                     conn.rewrite = None
@@ -257,6 +259,12 @@ class Proxy:
         except (OSError, asyncio.IncompleteReadError):
             await self._hold()
             conn.client.close()
+
+
+def _other_signature(raw: bytes) -> bytes:
+    """AuthenticationSASLFinal with the first character of its v= value changed."""
+    at = raw.index(b"v=", 9) + 2
+    return raw[:at] + (b"B" if raw[at : at + 1] == b"A" else b"A") + raw[at + 1 :]
 
 
 def _rewritten(raw: bytes, column: int, value: str) -> bytes:

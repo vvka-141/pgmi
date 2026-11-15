@@ -138,6 +138,18 @@ def test_an_ssl_rule_answers_the_ssl_request_with_its_byte_and_forwards_the_rest
     assert "rule 0: answer" in p.log_path.read_text()
 
 
+def test_a_sasl_final_rule_changes_the_servers_signature_and_nothing_else():
+    from pgmi_blackbox.proxy import _other_signature
+
+    def final(value: bytes) -> bytes:
+        body = struct.pack("!i", 12) + b"v=" + value
+        return b"R" + struct.pack("!i", len(body) + 4) + body
+
+    assert _other_signature(final(b"AbCd=")) == final(b"BbCd=")
+    assert _other_signature(final(b"xbCd=")) == final(b"AbCd=")
+    assert _faults({"at": "sasl-final", "do": "corrupt"})[0].action == "corrupt"
+
+
 def test_the_first_connections_are_reset_then_forwarded(proxy):
     p, _ = proxy({"at": "accept", "do": "reset", "times": 2})
     for _ in range(2):
