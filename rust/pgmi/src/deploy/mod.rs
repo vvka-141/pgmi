@@ -401,6 +401,8 @@ pub(crate) struct Run {
     secrets: Secrets,
     started: SystemTime,
     t0: Instant,
+    /// The end of the time box, until which a slow stderr is waited for.
+    deadline: Option<Instant>,
 }
 
 impl Run {
@@ -411,6 +413,7 @@ impl Run {
             secrets: Secrets::default(),
             started: SystemTime::now(),
             t0: Instant::now(),
+            deadline: None,
         }
     }
 
@@ -435,6 +438,7 @@ impl Run {
             deadline: deadline(timeout),
             timeout,
         };
+        self.deadline = Some(guard.deadline.into_std());
         let steps = Steps {
             ctx,
             guard: &guard,
@@ -551,8 +555,14 @@ pub(crate) fn run(runtime: Runtime, ctx: &Context) -> u8 {
             _ => Error::new(Kind::Interrupted, "interrupted"),
         });
     }
+    stop.work_is_over();
+    let code = finish(ctx, &run, &result, &reporter);
+    match run.deadline.filter(|_| stop.reason().is_none()) {
+        Some(deadline) => crate::output::drain_until(deadline),
+        None => crate::output::drain(),
+    }
     runtime.shutdown_timeout(Duration::from_millis(100));
-    finish(ctx, &run, &result, &reporter)
+    code
 }
 
 /// The connection a deploy resolved before reading anything else.

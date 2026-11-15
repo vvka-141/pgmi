@@ -184,6 +184,10 @@ pub(super) fn spawn_signals(stop: Stop, reporter: Arc<Reporter>) {
     let again = reporter.clone();
     tokio::spawn(crate::signals::first_stops_second_exits(
         move || {
+            if stop.is_over() {
+                crate::output::drain();
+                std::process::exit(i32::from(Kind::Interrupted.exit_code()));
+            }
             stop.signal();
             reporter.line(INTERRUPTED);
         },

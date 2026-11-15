@@ -151,6 +151,11 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   `--json` lists the `attempts`; `retry: false` in `pgmi.yaml` turns it off.
   Pipelines need no retry step of their own. See
   [Time box and retries](switch-day/timeout-and-retry.md).
+- **A slow or stalled stderr never stalls a deploy.** pgmi writes stderr
+  from a queue: `--timeout` and Ctrl-C work while nobody reads it. When more
+  than 4 MiB wait, server notices are dropped and one line says how many;
+  the error and the summary are always written, and pgmi waits for a paused
+  reader until the time box ends.
 - **Security fix: functions planted in a schema on the search_path.** pgmi
   sets up its session objects under `search_path = pg_catalog, pg_temp`,
   calls every built-in by its `pg_catalog` name, and gives each helper

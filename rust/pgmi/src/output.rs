@@ -88,10 +88,18 @@ fn style(env: &Env) -> Style {
     }
 }
 
-/// pgmi's stderr: lines go to a bounded queue that one thread writes out,
-/// so a stderr that stops reading never stalls the task that drives the
-/// connection, a cancel, or the exit. What does not fit in a full queue is
-/// dropped, and a line says how much once there is room again.
+/// Whose line a chunk of stderr is: only a server notice may be dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Line {
+    Own,
+    Notice,
+}
+
+/// pgmi's stderr: lines go to a queue that one thread writes out, so a
+/// stderr that stops reading never stalls the task that drives the
+/// connection, a cancel, or the exit. Server notices that do not fit in a
+/// full queue are dropped, and a line says how many before the next line
+/// that is written. pgmi's own lines (errors, the summary) are always kept.
 struct Spool {
     state: Mutex<Queued>,
     changed: Condvar,
@@ -107,20 +115,46 @@ struct Queued {
 }
 
 const SPOOL_BYTES: usize = 4 << 20;
+const STALLED: Duration = Duration::from_secs(1);
 
 fn spool() -> Option<&'static Spool> {
     static SPOOL: OnceLock<Option<&'static Spool>> = OnceLock::new();
     *SPOOL.get_or_init(|| {
-        let spool: &'static Spool = Box::leak(Box::new(Spool {
-            state: Mutex::new(Queued::default()),
-            changed: Condvar::new(),
-        }));
+        let spool: &'static Spool = Box::leak(Box::new(Spool::default()));
         std::thread::Builder::new()
             .name("pgmi-stderr".into())
             .spawn(move || spool.write_out())
             .ok()
             .map(|_| spool)
     })
+}
+
+impl Default for Spool {
+    fn default() -> Self {
+        Spool {
+            state: Mutex::new(Queued::default()),
+            changed: Condvar::new(),
+        }
+    }
+}
+
+impl Queued {
+    fn push(&mut self, chunk: Vec<u8>) {
+        self.bytes += chunk.len();
+        self.chunks.push_back(chunk);
+    }
+
+    /// Queues the line that says how many notices were dropped, if any.
+    fn note_dropped(&mut self) {
+        if self.dropped > 0 {
+            let note = format!(
+                "pgmi: {} server notice(s) not shown: stderr was read more slowly than they arrived\n",
+                self.dropped
+            );
+            self.dropped = 0;
+            self.push(note.into_bytes());
+        }
+    }
 }
 
 impl Spool {
@@ -130,23 +164,14 @@ impl Spool {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn push(&self, chunk: &[u8]) {
+    fn push(&self, chunk: &[u8], line: Line) {
         let mut q = self.lock();
-        if q.bytes >= SPOOL_BYTES {
+        if line == Line::Notice && q.bytes >= SPOOL_BYTES {
             q.dropped += 1;
             return;
         }
-        if q.dropped > 0 {
-            let note = format!(
-                "pgmi: {} line(s) of output dropped: stderr was not being read\n",
-                q.dropped
-            );
-            q.dropped = 0;
-            q.bytes += note.len();
-            q.chunks.push_back(note.into_bytes());
-        }
-        q.bytes += chunk.len();
-        q.chunks.push_back(chunk.to_vec());
+        q.note_dropped();
+        q.push(chunk.to_vec());
         self.changed.notify_all();
     }
 
@@ -177,40 +202,49 @@ impl Spool {
         }
     }
 
-    fn drain(&self) {
+    /// Waits until the queue is written. A reader that takes nothing for
+    /// `STALLED` ends the wait once `patient_until` has passed.
+    fn drain(&self, patient_until: Option<Instant>) {
         let mut q = self.lock();
+        q.note_dropped();
+        self.changed.notify_all();
         while !q.chunks.is_empty() || q.writing {
             let before = q.written;
             let (next, waited) = self
                 .changed
-                .wait_timeout(q, Duration::from_secs(1))
+                .wait_timeout(q, STALLED)
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             q = next;
-            if waited.timed_out() && q.written == before {
+            let patient = patient_until.is_some_and(|until| Instant::now() < until);
+            if waited.timed_out() && q.written == before && !patient {
                 return;
             }
         }
     }
 }
 
-/// stderr through the spool, or directly when no writer thread could start.
-struct Stderr;
+/// Where a `Reporter` writes: pgmi's stderr through the spool (directly
+/// when no writer thread could start), or a writer a test reads back.
+enum Sink {
+    Stderr,
+    #[cfg(test)]
+    Writer(Box<dyn Write + Send>),
+}
 
-impl Write for Stderr {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        match spool() {
-            Some(s) => {
-                s.push(buf);
-                Ok(buf.len())
+impl Sink {
+    fn put(&mut self, bytes: &[u8], line: Line) {
+        match (self, spool()) {
+            (Sink::Stderr, Some(s)) => s.push(bytes, line),
+            (Sink::Stderr, None) => {
+                let mut err = std::io::stderr();
+                let _ = err.write_all(bytes);
+                let _ = err.flush();
             }
-            None => std::io::stderr().write(buf),
-        }
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        match spool() {
-            Some(_) => Ok(()),
-            None => std::io::stderr().flush(),
+            #[cfg(test)]
+            (Sink::Writer(w), _) => {
+                let _ = w.write_all(bytes);
+                let _ = w.flush();
+            }
         }
     }
 }
@@ -220,7 +254,16 @@ impl Write for Stderr {
 /// before it exits.
 pub fn drain() {
     if let Some(s) = spool() {
-        s.drain();
+        s.drain(None);
+    }
+}
+
+/// As [`drain`], but a reader that has stopped taking lines is waited for
+/// until `deadline`: the end of a deploy's time box, so the error and the
+/// summary reach a reader that is slow or paused, not gone.
+pub(crate) fn drain_until(deadline: Instant) {
+    if let Some(s) = spool() {
+        s.drain(Some(deadline));
     }
 }
 
@@ -231,12 +274,12 @@ pub(crate) struct Reporter {
     stamped: bool,
     start: Instant,
     style: Style,
-    sink: Mutex<Box<dyn Write + Send>>,
+    sink: Mutex<Sink>,
 }
 
 impl Reporter {
     pub(crate) fn new(verbose: bool, env: &Env) -> Arc<Self> {
-        Arc::new(Self::to(Box::new(Stderr), verbose, style(env)))
+        Arc::new(Self::on(Sink::Stderr, verbose, style(env)))
     }
 
     /// For `serve`: `[VERBOSE]` lines, but notices without the elapsed
@@ -244,11 +287,16 @@ impl Reporter {
     pub(crate) fn unstamped(verbose: bool, env: &Env) -> Arc<Self> {
         Arc::new(Reporter {
             stamped: false,
-            ..Self::to(Box::new(Stderr), verbose, style(env))
+            ..Self::on(Sink::Stderr, verbose, style(env))
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn to(sink: Box<dyn Write + Send>, verbose: bool, style: Style) -> Self {
+        Self::on(Sink::Writer(sink), verbose, style)
+    }
+
+    fn on(sink: Sink, verbose: bool, style: Style) -> Self {
         Reporter {
             verbose,
             stamped: verbose,
@@ -265,10 +313,10 @@ impl Reporter {
     /// Writes `text` with every control character but tab and newline shown
     /// escaped: server messages and file names cannot drive the terminal.
     fn write(&self, text: &str, stamped: bool) {
-        self.emit(&printable(text), stamped);
+        self.emit(&printable(text), stamped, Line::Own);
     }
 
-    fn emit(&self, text: &str, stamped: bool) {
+    fn emit(&self, text: &str, stamped: bool, line: Line) {
         let mut sink = self
             .sink
             .lock()
@@ -283,8 +331,7 @@ impl Reporter {
             out.push_str(text);
             out.push('\n');
         }
-        let _ = sink.write_all(out.as_bytes());
-        let _ = sink.flush();
+        sink.put(out.as_bytes(), line);
     }
 
     /// Text with no line end: a prompt, or a line rewritten in place with `\r`.
@@ -293,8 +340,7 @@ impl Reporter {
             .sink
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let _ = sink.write_all(text.as_bytes());
-        let _ = sink.flush();
+        sink.put(text.as_bytes(), Line::Own);
     }
 
     /// A `--verbose` line as Go prints it: `[VERBOSE] ` and no elapsed time.
@@ -317,7 +363,7 @@ impl Reporter {
         if let Some(h) = &n.hint {
             let _ = write!(text, "\nHINT:  {h}");
         }
-        self.write(&text, self.stamped);
+        self.emit(&printable(&text), self.stamped, Line::Notice);
     }
 
     pub(crate) fn summary(&self, summary: &Summary) {
@@ -331,6 +377,7 @@ impl Reporter {
         self.emit(
             &format!("{open}{word}{close} {}", printable(summary.text())),
             false,
+            Line::Own,
         );
     }
 }
@@ -478,6 +525,69 @@ impl Write for Captured {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn queued(spool: &Spool) -> Vec<String> {
+        let q = spool.lock();
+        q.chunks
+            .iter()
+            .map(|c| String::from_utf8_lossy(c).into_owned())
+            .collect()
+    }
+
+    fn full() -> Spool {
+        let spool = Spool::default();
+        spool.push(&vec![b'n'; SPOOL_BYTES], Line::Notice);
+        spool
+    }
+
+    #[test]
+    fn a_full_queue_drops_a_server_notice_and_keeps_pgmis_own_line() {
+        let spool = full();
+        spool.push(b"notice 1\n", Line::Notice);
+        spool.push(b"notice 2\n", Line::Notice);
+        assert_eq!(queued(&spool).len(), 1);
+        spool.push(b"pgmi: error: THE_REAL_ERROR\n", Line::Own);
+        let lines = queued(&spool);
+        assert_eq!(
+            lines[1..],
+            [
+                "pgmi: 2 server notice(s) not shown: stderr was read more slowly than they arrived\n",
+                "pgmi: error: THE_REAL_ERROR\n"
+            ]
+        );
+        spool.push(b"FAILED db\n", Line::Own);
+        assert_eq!(queued(&spool).len(), 4);
+    }
+
+    #[test]
+    fn the_last_drain_says_what_was_dropped_when_no_line_followed() {
+        let spool = full();
+        spool.push(b"notice\n", Line::Notice);
+        {
+            let mut q = spool.lock();
+            q.note_dropped();
+        }
+        assert_eq!(
+            queued(&spool)[1],
+            "pgmi: 1 server notice(s) not shown: stderr was read more slowly than they arrived\n"
+        );
+    }
+
+    #[test]
+    fn a_drain_gives_up_on_a_stalled_reader_only_after_its_patience() {
+        let spool = Spool::default();
+        spool.push(b"never written\n", Line::Own);
+        let started = Instant::now();
+        spool.drain(None);
+        let impatient = started.elapsed();
+        assert!(
+            impatient >= STALLED && impatient < 3 * STALLED,
+            "{impatient:?}"
+        );
+        let started = Instant::now();
+        spool.drain(Some(Instant::now() + 3 * STALLED));
+        assert!(started.elapsed() >= 3 * STALLED, "{:?}", started.elapsed());
+    }
 
     fn notice(sev: &str, detail: Option<&str>, hint: Option<&str>) -> Notice {
         Notice {

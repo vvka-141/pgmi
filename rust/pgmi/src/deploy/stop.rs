@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
@@ -18,6 +19,7 @@ pub(crate) enum StopReason {
 pub(crate) struct Stop {
     token: CancellationToken,
     reason: Arc<OnceLock<StopReason>>,
+    over: Arc<AtomicBool>,
 }
 
 impl Stop {
@@ -27,7 +29,18 @@ impl Stop {
         Stop {
             token,
             reason: Arc::default(),
+            over: Arc::default(),
         }
+    }
+
+    /// The deploy has ended and only its report is left to write: from here
+    /// a signal has nothing to stop.
+    pub(crate) fn work_is_over(&self) {
+        self.over.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn is_over(&self) -> bool {
+        self.over.load(Ordering::Acquire)
     }
 
     pub(crate) fn signal(&self) {
