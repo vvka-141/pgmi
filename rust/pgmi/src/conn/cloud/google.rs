@@ -251,29 +251,8 @@ enum Adc {
     Discovered,
 }
 
-/// The client key for the ephemeral certificate, its primes stored larger
-/// first. graviola's RSA signing (0.4.5, `private_op`) computes
-/// `(m1 - m2) mod p` with `m2 = c^dQ mod q` taken as already below p, which
-/// holds only when p > q; with p < q a signature fails its own check
-/// whenever `m2 >= p` (PGMI-1013). OpenSSL orders them so; `rsa` does not.
 fn ephemeral_key() -> rsa::Result<PrivateKey> {
-    larger_prime_first(PrivateKey::new(&mut rand::rng(), 2048)?)
-}
-
-fn larger_prime_first(key: PrivateKey) -> rsa::Result<PrivateKey> {
-    use rsa::traits::{PrivateKeyParts, PublicKeyParts};
-    let [p, q] = key.primes() else {
-        return Ok(key);
-    };
-    if p.as_ref() > q.as_ref() {
-        return Ok(key);
-    }
-    PrivateKey::from_components(
-        key.n().as_ref().clone(),
-        key.e().clone(),
-        key.d().clone(),
-        vec![q.as_ref().clone(), p.as_ref().clone()],
-    )
+    PrivateKey::new(&mut rand::rng(), 2048)
 }
 
 fn adc_well_known(env: &Env, windows: bool) -> Option<PathBuf> {
@@ -485,9 +464,14 @@ fn not_after(cert: &CertificateDer<'_>) -> std::result::Result<jiff::Timestamp, 
 #[cfg(test)]
 pub(crate) mod tests {
 
-    fn signs_with_graviola(key: &PrivateKey, scheme: rustls::SignatureScheme, msg: &[u8]) -> bool {
+    fn signs_with(
+        provider: &rustls::crypto::CryptoProvider,
+        key: &PrivateKey,
+        scheme: rustls::SignatureScheme,
+        msg: &[u8],
+    ) -> bool {
         let der = key.to_pkcs8_der().unwrap();
-        crate::conn::tls::provider()
+        provider
             .key_provider
             .load_private_key(rustls::pki_types::PrivateKeyDer::Pkcs8(
                 rustls::pki_types::PrivatePkcs8KeyDer::from(der.as_bytes().to_vec()),
@@ -497,26 +481,6 @@ pub(crate) mod tests {
             .unwrap()
             .sign(msg)
             .is_ok()
-    }
-
-    #[test]
-    fn a_key_whose_first_prime_is_the_smaller_signs_once_reordered() {
-        use rsa::pkcs8::DecodePrivateKey;
-        let raw = PrivateKey::from_pkcs8_pem(include_str!("testdata/rsa-p-below-q.pem")).unwrap();
-        let messages: Vec<Vec<u8>> = (0u8..64).map(|i| vec![i; 32]).collect();
-        let scheme = rustls::SignatureScheme::RSA_PKCS1_SHA256;
-        assert!(
-            messages
-                .iter()
-                .any(|m| !signs_with_graviola(&raw, scheme, m)),
-            "graviola signed every message with p < q; the reordering may no longer be needed"
-        );
-        let ordered = larger_prime_first(raw).unwrap();
-        assert!(
-            messages
-                .iter()
-                .all(|m| signs_with_graviola(&ordered, scheme, m))
-        );
     }
 
     #[test]
@@ -530,7 +494,8 @@ pub(crate) mod tests {
                             .step_by(threads)
                             .filter(|_| {
                                 let key = ephemeral_key().unwrap();
-                                !signs_with_graviola(
+                                !signs_with(
+                                    &crate::conn::tls::provider(),
                                     &key,
                                     rustls::SignatureScheme::RSA_PSS_SHA256,
                                     b"tls 1.3 transcript",

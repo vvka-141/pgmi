@@ -95,9 +95,12 @@ cc and ld removed.
      is below p, which holds only when p > q. A key with p < q fails its
      own fault check (`signing failed: BadSignature`) on the messages
      where `m2 >= p`: 0.6 % of signatures with keys from the `rsa`
-     crate, which does not order the primes (OpenSSL does). pgmi stores
-     the Google Cloud SQL ephemeral key larger prime first
-     (`google::larger_prime_first`, PGMI-1013).
+     crate, and the same for keys from Go's `crypto/rsa`; neither orders
+     the primes (OpenSSL does). Every key reaches graviola through the
+     key provider in `tls::provider()` and `tls::install()`, which
+     rewrites an RSA key (PKCS#1 or PKCS#8) larger prime first: the
+     Google Cloud SQL ephemeral key, a user's `sslkey`, the Azure client
+     certificate key (PGMI-1013, PGMI-1014).
    - **Fallback:** if graviola goes stale, switching provider is one line
      in `tls::provider()` and `tls::install()` (rustls-rustcrypto once it is
      production-ready, or another pure-Rust provider); the CPU check then

@@ -22,11 +22,76 @@ use super::resolve::{Spec, SslCertMode, SslMode, SslNegotiation};
 use crate::error::{Error, Result, Secret};
 
 pub(crate) fn provider() -> Arc<CryptoProvider> {
-    Arc::new(rustls_graviola::default_provider())
+    Arc::new(graviola())
 }
 
 pub(crate) fn install() {
-    let _ = CryptoProvider::install_default(rustls_graviola::default_provider());
+    let _ = CryptoProvider::install_default(graviola());
+}
+
+fn graviola() -> CryptoProvider {
+    CryptoProvider {
+        key_provider: &LargerPrimeFirst,
+        ..rustls_graviola::default_provider()
+    }
+}
+
+/// Hands every private key to graviola with an RSA key's larger prime first.
+/// graviola 0.4.5's RSA signing (`private_op`) computes `(m1 - m2) mod p`
+/// with `m2 = c^dQ mod q` taken as already below p, which holds only when
+/// p > q; with p < q a signature fails its own check whenever `m2 >= p`
+/// (PGMI-1013, PGMI-1014). OpenSSL orders the primes so; Go and `rsa` do not.
+#[derive(Debug)]
+struct LargerPrimeFirst;
+
+impl rustls::crypto::KeyProvider for LargerPrimeFirst {
+    fn load_private_key(
+        &self,
+        key: PrivateKeyDer<'static>,
+    ) -> std::result::Result<Arc<dyn rustls::sign::SigningKey>, rustls::Error> {
+        rustls_graviola::default_provider()
+            .key_provider
+            .load_private_key(larger_prime_first(key))
+    }
+}
+
+fn larger_prime_first(key: PrivateKeyDer<'static>) -> PrivateKeyDer<'static> {
+    use rsa::pkcs1::{DecodeRsaPrivateKey, EncodeRsaPrivateKey};
+    use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey};
+    let reordered = match &key {
+        PrivateKeyDer::Pkcs1(der) => rsa::PrivateKey::from_pkcs1_der(der.secret_pkcs1_der())
+            .ok()
+            .as_ref()
+            .and_then(swapped_primes)
+            .and_then(|k| k.to_pkcs1_der().ok())
+            .map(|d| PrivateKeyDer::Pkcs1(d.as_bytes().to_vec().into())),
+        PrivateKeyDer::Pkcs8(der) => rsa::PrivateKey::from_pkcs8_der(der.secret_pkcs8_der())
+            .ok()
+            .as_ref()
+            .and_then(swapped_primes)
+            .and_then(|k| k.to_pkcs8_der().ok())
+            .map(|d| PrivateKeyDer::Pkcs8(d.as_bytes().to_vec().into())),
+        _ => None,
+    };
+    reordered.unwrap_or(key)
+}
+
+fn swapped_primes(key: &rsa::PrivateKey) -> Option<rsa::PrivateKey> {
+    use rsa::traits::{PrivateKeyParts, PublicKeyParts};
+    let [p, q] = key.primes() else {
+        return None;
+    };
+    (p.as_ref() < q.as_ref())
+        .then(|| {
+            rsa::PrivateKey::from_components(
+                key.n().as_ref().clone(),
+                key.e().clone(),
+                key.d().clone(),
+                vec![q.as_ref().clone(), p.as_ref().clone()],
+            )
+            .ok()
+        })
+        .flatten()
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -910,6 +975,39 @@ mod tests {
         let lacking = CPU_FEATURES.first().copied();
         let missing = missing_cpu_features(|f| Some(f) != lacking);
         assert_eq!(missing, lacking.into_iter().collect::<Vec<_>>());
+    }
+
+    fn signs_every_message(provider: &CryptoProvider, pem: &[u8]) -> bool {
+        let key = provider
+            .key_provider
+            .load_private_key(PrivateKeyDer::from_pem_slice(pem).unwrap())
+            .unwrap();
+        [
+            SignatureScheme::RSA_PKCS1_SHA256,
+            SignatureScheme::RSA_PSS_SHA256,
+        ]
+        .into_iter()
+        .all(|scheme| {
+            let signer = key.choose_scheme(&[scheme]).unwrap();
+            (0u8..64).all(|i| signer.sign(&[i; 32]).is_ok())
+        })
+    }
+
+    #[test]
+    fn go_generated_rsa_client_keys_with_the_smaller_prime_first_sign_every_message() {
+        install();
+        let installed = CryptoProvider::get_default().unwrap();
+        for pem in [
+            &include_bytes!("testdata/go-pkcs1-p-below-q.key")[..],
+            &include_bytes!("testdata/go-pkcs8-p-below-q.key")[..],
+        ] {
+            assert!(!signs_every_message(
+                &rustls_graviola::default_provider(),
+                pem
+            ));
+            assert!(signs_every_message(&provider(), pem));
+            assert!(signs_every_message(installed, pem));
+        }
     }
 
     #[test]
