@@ -974,7 +974,6 @@ pub(crate) async fn test(s: Settings, env: Env) -> TestResult {
     let dialer = crate::conn::dial::Dialer {
         notices: std::sync::Arc::new(|_| {}),
         log: std::sync::Arc::new(|_| {}),
-        warn: std::sync::Arc::new(|_| {}),
         secret: std::sync::Arc::new(|_| {}),
         deadline: None,
     };

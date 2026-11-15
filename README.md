@@ -170,7 +170,7 @@ before the deployment commits
 
 > **Requirements:** a deploy needs PostgreSQL 15+ (the advanced template 18+ — [compatibility matrix](docs/PRODUCTION.md#postgresql-compatibility)) and a **direct** connection or session-mode pooler. Transaction-mode poolers (PgBouncer txn mode, RDS Proxy) reassign connections between statements and destroy the session temp tables a deploy depends on — [details](docs/PRODUCTION.md#connection-requirements). The advanced template sets each request's context per transaction, so this limit applies to the deploy alone.
 >
-> **CPU:** the pgmi binary needs a CPU from about 2014 on: on x86-64, AES-NI, PCLMULQDQ, SSSE3, AVX, AVX2, BMI1, BMI2 and ADX (Intel Broadwell, AMD Zen and later); on arm64, NEON, AES, PMULL and SHA2 (Apple silicon, AWS Graviton, Raspberry Pi 5; not Raspberry Pi 4). Without them, TLS (`sslmode=require` and up) and cloud sign-in stop with exit 10 and name the missing features; `prefer`, the default, connects without TLS and warns.
+> **CPU:** the pgmi binary needs a CPU from about 2014 on: on x86-64, AES-NI, PCLMULQDQ, SSSE3, AVX, AVX2, BMI1, BMI2 and ADX (Intel Broadwell, AMD Zen and later); on arm64, NEON, AES, PMULL and SHA2 (Apple silicon, AWS Graviton, Raspberry Pi 5; not Raspberry Pi 4). Without them, every connection that would use TLS (the default `sslmode=prefer` included) and every cloud sign-in stops with exit 10 and names the missing features; pgmi never drops encryption on its own. Set `sslmode=disable` to connect without it knowingly.
 
 ## The entire model in one file
 

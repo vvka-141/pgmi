@@ -11,13 +11,13 @@ with the Go code (PGMI-835).
   It needs, on x86-64: AES-NI, PCLMULQDQ, SSSE3, AVX, AVX2, BMI1, BMI2 and
   ADX (Intel Broadwell, AMD Zen and later, about 2014 on); on arm64: NEON,
   AES, PMULL and SHA2 (Apple silicon, AWS Graviton, Raspberry Pi 5; not
-  Raspberry Pi 4). On a CPU without them, `sslmode=require`, `verify-ca`,
-  `verify-full` and any cloud sign-in stop with exit 10 and name the missing
-  features; `allow` and `prefer` (the default) connect without TLS, as a
-  libpq built without SSL does, with a `WARNING:` on stderr and in the
-  `--json` record's `warnings` that names the cause and says to set
-  `sslmode=require` to refuse instead. Unix sockets and commands that need no
-  encryption run as before. Install pages list this CPU floor.
+  Raspberry Pi 4). On a CPU without them, every connection that would
+  use TLS (`allow`, `prefer`, which is the default, `require`, `verify-ca`,
+  `verify-full`) and any cloud sign-in stops with exit 10 and names the
+  missing features. pgmi never connects without encryption on its own: set
+  `sslmode=disable` to do so knowingly, for example for a local server
+  without TLS. Unix sockets and commands that need no encryption run as
+  before. Install pages list this CPU floor.
 
 ## Behaviour changes
 

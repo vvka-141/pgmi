@@ -18,7 +18,7 @@ This guide takes you from zero to a working deployment in about 10 minutes. The 
 **What you need:**
 - PostgreSQL 15 or newer (18 or newer for the advanced template) running on `localhost:5432` (the default), reachable over a **direct connection** or a session-mode pooler — transaction-mode poolers (PgBouncer txn mode, RDS Proxy) break pgmi's session temp tables; see [Connection Requirements](PRODUCTION.md#connection-requirements)
 - A PostgreSQL user with database creation rights (typically `postgres`)
-- On x86-64, a CPU from about 2014 on (Intel Broadwell, AMD Zen or later); on arm64, Apple silicon, AWS Graviton or Raspberry Pi 5. An older CPU lacks the instructions pgmi's TLS uses: under the default `sslmode=prefer` pgmi then connects without TLS and warns, and `sslmode=require` or a cloud sign-in stops with exit 10.
+- On x86-64, a CPU from about 2014 on (Intel Broadwell, AMD Zen or later); on arm64, Apple silicon, AWS Graviton or Raspberry Pi 5. An older CPU lacks the instructions pgmi's TLS uses: pgmi then stops with exit 10 instead of connecting without encryption, also under the default `sslmode=prefer`. For a local server without TLS, set `sslmode=disable`.
 
 No toolchain required — the quickstart installs a prebuilt binary. (Building from source is an optional alternative; see Step 1.)
 

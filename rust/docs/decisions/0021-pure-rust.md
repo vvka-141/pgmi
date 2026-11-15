@@ -82,12 +82,14 @@ cc and ld removed.
      `avx2`, `bmi1`, `bmi2`, `adx` (Intel Broadwell, AMD Zen and later,
      about 2014 on). arm64: `neon`, `aes`, `pmull`, `sha2` (Apple silicon,
      Graviton, Raspberry Pi 5; not Raspberry Pi 4). graviola itself panics
-     on a CPU without them, so pgmi checks first: a TLS connection that
-     `sslmode` requires and any cloud sign-in are refused with exit 10
-     naming the missing features (`tls::require_cpu`), while `allow` and
-     `prefer` connect without TLS, as libpq built without SSL does, and
-     warn on stderr and in the `--json` record's `warnings` (PGMI-979,
-     owner 2026-11-14: never drop TLS silently). Work that needs no cryptography (`init`, `templates`,
+     on a CPU without them, so pgmi checks first: every connection that
+     would use TLS, whatever its `sslmode` (`allow` and the default
+     `prefer` included), and any cloud sign-in are refused with exit 10
+     naming the missing features (`dial::tls_runs_here`,
+     `tls::require_cpu`). pgmi never falls back to plain text on its own;
+     the message says `sslmode=disable` connects without encryption
+     (owner 2026-11-15, PGMI-1024; the warn-and-continue fallback of
+     PGMI-979 sent in clear what Go encrypts). Work that needs no cryptography (`init`, `templates`,
      `metadata`, a deploy with `sslmode=disable` or over a Unix socket)
      runs on any CPU.
    - **RSA keys must list the larger prime first.** graviola 0.4.5 signs

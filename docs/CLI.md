@@ -101,7 +101,7 @@ unknown, check the database`.
 | `executionMode` | `"atomic"` (nothing committed, everything rolled back) or `"psql"` (earlier units already committed). Present only on failure |
 | `outcomeUnknown` | `true` when a unit was sent and the server never answered: it may have committed, so check the database before deploying again |
 | `attempts`, `timeUsedMs` | Present once an attempt started. `attempts` lists each run of the deploy, in order, with `startedAt`, `durationMs`, `unitsCommitted` when it committed units, and the `sqlstate` and `message` of a failed one; `timeUsedMs` is the part of the time box used ([Time box and retries](#time-box-and-retries)) |
-| `warnings` | pgmi's own `WARNING:` lines (an unsupported libpq variable that is set, a connection made without TLS because the CPU lacks the features TLS needs). Absent when there are none |
+| `warnings` | pgmi's own `WARNING:` lines (an unsupported libpq variable that is set). Absent when there are none |
 | `error` | Failure message. Note the key is `error`, not `message` |
 | `notices`, `noticesTruncated` | The deploy's notices, on success and on failure: the first 50, up to 200 `WARNING`s from the middle and the last 150, each as `{severity, message}`, plus `detail` and `hint` when the notice has them; `noticesTruncated` counts the rest and is absent when nothing was dropped. stderr still prints every one |
 | `sqlstate` | PostgreSQL error code |

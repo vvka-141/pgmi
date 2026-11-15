@@ -282,10 +282,11 @@ refused, exit 10.
 
 pgmi's TLS needs CPU instructions present on x86-64 since about 2014 (AES-NI,
 PCLMULQDQ, SSSE3, AVX, AVX2, BMI1, BMI2, ADX) and on arm64 NEON, AES, PMULL
-and SHA2. On an older CPU, `require`, `verify-ca`, `verify-full` and every
-cloud sign-in stop with exit 10 and name the missing features; `allow` and
-`prefer` connect without TLS, with a `WARNING:` on stderr and in the `--json`
-`warnings`.
+and SHA2. On an older CPU every connection that would use TLS (`allow`, `prefer`,
+which is the default, `require`, `verify-ca`, `verify-full`) and every cloud
+sign-in stops with exit 10 and names the missing features: pgmi never drops
+encryption on its own. `sslmode=disable` and Unix sockets use no TLS and
+work on any CPU.
 
 ### TLS with token authentication
 

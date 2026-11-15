@@ -940,7 +940,6 @@ impl Steps<'_> {
         let line_reporter = self.reporter.clone();
         let line_secrets = self.secrets.clone();
         let found = self.secrets.clone();
-        let (warn_reporter, warned) = (self.reporter.clone(), log.clone());
         Dialer {
             notices: Arc::new(move |n: Notice| {
                 let n = secrets.notice(n);
@@ -951,13 +950,6 @@ impl Steps<'_> {
             }),
             log: Arc::new(move |line: String| {
                 line_reporter.line(&redact(&line, &line_secrets.list()));
-            }),
-            warn: Arc::new(move |line: String| {
-                warn_reporter.line(&line);
-                warned
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .warn(line);
             }),
             secret: Arc::new(move |secret: &Secret| found.insert(secret)),
             deadline: Some(self.guard.deadline),

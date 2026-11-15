@@ -712,8 +712,7 @@ When the record cannot be written (stdout on a full disk), Rust says so on
 stderr and exits 1 if the deploy itself succeeded; Go exits 0 (PGMI-997,
 Rust test `a_json_record_that_cannot_be_written_is_not_exit_0`). The Rust
 record has a `warnings` array, left out when empty, for warnings pgmi
-itself gives (a TLS fallback on an older CPU, an unsupported libpq
-variable); Go has none. Rust also
+itself gives (an unsupported libpq variable); Go has none. Rust also
 writes the record on its two earliest exits: a project `.env` it cannot read
 (exit 10) and a runtime that cannot start because the system refuses a
 thread (exit 1); Go warns and deploys past the first (case
@@ -1621,7 +1620,7 @@ release notes take their "Behaviour changes" section from this table.
 | Wizards | full-screen | full-screen (kept) | owner 2026-11-11 |
 | A NUL byte in the project `.env` | in a key: nothing applied, WARNING; in a value: that pair dropped, the rest applied and listed | nothing applied, WARNING; exit 0 both, the value never printed | intended |
 | `pgmi init` into a directory that exists but cannot be listed | exit 1 both (Rust 0.20 alphas: files overwritten) | exit 1, nothing written; files created exclusively | intended |
-| TLS or cloud sign-in on an x86-64 CPU without AES-NI, PCLMULQDQ, SSSE3, AVX, AVX2, BMI1, BMI2, ADX (before about 2014), or an arm64 CPU without NEON, AES, PMULL, SHA2 | works | `sslmode=require`, `verify-ca`, `verify-full` and cloud sign-in newly refused before connecting, exit 10, naming the missing features; `allow` and `prefer` connect without TLS, as libpq built without SSL does, with a `WARNING:` line on stderr and in `--json` `warnings` that names the cause and says `sslmode=require` refuses instead; `disable`, Unix sockets and commands without a database run as before (record 0021, PGMI-979) | owner 2026-11-11 |
+| TLS or cloud sign-in on an x86-64 CPU without AES-NI, PCLMULQDQ, SSSE3, AVX, AVX2, BMI1, BMI2, ADX (before about 2014), or an arm64 CPU without NEON, AES, PMULL, SHA2 | works | every connection that would use TLS (`allow`, `prefer` and the unset default, `require`, `verify-ca`, `verify-full`) and every cloud sign-in is refused before connecting, exit 10, naming the missing features and saying that `sslmode=disable` connects without encryption; pgmi never falls back to plain text on its own. `disable`, Unix sockets and commands without a database run as before (record 0021; Rust unit test `a_cpu_without_the_tls_features_never_connects_without_tls_unless_sslmode_is_disable`) | owner 2026-11-15 (PGMI-1024), replacing the fallback of PGMI-979 |
 | `--help` of a binary run under another file name | `Usage:` names `pgmi` | names the file it was run as, as clap prints it; usage errors say `pgmi` in both (the differential run names both binaries `pgmi`) | owner 2026-11-13 (PGMI-973): wording only |
 | A command-line argument pgmi reads as text that is not UTF-8 (`-d $'\xff'`) | passed on, fails later (exit 11 or 1) | refused at once, exit 2 (`invalid UTF-8 was detected in one or more arguments`) | owner 2026-11-13 (PGMI-973): a usage error is known before anything runs |
 | `--timeout` with a negative value (`-1s`) | runs, then exit 11 `exceeded --timeout -1s` | refused, exit 2 (`must not be negative`), as `pgmi.yaml` is | owner 2026-11-13 (PGMI-973): better, a typo is not a timeout |
