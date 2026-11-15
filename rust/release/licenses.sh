@@ -19,14 +19,17 @@ under="$(awk -v p="$placeholder" '
   /^Used by:$/ { n = 0; listing = 1; next }
   listing && /^  / { names[n++] = $1; next }
   { listing = 0 }
-  $0 == p { for (i = 0; i < n; i++) print names[i] }' "$out" | sort -u)"
-for crate in $under; do
-  case " $without_notice " in
-    *" $crate "*) ;;
+  tolower($0) ~ /^[ \t]*copyright.*<(year|owner|copyright holders?)>/ {
+    for (i = 0; i < n; i++) print names[i], ($0 == p ? "mit" : "other")
+  }' "$out" | sort -u)"
+while read -r crate kind; do
+  [[ -z "$crate" ]] && continue
+  case "$kind: $without_notice " in
+    "mit:"*" $crate "*) ;;
     *) echo "licenses.sh: $crate has no copyright notice in $out: add a clarify entry to about.toml" >&2; exit 1 ;;
   esac
-done
+done <<< "$under"
 notices='Copyright (c) 2017 Pierre Chifflier (asn1-rs-impl)\
 Copyright (c) the authors of the other crates listed above, which publish no MIT copyright notice'
 sed -i "s/^$placeholder\$/$notices/" "$out"
-! grep -qF '<copyright holders>' "$out"
+"$here/placeholders.sh" "$out"

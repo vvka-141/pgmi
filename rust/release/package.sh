@@ -10,9 +10,7 @@ here="$(cd "$(dirname "$0")" && pwd)"; root="$(cd "$here/../.." && pwd)"
 mkdir -p "$out"; out="$(cd "$out" && pwd)"
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 [[ -s "$root/THIRD-PARTY-LICENSES" ]] || { echo "missing $root/THIRD-PARTY-LICENSES: run cargo about generate first" >&2; exit 1; }
-if grep -qF '<copyright holders>' "$root/THIRD-PARTY-LICENSES"; then
-  echo "THIRD-PARTY-LICENSES holds the SPDX placeholder '<copyright holders>': add a clarify entry to about.toml" >&2; exit 1
-fi
+"$here/placeholders.sh" "$root/THIRD-PARTY-LICENSES"
 while read -r target os arch; do
   [[ -z "$target" ]] && continue
   exe=pgmi; [[ "$os" == windows ]] && exe=pgmi.exe

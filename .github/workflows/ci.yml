@@ -354,6 +354,8 @@ jobs:
           target/x86_64-unknown-linux-musl/release/pgmi --version
       - name: Packaged files equal tracked files
         run: rust/check-package.sh
+      - name: Licence placeholder guards
+        run: rust/release/placeholders-test.sh
 
   fuzz:
     name: Fuzz (Rust)
