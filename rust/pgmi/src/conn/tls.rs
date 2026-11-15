@@ -49,10 +49,47 @@ impl rustls::crypto::KeyProvider for LargerPrimeFirst {
         &self,
         key: PrivateKeyDer<'static>,
     ) -> std::result::Result<Arc<dyn rustls::sign::SigningKey>, rustls::Error> {
+        if let Some((first, second)) = uneven_primes(&key) {
+            return Err(rustls::Error::General(format!(
+                "this RSA key's two primes differ in length ({first} and {second} bits), which pgmi's TLS library cannot sign with; generate a new key (openssl, ssh-keygen and the cloud consoles all make primes of equal length)"
+            )));
+        }
         rustls_graviola::default_provider()
             .key_provider
             .load_private_key(larger_prime_first(key))
     }
+}
+
+/// The bit lengths of an RSA key's two primes when they fill a different
+/// number of 64-bit words. graviola 0.4.5 signs with such a key only by
+/// reading past the shorter number (its `bignum_modsub` is given slices of
+/// unequal length, against its own debug assertion), so pgmi refuses the
+/// key instead (PGMI-1029). Standard generators make primes of equal length.
+fn uneven_primes(key: &PrivateKeyDer<'_>) -> Option<(usize, usize)> {
+    use rsa::pkcs1::der::Decode;
+    let pkcs1 = match key {
+        PrivateKeyDer::Pkcs1(der) => der.secret_pkcs1_der(),
+        PrivateKeyDer::Pkcs8(der) => {
+            let info = rsa::pkcs8::PrivateKeyInfoRef::try_from(der.secret_pkcs8_der()).ok()?;
+            if info.algorithm.oid != rsa::pkcs1::ALGORITHM_OID {
+                return None;
+            }
+            info.private_key.as_bytes()
+        }
+        _ => return None,
+    };
+    let key = rsa::pkcs1::RsaPrivateKeyRef::from_der(pkcs1).ok()?;
+    let bits = |number: &[u8]| {
+        let significant = number.iter().skip_while(|b| **b == 0);
+        let bytes = significant.clone().count();
+        let top = significant
+            .clone()
+            .next()
+            .map_or(0, |b| b.leading_zeros() as usize);
+        (bytes * 8).saturating_sub(top)
+    };
+    let (first, second) = (bits(key.prime1.as_bytes()), bits(key.prime2.as_bytes()));
+    (first.div_ceil(64) != second.div_ceil(64)).then_some((first, second))
 }
 
 fn larger_prime_first(key: PrivateKeyDer<'static>) -> PrivateKeyDer<'static> {
@@ -1020,6 +1057,40 @@ mod tests {
             ));
             assert!(signs_every_message(&provider(), pem));
             assert!(signs_every_message(installed, pem));
+        }
+    }
+
+    #[test]
+    fn an_rsa_key_whose_primes_fill_different_word_counts_is_refused_whatever_their_order() {
+        for (pem, lengths) in [
+            (
+                &include_bytes!("testdata/uneven-1023-1025-p-below-q-pkcs1.key")[..],
+                "(1023 and 1025 bits)",
+            ),
+            (
+                &include_bytes!("testdata/uneven-1000-1048-p-below-q-pkcs8.key")[..],
+                "(1000 and 1048 bits)",
+            ),
+            (
+                &include_bytes!("testdata/uneven-1500-1572-p-above-q-pkcs1.key")[..],
+                "(1572 and 1500 bits)",
+            ),
+        ] {
+            let key = PrivateKeyDer::from_pem_slice(pem).unwrap();
+            let Err(e) = provider().key_provider.load_private_key(key) else {
+                panic!("a key with primes of {lengths} was loaded");
+            };
+            let text = e.to_string();
+            assert!(text.contains("two primes differ in length"), "{text}");
+            assert!(text.contains(lengths), "{text}");
+        }
+        for pem in [
+            &include_bytes!("testdata/go-pkcs1-p-below-q.key")[..],
+            &include_bytes!("testdata/go-pkcs8-p-below-q.key")[..],
+            &include_bytes!("cloud/testdata/sp.pem")[..],
+        ] {
+            let key = PrivateKeyDer::from_pem_slice(pem).unwrap();
+            assert_eq!(uneven_primes(&key), None);
         }
     }
 

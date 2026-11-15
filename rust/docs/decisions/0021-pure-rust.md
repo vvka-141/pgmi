@@ -108,6 +108,14 @@ cc and ld removed.
      rewrites an RSA key (PKCS#1 or PKCS#8) larger prime first: the
      Google Cloud SQL ephemeral key, a user's `sslkey`, the Azure client
      certificate key (PGMI-1013, PGMI-1014).
+   - **RSA keys whose two primes fill a different number of 64-bit words
+     are refused.** graviola 0.4.5 signs with such a key only by reading
+     past the shorter number: `private_op` hands `bignum_modsub` slices of
+     unequal length, against that routine's own debug assertion. It gives
+     right answers in a release build because of how the numbers are
+     stored, which is not something to rely on. The key provider refuses
+     the key with a message that says to generate a new one; standard
+     generators make primes of equal length (PGMI-1029, owner 2026-11-15).
    - **Fallback:** if graviola goes stale, switching provider is one line
      in `tls::provider()` and `tls::install()` (rustls-rustcrypto once it is
      production-ready, or another pure-Rust provider); the CPU check then
