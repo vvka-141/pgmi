@@ -1,10 +1,19 @@
 # 0026: Keep graviola, or move to aws-lc-rs or ring
 
-Status: proposed, 2026-11-15. The owner decides. It reopens owner decision 1
-of record 0021 (graviola, 2026-11-11) because of PGMI-1013 and PGMI-1014.
-Measured on a throwaway worktree that was never merged or pushed.
+Status: **deferred** (owner, 2026-11-15): 0.20 keeps graviola, with the
+PGMI-1014 workaround; PGMI-1015 stays Low. Reopen this record if any of
+these happens:
 
-## Recommendation
+- graviola has another correctness bug that affects pgmi;
+- graviola PR #248 (the RSA prime-order fix) is still unmerged when 1.0 is
+  prepared;
+- the Fable review (PGMI-892) flags the provider.
+
+It reopened owner decision 1 of record 0021 (graviola, 2026-11-11) because
+of PGMI-1013 and PGMI-1014. Measured on a throwaway worktree that was never
+merged or pushed.
+
+## Recommendation (deferred)
 
 Move to **aws-lc-rs**, and narrow record 0021's rule from "no C anywhere" to
 "no C except the crypto provider". Keep graviola until then, with the
