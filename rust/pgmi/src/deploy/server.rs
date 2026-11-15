@@ -23,6 +23,17 @@ pub(super) async fn create_database(maintenance: &Session, db: &str) -> Result<(
         })
 }
 
+/// `e` with the reason the tap closed `session`, when it did: a message over
+/// the size cap is a connection failure (exit 11, as Go) and is never retried.
+pub(super) fn with_refusal(session: &Session, e: Error) -> Error {
+    match session.tap.refused() {
+        Some(refusal) => {
+            Error::connection(format!("{}: {refusal}", e.text())).with_cause(refusal.clone())
+        }
+        None => e,
+    }
+}
+
 /// Rolls back an open transaction and releases the deploy lock; a session
 /// that does not answer within `CLEANUP` is closed instead.
 pub(super) async fn release(session: &Session) {

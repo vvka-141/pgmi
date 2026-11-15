@@ -47,7 +47,9 @@ use record::Tls;
 pub(crate) use request::Request;
 use secrets::Secrets;
 pub(crate) use server::quote_ident;
-use server::{check_server, client_encoding, create_database, first_value, hot_standby, release};
+use server::{
+    check_server, client_encoding, create_database, first_value, hot_standby, release, with_refusal,
+};
 pub(crate) use stop::{Stop, StopReason};
 
 /// The privilege a step needs, named in the error when the server answers
@@ -778,13 +780,7 @@ impl Steps<'_> {
         }
         .await;
         release(&session).await;
-        let outcome = match (outcome, session.tap.refused()) {
-            (Err(e), Some(refusal)) => {
-                Err(Error::new(e.kind(), format!("{}: {refusal}", e.text()))
-                    .with_cause(refusal.clone()))
-            }
-            (outcome, _) => outcome,
-        };
+        let outcome = outcome.map_err(|e| with_refusal(&session, e));
         if outcome
             .as_ref()
             .err()
@@ -1005,15 +1001,19 @@ impl Steps<'_> {
             spec.maintenance_db
         ));
         let (maintenance, _) = self.connect(dialer, spec, &spec.maintenance_db).await?;
-        guard
-            .running(&maintenance, check_server(&maintenance))
-            .await?;
-        let exists = guard
-            .running(&maintenance, overwrite::claim(&maintenance, db))
-            .await?;
+        let exists = async {
+            guard
+                .running(&maintenance, check_server(&maintenance))
+                .await?;
+            guard
+                .running(&maintenance, overwrite::claim(&maintenance, db))
+                .await
+        }
+        .await
+        .map_err(|e| with_refusal(&maintenance, e))?;
         if let Err(e) = self.recreate_claimed(st, &maintenance, db, exists).await {
             overwrite::unlock(&maintenance, db).await;
-            return Err(e);
+            return Err(with_refusal(&maintenance, e));
         }
         Ok(maintenance)
     }
@@ -1101,17 +1101,21 @@ impl Steps<'_> {
             .connecting(dialer.connect(spec, &spec.maintenance_db))
             .await?;
         seen.connected = true;
-        self.pin(&maintenance).await?;
-        guard
-            .running(&maintenance, check_server(&maintenance))
-            .await?;
-        self.reporter.line(&format!(
-            "Database \"{}\" does not exist; creating",
-            spec.target_db
-        ));
-        guard
-            .running(&maintenance, create_database(&maintenance, &spec.target_db))
-            .await?;
+        async {
+            self.pin(&maintenance).await?;
+            guard
+                .running(&maintenance, check_server(&maintenance))
+                .await?;
+            self.reporter.line(&format!(
+                "Database \"{}\" does not exist; creating",
+                spec.target_db
+            ));
+            guard
+                .running(&maintenance, create_database(&maintenance, &spec.target_db))
+                .await
+        }
+        .await
+        .map_err(|e| with_refusal(&maintenance, e))?;
         st.provision = Provision::Created;
         self.reporter
             .verbose(&format!("Created database \"{}\"", spec.target_db));
@@ -1125,7 +1129,10 @@ impl Steps<'_> {
     /// on it; the second value is the path the session came with.
     async fn connect(&self, dialer: &Dialer, spec: &Spec, db: &str) -> Result<(Session, String)> {
         let session = self.guard.connecting(dialer.connect(spec, db)).await?;
-        let search_path = self.pin(&session).await?;
+        let search_path = self
+            .pin(&session)
+            .await
+            .map_err(|e| with_refusal(&session, e))?;
         Ok((session, search_path))
     }
 
