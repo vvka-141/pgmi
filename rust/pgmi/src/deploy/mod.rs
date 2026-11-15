@@ -747,9 +747,10 @@ impl Steps<'_> {
             spec.token = Some(self.signed_in(*provider, options, spec).await?);
         }
         let spec = &*spec;
-        let (session, search_path) = self.open(st, plan.dialer, spec).await?;
+        let session = self.open(st, plan.dialer, spec).await?;
         seen.connected = true;
         let outcome = async {
+            let search_path = self.pin(&session).await?;
             seen.started = Some(self.settle(&session, spec).await?);
             if !self.ctx.request.overwrite {
                 self.reporter.line(PREPARING);
@@ -777,6 +778,13 @@ impl Steps<'_> {
         }
         .await;
         release(&session).await;
+        let outcome = match (outcome, session.tap.refused()) {
+            (Err(e), Some(refusal)) => {
+                Err(Error::new(e.kind(), format!("{}: {refusal}", e.text()))
+                    .with_cause(refusal.clone()))
+            }
+            (outcome, _) => outcome,
+        };
         if outcome
             .as_ref()
             .err()
@@ -1057,14 +1065,12 @@ impl Steps<'_> {
 
     /// Connects to the target database, creating it first through the
     /// maintenance database when the server says it does not exist.
-    async fn open(
-        &self,
-        st: &mut Progress,
-        dialer: &Dialer,
-        spec: &Spec,
-    ) -> Result<(Session, String)> {
+    async fn open(&self, st: &mut Progress, dialer: &Dialer, spec: &Spec) -> Result<Session> {
         let guard = self.guard;
-        match self.connect(dialer, spec, &spec.target_db).await {
+        match guard
+            .connecting(dialer.connect(spec, &spec.target_db))
+            .await
+        {
             Err(e) if e.sql_diagnostics().and_then(|d| d.sqlstate.as_deref()) == Some("3D000") => {}
             opened => {
                 if opened.is_ok() && !self.ctx.request.overwrite {
@@ -1097,18 +1103,23 @@ impl Steps<'_> {
         self.reporter
             .verbose(&format!("Created database \"{}\"", spec.target_db));
         drop(maintenance);
-        self.connect(dialer, spec, &spec.target_db).await
+        guard
+            .connecting(dialer.connect(spec, &spec.target_db))
+            .await
     }
 
     /// Opens a session and pins its `search_path` before anything else runs
     /// on it; the second value is the path the session came with.
     async fn connect(&self, dialer: &Dialer, spec: &Spec, db: &str) -> Result<(Session, String)> {
         let session = self.guard.connecting(dialer.connect(spec, db)).await?;
-        let search_path = self
-            .guard
-            .running(&session, session::pin(&session.client))
-            .await?;
+        let search_path = self.pin(&session).await?;
         Ok((session, search_path))
+    }
+
+    async fn pin(&self, session: &Session) -> Result<String> {
+        self.guard
+            .running(session, session::pin(&session.client))
+            .await
     }
 
     /// Whether a fresh session finds the server that started at `before`:

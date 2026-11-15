@@ -213,6 +213,7 @@ pub struct Shared {
     policy: Option<Policy>,
     asked_password: AtomicBool,
     login: OnceLock<Login>,
+    refused: OnceLock<Error>,
 }
 
 impl Shared {
@@ -228,6 +229,7 @@ impl Shared {
             policy,
             asked_password: AtomicBool::new(false),
             login: OnceLock::new(),
+            refused: OnceLock::new(),
         })
     }
 
@@ -245,6 +247,13 @@ impl Shared {
     /// The status of the last `ReadyForQuery` read so far; `Idle` before any.
     pub fn status(&self) -> TxStatus {
         self.status.load(Ordering::Acquire).into()
+    }
+
+    /// Why the tap closed the session after sign-in (a message over the
+    /// size cap, an invalid length), when it did: the driver only reports
+    /// a closed connection then.
+    pub(crate) fn refused(&self) -> Option<&Error> {
+        self.refused.get()
     }
 
     /// How many commands the server has reported as committed so far: every
@@ -689,10 +698,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Tap<S> {
     }
 
     fn admit(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
-        let (kept, copy_in) = self.frames.pass(bytes).map_err(io::Error::other)?;
+        let refuse = |e: Error| {
+            let _ = self.shared.refused.set(e.clone());
+            io::Error::other(e)
+        };
+        let (kept, copy_in) = self.frames.pass(bytes).map_err(refuse)?;
         self.parser
             .feed(&bytes[..kept], &self.shared)
-            .map_err(io::Error::other)?;
+            .map_err(refuse)?;
         if copy_in {
             self.inject.extend(copy_fail());
         }

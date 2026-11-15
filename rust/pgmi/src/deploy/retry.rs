@@ -90,6 +90,9 @@ pub(super) fn transient(e: &Error, seen: &Seen) -> Option<Transient> {
     }
     let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(e);
     while let Some(c) = cur {
+        if c.downcast_ref::<crate::conn::tap::Error>().is_some() {
+            return None;
+        }
         if let Some(u) = c.downcast_ref::<Unconnected>() {
             return u.transient().then_some(Transient::Unreachable);
         }
@@ -204,6 +207,24 @@ mod tests {
             sqlstate: Some(code.into()),
             ..SqlDiagnostics::default()
         })
+    }
+
+    #[test]
+    fn a_session_pgmi_closed_over_the_servers_message_is_final() {
+        let reset = || std::io::Error::from(std::io::ErrorKind::ConnectionReset);
+        let lost = Error::connection("read the server version").with_source(reset());
+        assert!(matches!(
+            transient(&lost, &Seen::default()),
+            Some(Transient::ConnectionLost)
+        ));
+        let refused = Error::connection("read the server version").with_cause(
+            crate::conn::tap::Error::SessionOversized {
+                tag: b'E',
+                len: 1 << 31,
+                max: 1 << 26,
+            },
+        );
+        assert!(transient(&refused, &Seen::default()).is_none());
     }
 
     #[test]
