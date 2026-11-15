@@ -151,6 +151,9 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   `--json` lists the `attempts`; `retry: false` in `pgmi.yaml` turns it off.
   Pipelines need no retry step of their own. See
   [Time box and retries](switch-day/timeout-and-retry.md).
+- **A hung Azure CLI no longer holds up sign-in.** `az` and `azd` each get
+  10 s; a tool that has not answered is ended, with everything it started,
+  and the credential chain goes on. Nothing of it outlives pgmi.
 - **A slow or stalled stderr never stalls a deploy.** pgmi writes stderr
   from a queue: `--timeout` and Ctrl-C work while nobody reads it. When more
   than 4 MiB wait, server notices are dropped and one line says how many;

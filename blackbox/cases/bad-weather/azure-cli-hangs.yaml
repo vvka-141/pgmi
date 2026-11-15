@@ -1,0 +1,22 @@
+description: an Azure CLI that hangs does not hold up sign-in - after about 10 s the default chain gives up on az, goes on to azd (a stub that answers) and the deploy succeeds, also with --timeout 0 (Rust, contract "Behaviour changes in 0.20", PGMI-1026). Go 0.14 ends the shell that ran az after 10 s but then waits for az itself, so it is as slow as az
+impl: rust
+servers: [tls, fakes]
+home:
+  bin/az:
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      sleep 300
+  bin/azd:
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      printf '{"token":"{azure_token}","expiresOn":"2099-01-01T00:00:00Z"}\n'
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --azure, --timeout, "0", --connection, "host=127.0.0.1 port={tls_port} user={azure_user} dbname=postgres sslmode=require", -d, "{db}"]
+    env: {PATH: "{home}/bin:/usr/bin:/bin", AZURE_TOKEN_CREDENTIALS: dev}
+    timeout: 40
+    expect: {exit: 0}

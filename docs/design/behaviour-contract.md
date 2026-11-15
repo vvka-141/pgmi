@@ -857,7 +857,7 @@ order (managed identity on App Service, Cloud Shell, Azure ML, Service Fabric
 and Azure Arc as their endpoint variables say, else IMDS), with `AZURE_TOKEN_CREDENTIALS` naming one of them to use alone; with `--azure-client-id`, workload identity then managed
 identity; with a tenant ID, a client ID and `AZURE_CLIENT_SECRET` all set, a
 service principal (Rust also accepts a certificate, see "Azure service
-principal with a certificate"). The token is asked for the Azure Database for PostgreSQL resource and sent as the password.
+principal with a certificate"). The token is asked for the Azure Database for PostgreSQL resource and sent as the password. In the Rust binary the Azure CLI and the Azure Developer CLI each get 10 s: a tool that has not answered by then is ended, with everything it started, and the chain goes on (`AzureCLICredential: the command did not answer within 10 s and was ended`); a tool still running when the deploy is stopped is ended too (PGMI-1026, case `bad-weather/azure-cli-hangs`, Rust tests `azure_cli_hang`). Go's SDK ends the shell after 10 s and then waits for the tool.
 Without an sslmode, Azure defaults to `verify-full`; AWS to `require`, or
 `verify-full` when a root certificate is given. A refused token is exit 11
 naming the user and pointing at `--username`.

@@ -174,6 +174,7 @@ pub(crate) enum CredentialError {
     PowerShellMissing,
     PowerShellSpawn(std::io::Error),
     PowerShellTimedOut,
+    CliTimedOut,
     PowerShellWait(std::io::Error),
     AzAccountsMissing,
     PowerShellFailed(String),
@@ -193,6 +194,11 @@ impl std::fmt::Display for CredentialError {
             CredentialError::PowerShellMissing => f.write_str("executable not found on path"),
             CredentialError::PowerShellSpawn(e) | CredentialError::PowerShellWait(e) => e.fmt(f),
             CredentialError::PowerShellTimedOut => f.write_str("Azure PowerShell timed out"),
+            CredentialError::CliTimedOut => write!(
+                f,
+                "the command did not answer within {} s and was ended",
+                CLI_PATIENCE.as_secs()
+            ),
             CredentialError::AzAccountsMissing => f.write_str("Az.Accounts module not found"),
             CredentialError::PowerShellFailed(stderr) => f.write_str(stderr),
             CredentialError::PowerShellNoToken => f.write_str("Azure PowerShell printed no token"),
@@ -262,7 +268,7 @@ impl Signin {
         F: Future<Output = std::result::Result<Fetched, CredentialError>>,
     {
         if let Some(&kind) = self.pinned.get() {
-            return get(kind).await.map_err(|e| {
+            return bounded(kind, false, get(kind)).await.map_err(|e| {
                 Error::connection(format!("failed to acquire Azure token: {}", kind.name()))
                     .with_source(e)
             });
@@ -274,16 +280,7 @@ impl Signin {
         let mut failures = Vec::new();
         let mut unavailable = None;
         for &kind in plan.kinds() {
-            let attempt = get(kind);
-            let result = if kind == Kind::Managed && probing {
-                match tokio::time::timeout(Duration::from_secs(2), attempt).await {
-                    Ok(r) => r,
-                    Err(_) => Err(CredentialError::NoManagedIdentityResponse),
-                }
-            } else {
-                attempt.await
-            };
-            match result {
+            match bounded(kind, probing, get(kind)).await {
                 Ok(t) => {
                     let _ = self.pinned.set(kind);
                     return Ok(t);
@@ -310,6 +307,79 @@ impl Signin {
             Some(cause) => e.with_cause(cause),
             None => e,
         })
+    }
+}
+
+/// How long `az` or `azd` may take before the chain moves on.
+const CLI_PATIENCE: Duration = Duration::from_secs(10);
+
+/// Runs one credential's attempt inside the time that kind may take: a
+/// managed-identity probe 2 s, a command-line tool `CLI_PATIENCE`. Dropping
+/// the attempt ends the tool (`KillingExecutor`).
+async fn bounded(
+    kind: Kind,
+    probing: bool,
+    attempt: impl Future<Output = std::result::Result<Fetched, CredentialError>>,
+) -> std::result::Result<Fetched, CredentialError> {
+    let (limit, late) = match kind {
+        Kind::Managed if probing => (
+            Duration::from_secs(2),
+            CredentialError::NoManagedIdentityResponse,
+        ),
+        Kind::Cli | Kind::DeveloperCli => (CLI_PATIENCE, CredentialError::CliTimedOut),
+        _ => return attempt.await,
+    };
+    tokio::time::timeout(limit, attempt)
+        .await
+        .unwrap_or(Err(late))
+}
+
+/// Runs `az` and `azd` for `azure_identity`, whose own runner neither bounds
+/// nor ends the tool: here the tool, and on Unix everything it started (it
+/// runs under `/bin/sh -c`), is killed when the attempt is dropped.
+#[derive(Debug)]
+struct KillingExecutor;
+
+#[async_trait::async_trait]
+impl azure_identity::Executor for KillingExecutor {
+    async fn run(
+        &self,
+        program: &std::ffi::OsStr,
+        args: &[&std::ffi::OsStr],
+    ) -> std::io::Result<std::process::Output> {
+        let mut command = tokio::process::Command::new(program);
+        command
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        #[cfg(unix)]
+        command.process_group(0);
+        let child = command.spawn()?;
+        #[cfg(unix)]
+        let mut group = ProcessGroup(child.id());
+        let output = child.wait_with_output().await;
+        #[cfg(unix)]
+        group.0.take();
+        output
+    }
+}
+
+/// A child's process group, killed on drop unless the child was waited for.
+#[cfg(unix)]
+struct ProcessGroup(Option<u32>);
+
+#[cfg(unix)]
+impl Drop for ProcessGroup {
+    fn drop(&mut self) {
+        let group = self
+            .0
+            .and_then(|id| i32::try_from(id).ok())
+            .and_then(rustix::process::Pid::from_raw);
+        if let Some(group) = group {
+            let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+        }
     }
 }
 
@@ -396,13 +466,14 @@ async fn get(
         }
         Kind::Cli => AzureCliCredential::new(Some(AzureCliCredentialOptions {
             tenant_id: ids.tenant.clone(),
+            executor: Some(Arc::new(KillingExecutor)),
             ..Default::default()
         }))
         .map_err(text)?,
         Kind::DeveloperCli => {
             AzureDeveloperCliCredential::new(Some(AzureDeveloperCliCredentialOptions {
                 tenant_id: ids.tenant.clone(),
-                ..Default::default()
+                executor: Some(Arc::new(KillingExecutor)),
             }))
             .map_err(text)?
         }
