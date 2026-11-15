@@ -127,6 +127,17 @@ def test_an_empty_plan_forwards_and_answers_ssl_requests_itself(proxy):
     assert "conn 1 query 'SELECT 1'" in p.log_path.read_text()
 
 
+def test_an_ssl_rule_answers_the_ssl_request_with_its_byte_and_forwards_the_rest(proxy):
+    p, server = proxy({"at": "ssl", "do": {"answer": "X"}, "times": 1})
+    for expected in (b"X", b"N"):
+        with socket.create_connection(("127.0.0.1", p.port), timeout=3) as sock:
+            sock.sendall(struct.pack("!ii", 8, 80877103))
+            assert _exact(sock, 1) == expected
+            _startup(sock)
+            assert _message(sock)[0] == b"R"
+    assert "rule 0: answer" in p.log_path.read_text()
+
+
 def test_the_first_connections_are_reset_then_forwarded(proxy):
     p, _ = proxy({"at": "accept", "do": "reset", "times": 2})
     for _ in range(2):

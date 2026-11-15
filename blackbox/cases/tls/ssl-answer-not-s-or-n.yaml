@@ -1,0 +1,15 @@
+description: a server that answers the SSLRequest with a byte other than S or N is refused at once (exit 11) and gets no startup packet, so it cannot ask for a password in a weaker form than require_auth allows (contract "TLS", PGMI-1020); Go 0.14 also exits 11, after trying again without TLS and finding require_auth violated
+proxy:
+  - {at: ssl, do: {answer: X}}
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - pgmi: [deploy, "{project}", --connection, "host=127.0.0.1 port={proxy_port} user={user} password={password} dbname={db} sslmode=prefer require_auth=password connect_timeout=5", -d, "{db}"]
+    timeout: 30
+    expect:
+      exit: 11
+      rust:
+        stderr: ["answered the TLS request with 0x58 \\('X'\\), not S or N"]

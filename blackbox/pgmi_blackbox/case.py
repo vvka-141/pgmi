@@ -10,7 +10,7 @@ import yaml
 TEMPLATES = ("minimal", "basic", "advanced")
 SERVER_KINDS = ("tls", "tls_only", "tls_self_signed", "replica", "socket", "fakes")
 IMPLEMENTATIONS = ("go", "rust")
-FAULT_EVENTS = ("accept", "startup", "close")
+FAULT_EVENTS = ("accept", "ssl", "startup", "close")
 FAULT_ACTIONS = ("reset", "cut-client", "freeze")
 SEVERITIES = ("FATAL", "PANIC", "ERROR")
 
@@ -257,7 +257,7 @@ def _column(r: _Reader, value: Any, field: str) -> int:
 def _fault(r: _Reader, value: Any, field: str) -> Fault:
     value = r.mapping(value, field, {"at", "query", "do", "after", "times", "step"}, {"do"})
     if ("at" in value) == ("query" in value):
-        raise r.fail(field, "needs exactly one of at (accept, startup, close) or query (a regex)")
+        raise r.fail(field, "needs exactly one of at (accept, ssl, startup, close) or query (a regex)")
     if "at" in value and value["at"] not in FAULT_EVENTS:
         raise r.fail(f"{field}.at", f"must be one of {', '.join(FAULT_EVENTS)}")
     at = value.get("at", "query")
@@ -275,9 +275,17 @@ def _fault(r: _Reader, value: Any, field: str) -> Fault:
         step=_index(r, value["step"], f"{field}.step") if "step" in value else None,
     )
     do = value["do"]
+    shape = f"{field}.do"
+    if at == "ssl":
+        if not isinstance(do, dict) or fault.after is not None:
+            raise r.fail(shape, "an SSLRequest is answered with {answer: one character}, without after")
+        do = r.mapping(do, shape, {"answer"}, {"answer"})
+        answer = r.string(do["answer"], f"{shape}.answer")
+        if len(answer.encode()) != 1:
+            raise r.fail(f"{shape}.answer", "must be one single-byte character")
+        return replace(fault, action="answer", value=answer)
     if do in FAULT_ACTIONS:
         return replace(fault, action=do)
-    shape = f"{field}.do"
     if not isinstance(do, dict) or not {"delay", "error", "value"} & do.keys():
         raise r.fail(
             shape,

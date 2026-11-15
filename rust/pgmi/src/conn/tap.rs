@@ -31,6 +31,7 @@ pub enum Error {
     SaslUnfinished,
     SessionOversized { tag: u8, len: usize, max: usize },
     PlusOnly,
+    SslAnswer(u8),
 }
 
 impl fmt::Display for Error {
@@ -55,6 +56,14 @@ impl fmt::Display for Error {
             Error::UnsupportedSasl => f.write_str("unsupported SASL mechanism"),
             Error::PlusOnly => f.write_str(
                 "the server offers only SCRAM-SHA-256-PLUS, which needs channel binding over TLS; this connection has none (no TLS, or channel_binding=disable)",
+            ),
+            Error::SslAnswer(b'E') => f.write_str(
+                "the server answered the TLS request with an error message ('E'), not S or N; pgmi does not read it, because the server is not authenticated yet",
+            ),
+            Error::SslAnswer(byte) => write!(
+                f,
+                "the server answered the TLS request with 0x{byte:02x} ({:?}), not S or N",
+                char::from(*byte)
             ),
             Error::SessionOversized { tag, len, max } => write!(
                 f,
@@ -742,7 +751,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for Tap<S> {
                     this.mode = Mode::Parsing;
                     new = &new[1..];
                 }
-                Some(_) => this.mode = Mode::Parsing,
+                Some(&other) => {
+                    return Poll::Ready(Err(io::Error::other(Error::SslAnswer(other))));
+                }
                 None => {}
             }
         }
@@ -1009,6 +1020,30 @@ mod startup_tests {
             )
             .await;
             assert_eq!(tap_error(&e), &Error::PlusOnly);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_ssl_answer_other_than_s_or_n_is_refused_before_any_password() {
+        for answer in *b"XEn" {
+            let (client, mut server) = tokio::io::duplex(1 << 16);
+            let shared = Shared::new(Some("scram-sha-256")).unwrap();
+            shared.sign_in_with(Login {
+                password: b"pw".to_vec(),
+                binding: BindingPolicy::Prefer,
+            });
+            let mut reply = vec![answer];
+            reply.extend(auth(3, b""));
+            server.write_all(&reply).await.unwrap();
+            let mut tap = Tap::socket(client, shared, Start::Negotiated);
+            let mut buf = vec![0u8; 1024];
+            let e = tap.read(&mut buf).await.unwrap_err();
+            assert_eq!(tap_error(&e), &Error::SslAnswer(answer));
+            assert!(e.to_string().contains("not S or N"), "{e}");
+            drop(tap);
+            let mut written = Vec::new();
+            server.read_to_end(&mut written).await.unwrap();
+            assert!(written.is_empty(), "{written:?}");
         }
     }
 

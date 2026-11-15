@@ -155,6 +155,11 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   covers the deploy-lock query and the SQL `--overwrite` runs on the
   maintenance database, which name every built-in and operator by
   `pg_catalog` as well. In 0.14 a planted operator or function ran there too.
+- **Security fix: an invalid answer to the TLS request.** A server (or a man
+  in the middle) that answers pgmi's TLS request with a byte other than `S`
+  or `N` is refused with exit 11 before pgmi sends anything else. Earlier
+  0.20 builds went on in plaintext with the `require_auth` check switched
+  off, so such a server could ask for the password in clear text.
 
 ## Known issues (lines for the notes)
 

@@ -184,7 +184,8 @@ class Proxy:
             length, code = struct.unpack("!ii", head)
             body = await reader.readexactly(length - 8)
             if code in (_SSL, _GSS):
-                conn.client.write(b"N")
+                hit = self._match(conn, "ssl") if code == _SSL else None
+                conn.client.write(hit[1].value.encode() if hit else b"N")
                 continue
             break
         raw = head + body
