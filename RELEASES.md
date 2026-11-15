@@ -36,9 +36,7 @@ A test failure or any other SQL error is never retried. Once a unit of deploy.sq
 
 ### Requirements
 
-- **CPU.** pgmi's TLS and cloud sign-in need, on x86-64: AES-NI, PCLMULQDQ, SSSE3, AVX, AVX2, BMI1, BMI2 and ADX (Intel Broadwell, AMD Zen and later, about 2014 on). On arm64 they need NEON, AES, PMULL and SHA2 (Apple silicon, AWS Graviton, Raspberry Pi 5; not Raspberry Pi 4). On a CPU without them:
-  - `sslmode=require`, `verify-ca`, `verify-full` and any cloud sign-in stop with exit 10 and name the missing features;
-  - `allow` and `prefer` (the default) connect without TLS, as a libpq built without SSL does, with a `WARNING:` on stderr and in `--json` `warnings`.
+- **CPU.** pgmi's TLS and cloud sign-in need, on x86-64: AES-NI, PCLMULQDQ, SSSE3, AVX, AVX2, BMI1, BMI2 and ADX (Intel Broadwell, AMD Zen and later, about 2014 on). On arm64 they need NEON, AES, PMULL and SHA2 (Apple silicon, AWS Graviton, Raspberry Pi 5; not Raspberry Pi 4). On a CPU without them, every connection that would use TLS (`allow`, `prefer`, which is the default, `require`, `verify-ca`, `verify-full`) and any cloud sign-in stops with exit 10 and names the missing features. pgmi never connects without encryption on its own; set `sslmode=disable` to do so knowingly, for example for a local server without TLS.
 
   Unix sockets and commands that need no encryption run on any CPU.
 - **PostgreSQL 15 or later**, as before.
@@ -65,7 +63,10 @@ A test failure or any other SQL error is never retried. Once a unit of deploy.sq
 
 ### Also in this release
 
-- **Security fix: functions planted in a schema on the search_path.** pgmi now sets up its session objects under `search_path = pg_catalog, pg_temp` and calls every built-in by its `pg_catalog` name. Before, a role that could create functions in a schema on the deployer's `search_path` (`public` up to PostgreSQL 14, and on clusters upgraded from it) could have pgmi run its function with the deployer's rights during session set-up. **pgmi 0.14 is affected too.**
+- **Security fix: functions planted in a schema on the search_path.** pgmi now sets up its session objects under `search_path = pg_catalog, pg_temp` and calls every built-in by its `pg_catalog` name. Before, a role that could create functions in a schema on the deployer's `search_path` (`public` up to PostgreSQL 14, and on clusters upgraded from it) could have pgmi run its function with the deployer's rights. The pin is the first statement on every session pgmi opens, so it covers the deploy-lock query and the SQL `--overwrite` runs on the maintenance database too. **pgmi 0.14 is affected too.**
+- **A project `.env` cannot redirect credentials.** Keys that locate credentials, endpoints, proxies or trust roots are refused when a checked-out project sets them, the home variables included (`HOME`, `USERPROFILE`, `APPDATA`, `XDG_CONFIG_HOME` and the rest in the behaviour contract); the `.env applied:` line names them.
+- **An invalid answer to the TLS request ends the connection.** A server that answers pgmi's TLS request with anything but `S` or `N` is refused with exit 11 before pgmi sends anything else.
+- **The retry never runs committed work again.** A failed deploy is not retried once the server reported a `COMMIT`, nor when deploy.sql is one `CALL`, or one `DO` block that says `COMMIT` or `CALL`.
 - **Secrets stay out of the output.** The connection password and every sign-in token are shown as `***` wherever pgmi prints them: notices, errors, `--json` and `pgmi serve` answers.
 - **Server text cannot drive the terminal.** Escape sequences and other control characters in notices, errors and file names are shown escaped on stderr; the `--json` record keeps the original text.
 - **`--json` always ends with a record,** also when a project `.env` cannot be read or the runtime cannot start.
@@ -81,7 +82,6 @@ A test failure or any other SQL error is never retried. Once a unit of deploy.sq
 
 - Google sign-in uses google-cloud-auth's own HTTP clients, which follow redirects and read a reply without pgmi's size cap. The token endpoints come from your own Google configuration.
 - The Windows arm64 binary is tested with `--version`, and with a deploy only when the test runner has PostgreSQL.
-- On a CPU without the TLS features, the "connects without TLS" warning appears twice when `--overwrite` connects to the maintenance database first.
 
 ## v0.14.1 — 2026-11-09
 
