@@ -398,13 +398,17 @@ key. A `PGMI_CONNECTION_STRING` set only in `.env` outranks the pipeline's real
 the keys `.env` set (names only, never values), and `--json` carries them as
 `dotenvKeys`.
 
-A checked-out project's `.env` may not redirect credentials: keys that locate
-credentials, endpoints, proxies or trust roots (`PGPASSFILE`, `PGSSLROOTCERT`,
-`PGSSLCERT`, `PGSSLKEY`, `PGSERVICEFILE`, `PGSYSCONFDIR`, `AWS_PROFILE`,
-`AWS_CONFIG_FILE`, `AZURE_FEDERATED_TOKEN_FILE`,
-`GOOGLE_APPLICATION_CREDENTIALS`, `DATABRICKS_HOST`, `SSL_CERT_FILE`,
-`HTTPS_PROXY` and the like) are skipped, and the `.env applied:` line names
-each one. Set them in the environment pgmi runs in. `PGSSLMODE` is allowed. A
+A checked-out project's `.env` may set only deploy parameters
+(`PGMI_PARAM_*`), the connection (`PGMI_CONNECTION_STRING`, `DATABASE_URL`,
+and the `PG*` connection settings except the ones that point at files:
+`PGPASSFILE`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`, `PGSERVICEFILE`,
+`PGSYSCONFDIR`) and the AWS region, keys and retry settings (`AWS_REGION`,
+`AWS_DEFAULT_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_SESSION_TOKEN`, `AWS_MAX_ATTEMPTS`, `AWS_RETRY_MODE`). Any other key
+(`HOME`, `PATH`, `BASH_ENV`, `AWS_PROFILE`, `HTTPS_PROXY`, ...) is skipped,
+because it could point the operator's credentials elsewhere or make a
+sign-in helper run project code, and the `.env applied:` line names each
+one. Set them in the environment pgmi runs in. A
 `.env` that exists but cannot be read, or that is larger than
 `PGMI_MAX_FILE_SIZE`, stops the deploy with exit 10; one that does not parse is
 not applied at all, with a warning naming the file. A leading UTF-8

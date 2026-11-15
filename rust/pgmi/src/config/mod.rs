@@ -46,57 +46,48 @@ pub(crate) struct Dotenv {
     pub(crate) refused: Vec<String>,
 }
 
-/// Keys a checked-out project may not set: they locate credentials,
-/// endpoints, proxies or trust roots, which only the operator decides.
-/// The behaviour contract lists the same keys.
-const REFUSED_EXACT: [&str; 31] = [
-    "HOME",
-    "USERPROFILE",
-    "HOMEDRIVE",
-    "HOMEPATH",
-    "APPDATA",
-    "LOCALAPPDATA",
-    "XDG_CONFIG_HOME",
-    "AWS_CONFIG_FILE",
-    "AWS_SHARED_CREDENTIALS_FILE",
-    "AWS_WEB_IDENTITY_TOKEN_FILE",
-    "AWS_PROFILE",
-    "AWS_LOGIN_CACHE_DIRECTORY",
-    "AZURE_AUTHORITY_HOST",
-    "AZURE_CLIENT_CERTIFICATE_PATH",
-    "AZURE_FEDERATED_TOKEN_FILE",
-    "AZURE_CONFIG_DIR",
-    "GOOGLE_APPLICATION_CREDENTIALS",
-    "GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES",
-    "GCE_METADATA_HOST",
-    "GCE_METADATA_IP",
-    "DATABRICKS_CONFIG_FILE",
-    "DATABRICKS_CONFIG_PROFILE",
-    "DATABRICKS_HOST",
-    "IMDS_ENDPOINT",
-    "PGPASSFILE",
-    "PGSERVICEFILE",
-    "PGSYSCONFDIR",
-    "PGSSLROOTCERT",
-    "PGSSLCERT",
-    "PGSSLKEY",
-    "SSL_CERT_DIR",
+/// The only keys a checked-out project's `.env` may set: deploy parameters,
+/// the connection, and the AWS region and keys. Anything else could steer
+/// a process pgmi starts (`BASH_ENV`, `LD_PRELOAD`, `PATH`) or point the
+/// operator's credentials, trust roots or proxies elsewhere, which only the
+/// operator decides. The behaviour contract lists the same keys.
+const ALLOWED_EXACT: [&str; 30] = [
+    "PGMI_CONNECTION_STRING",
+    "DATABASE_URL",
+    "PGHOST",
+    "PGHOSTADDR",
+    "PGPORT",
+    "PGDATABASE",
+    "PGUSER",
+    "PGPASSWORD",
+    "PGSSLMODE",
+    "PGSSLPASSWORD",
+    "PGSSLNEGOTIATION",
+    "PGSSLSNI",
+    "PGSSLCERTMODE",
+    "PGMINPROTOCOLVERSION",
+    "PGMAXPROTOCOLVERSION",
+    "PGAPPNAME",
+    "PGCONNECT_TIMEOUT",
+    "PGOPTIONS",
+    "PGTARGETSESSIONATTRS",
+    "PGCHANNELBINDING",
+    "PGREQUIREAUTH",
+    "PGCLIENTENCODING",
+    "PGTZ",
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_MAX_ATTEMPTS",
+    "AWS_RETRY_MODE",
 ];
-const REFUSED_PREFIXES: [&str; 7] = [
-    "AWS_CONTAINER_",
-    "AWS_ENDPOINT_URL",
-    "AWS_EC2_METADATA_",
-    "IDENTITY_",
-    "MSI_",
-    "CLOUDSDK_",
-    "SSL_CERT_",
-];
+const ALLOWED_PREFIX: &str = "PGMI_PARAM_";
 
 pub(crate) fn refused_in_dotenv(key: &str) -> bool {
     let upper = key.to_ascii_uppercase();
-    REFUSED_EXACT.contains(&upper.as_str())
-        || REFUSED_PREFIXES.iter().any(|p| upper.starts_with(p))
-        || upper.ends_with("_PROXY")
+    !(upper.starts_with(ALLOWED_PREFIX) || ALLOWED_EXACT.contains(&upper.as_str()))
 }
 
 pub(crate) fn project_dotenv(project: &impl Vfs, env: &Env) -> Result<Dotenv> {
@@ -165,11 +156,17 @@ mod tests {
 
     #[test]
     fn project_dotenv_fills_only_unset_keys_last_value_wins() {
-        let fs = MemFs::default().file(".env", "B=1\nPGHOST=from-file\nA=x\nB=2\n");
+        let fs = MemFs::default().file(
+            ".env",
+            "PGMI_PARAM_B=1\nPGHOST=from-file\nPGMI_PARAM_A=x\nPGMI_PARAM_B=2\n",
+        );
         let env = Env::from_pairs(&[("PGHOST", "")]);
         assert_eq!(
             project_dotenv(&fs, &env).unwrap().applied,
-            [("A".into(), "x".into()), ("B".into(), "2".into())]
+            [
+                ("PGMI_PARAM_A".into(), "x".into()),
+                ("PGMI_PARAM_B".into(), "2".into())
+            ]
         );
     }
 
@@ -233,6 +230,42 @@ mod tests {
             refused.sort();
             assert_eq!(d.refused, refused);
         }
+    }
+
+    #[test]
+    fn a_project_env_cannot_set_what_makes_a_helper_process_run_project_code() {
+        let keys = [
+            "BASH_ENV",
+            "ENV",
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "DYLD_INSERT_LIBRARIES",
+            "PYTHONPATH",
+            "PYTHONSTARTUP",
+            "NODE_OPTIONS",
+            "PERL5OPT",
+            "RUBYOPT",
+            "PATH",
+            "TMPDIR",
+            "XDG_DATA_HOME",
+            "XDG_CACHE_HOME",
+            "SOMETHING_NEW",
+        ];
+        let mut text = keys.join("=./evil\n");
+        text.push_str("=./evil\n");
+        text.push_str("PGMI_PARAM_X=1\nPGHOST=db\nPGMI_CONNECTION_STRING=postgresql://h/d\n");
+        let d = project_dotenv(&MemFs::default().file(".env", &text), &Env::default()).unwrap();
+        assert_eq!(
+            d.applied,
+            [
+                ("PGHOST".into(), "db".into()),
+                ("PGMI_CONNECTION_STRING".into(), "postgresql://h/d".into()),
+                ("PGMI_PARAM_X".into(), "1".into()),
+            ]
+        );
+        let mut refused = keys.map(String::from).to_vec();
+        refused.sort();
+        assert_eq!(d.refused, refused);
     }
 
     #[cfg(unix)]

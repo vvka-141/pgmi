@@ -131,17 +131,16 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   `sslrootcert` is given, the system trust store vouches for the server, so
   pgmi also checks the server's name, as `verify-full` does. With an
   explicit root file `verify-ca` is unchanged.
-- **A project `.env` cannot redirect credentials.** Keys that locate
-  credentials, endpoints, proxies or trust roots (`AWS_CONFIG_FILE`,
-  `AWS_PROFILE`, `PGSSLROOTCERT`, `PGPASSFILE`, `SSL_CERT_FILE`,
-  `HTTPS_PROXY` and the rest listed in the behaviour
-  contract) are refused when a checked-out project sets them; the
-  `.env applied:` line names them. Set them in the environment pgmi runs in.
-  That includes the home variables those files default from (`HOME`,
-  `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, `LOCALAPPDATA`,
-  `XDG_CONFIG_HOME`): where the environment has no `HOME`, as on Windows, a
-  cloned project could otherwise move `~/.aws/config` and its
-  `credential_process` into the repository.
+- **A project `.env` may set only parameters, the connection and the AWS
+  region and keys.** `PGMI_PARAM_*`, `PGMI_CONNECTION_STRING`, `DATABASE_URL`,
+  the `PG*` connection settings that point at no file, and `AWS_REGION`,
+  `AWS_DEFAULT_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+  `AWS_SESSION_TOKEN`, `AWS_MAX_ATTEMPTS`, `AWS_RETRY_MODE` apply; every other
+  key (`HOME`, `PATH`, `BASH_ENV`, `LD_PRELOAD`, `AWS_PROFILE`,
+  `PGSSLROOTCERT`, `HTTPS_PROXY`, ...) is refused and named on the
+  `.env applied:` line, so a cloned project cannot point the operator's
+  credentials elsewhere or make a sign-in helper run its code. Set those in
+  the environment pgmi runs in. pgmi 0.14 applied every key.
 - **`pg_temp.pgmi_run_file(path)` in every deploy session.** deploy.sql can
   run one project file by its path, with errors named by file and line as
   before; both templates use it, and a helper of your own keeps working. See
