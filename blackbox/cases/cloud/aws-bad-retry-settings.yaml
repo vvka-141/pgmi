@@ -1,4 +1,4 @@
-description: a bad AWS_MAX_ATTEMPTS or AWS_RETRY_MODE, from the environment, a project .env or the profile, never ends pgmi with "internal error" (exit 3) - sign-in goes on and the token reaches the server (contract "Cloud sign-in", PGMI-1033). The AWS SDK for Rust panics on such values, so pgmi gives the SDK its retry settings itself and the SDK never reads them
+description: a bad AWS_MAX_ATTEMPTS or AWS_RETRY_MODE never ends pgmi with "internal error" (exit 3). Go's SDK refuses a non-number and an unknown mode while signing in (exit 11) and takes 0 as "the default"; the Rust binary reads the two variables itself, honours a valid value and refuses a bad one before connecting (exit 10), because the AWS SDK for Rust panics on them. The profile's own max_attempts is not read in Rust (contract "Behaviour changes in 0.20", PGMI-1033)
 servers: [fakes]
 home:
   .aws/config: |
@@ -15,23 +15,32 @@ steps:
     expect:
       exit: 11
       stderr_not: ["panicked at", "internal error"]
-      files:
-        "{recorder_log}": ['"user": "retry_env", "password": "[^"]*X-Amz-Credential=AKIDEXAMPLE%2F']
+      rust:
+        exit: 10
+        stderr: ['^pgmi: error: AWS_MAX_ATTEMPTS "0" is not a number of attempts; use 1 or more, or unset it$']
   - pgmi: [deploy, "{project}", --aws, --aws-region, us-west-2, --connection, "host=127.0.0.1 port={recorder_port} user=retry_abc dbname=postgres sslmode=require", -d, "{db}"]
     env: {AWS_ACCESS_KEY_ID: AKIDEXAMPLE, AWS_SECRET_ACCESS_KEY: not-a-real-secret, AWS_MAX_ATTEMPTS: abc}
     timeout: 60
     expect:
       exit: 11
       stderr_not: ["panicked at", "internal error"]
+      rust:
+        exit: 10
+        stderr: ['^pgmi: error: AWS_MAX_ATTEMPTS "abc" is not a number of attempts']
   - pgmi: [deploy, "{project}", --aws, --aws-region, us-west-2, --connection, "host=127.0.0.1 port={recorder_port} user=retry_mode dbname=postgres sslmode=require", -d, "{db}"]
     env: {AWS_ACCESS_KEY_ID: AKIDEXAMPLE, AWS_SECRET_ACCESS_KEY: not-a-real-secret, AWS_MAX_ATTEMPTS: "3", AWS_RETRY_MODE: bogus}
     timeout: 60
     expect:
       exit: 11
       stderr_not: ["panicked at", "internal error"]
-  - pgmi: [deploy, "{project}", --aws, --aws-region, us-west-2, --connection, "host=127.0.0.1 port={recorder_port} user=retry_profile dbname=postgres sslmode=require", -d, "{db}"]
-    env: {AWS_ACCESS_KEY_ID: AKIDEXAMPLE, AWS_SECRET_ACCESS_KEY: not-a-real-secret, AWS_MAX_ATTEMPTS: "3", AWS_PROFILE: zero, AWS_CONFIG_FILE: "{home}/.aws/config"}
+      rust:
+        exit: 10
+        stderr: ['^pgmi: error: AWS_RETRY_MODE "bogus" is not a retry mode; use standard or adaptive, or unset it$']
+  - pgmi: [deploy, "{project}", --aws, --aws-region, us-west-2, --connection, "host=127.0.0.1 port={recorder_port} user=retry_ok dbname=postgres sslmode=require", -d, "{db}"]
+    env: {AWS_ACCESS_KEY_ID: AKIDEXAMPLE, AWS_SECRET_ACCESS_KEY: not-a-real-secret, AWS_MAX_ATTEMPTS: "5", AWS_RETRY_MODE: adaptive, AWS_PROFILE: zero, AWS_CONFIG_FILE: "{home}/.aws/config"}
     timeout: 60
     expect:
       exit: 11
-      stderr_not: ["panicked at", "internal error"]
+      stderr_not: ["panicked at", "internal error", "AWS_MAX_ATTEMPTS", "AWS_RETRY_MODE"]
+      files:
+        "{recorder_log}": ['"user": "retry_ok", "password": "[^"]*X-Amz-Credential=AKIDEXAMPLE%2F']

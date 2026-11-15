@@ -87,13 +87,39 @@ pub(crate) fn region(req: &Options, env: &Env) -> Result<String> {
     ))
 }
 
+/// The SDK's retry settings from `AWS_MAX_ATTEMPTS` and `AWS_RETRY_MODE`,
+/// read here because aws-config panics on a value it cannot use.
+fn retries(env: &Env) -> Result<aws_config::retry::RetryConfig> {
+    use aws_config::retry::RetryConfig;
+    let config = match env.non_empty("AWS_RETRY_MODE")? {
+        None => RetryConfig::standard(),
+        Some(mode) if mode.eq_ignore_ascii_case("standard") => RetryConfig::standard(),
+        Some(mode) if mode.eq_ignore_ascii_case("adaptive") => RetryConfig::adaptive(),
+        Some(mode) => {
+            return Err(Error::config(format!(
+                "AWS_RETRY_MODE \"{mode}\" is not a retry mode; use standard or adaptive, or unset it"
+            )));
+        }
+    };
+    match env.non_empty("AWS_MAX_ATTEMPTS")? {
+        None => Ok(config),
+        Some(text) => match text.parse::<u32>() {
+            Ok(attempts) if attempts > 0 => Ok(config.with_max_attempts(attempts)),
+            _ => Err(Error::config(format!(
+                "AWS_MAX_ATTEMPTS \"{text}\" is not a number of attempts; use 1 or more, or unset it"
+            ))),
+        },
+    }
+}
+
 pub(crate) async fn signer(req: &Options, env: &Env) -> Result<Signer> {
     let region = region(req, env)?;
+    let retries = retries(env)?;
     let http = SharedHttpClient::new(Reqwest(client()?));
     let config = aws_config::defaults(BehaviorVersion::latest())
         .region(Region::new(region.clone()))
         .http_client(http)
-        .retry_config(aws_config::retry::RetryConfig::standard())
+        .retry_config(retries)
         .load()
         .await;
     let provider = config.credentials_provider().ok_or_else(|| {
@@ -225,6 +251,36 @@ mod tests {
     use aws_credential_types::provider::future;
 
     use super::*;
+
+    #[test]
+    fn the_sdk_retry_variables_are_honoured_when_valid_and_refused_when_not() {
+        use aws_config::retry::RetryMode;
+        let of = |pairs: &[(&str, &str)]| retries(&Env::from_pairs(pairs));
+        let default = of(&[]).unwrap();
+        assert_eq!(
+            (default.mode(), default.max_attempts()),
+            (RetryMode::Standard, 3)
+        );
+        let tuned = of(&[("AWS_MAX_ATTEMPTS", "7"), ("AWS_RETRY_MODE", "Adaptive")]).unwrap();
+        assert_eq!(
+            (tuned.mode(), tuned.max_attempts()),
+            (RetryMode::Adaptive, 7)
+        );
+        for (name, value) in [
+            ("AWS_MAX_ATTEMPTS", "0"),
+            ("AWS_MAX_ATTEMPTS", "abc"),
+            ("AWS_MAX_ATTEMPTS", "-1"),
+            ("AWS_RETRY_MODE", "bogus"),
+        ] {
+            let e = of(&[(name, value)]).unwrap_err();
+            assert_eq!(e.exit_code(), 10, "{name}={value}");
+            assert!(
+                e.text().starts_with(&format!("{name} \"{value}\"")),
+                "{}",
+                e.text()
+            );
+        }
+    }
 
     #[test]
     fn token_shape() {
