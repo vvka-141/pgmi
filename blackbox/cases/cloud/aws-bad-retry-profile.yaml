@@ -1,0 +1,32 @@
+description: a profile in ~/.aws/config with a bad max_attempts or retry_mode, and no AWS_MAX_ATTEMPTS or AWS_RETRY_MODE in the environment, never ends pgmi with "internal error" (exit 3); both binaries fail the sign-in at the fake server (exit 11). Guards the retry settings the Rust binary hands the SDK, which would otherwise read the profile and panic (PGMI-1054)
+servers: [fakes]
+home:
+  .aws/config: |
+    [profile zero]
+    max_attempts = 0
+    [profile abc]
+    max_attempts = abc
+    [profile bogus]
+    retry_mode = bogus
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --aws, --aws-region, us-west-2, --connection, "host=127.0.0.1 port={recorder_port} user=retry_profile_zero dbname=postgres sslmode=require", -d, "{db}"]
+    env: {AWS_ACCESS_KEY_ID: AKIDEXAMPLE, AWS_SECRET_ACCESS_KEY: not-a-real-secret, AWS_PROFILE: zero, AWS_CONFIG_FILE: "{home}/.aws/config"}
+    timeout: 60
+    expect:
+      exit: 11
+      stderr_not: ["panicked at", "internal error"]
+  - pgmi: [deploy, "{project}", --aws, --aws-region, us-west-2, --connection, "host=127.0.0.1 port={recorder_port} user=retry_profile_abc dbname=postgres sslmode=require", -d, "{db}"]
+    env: {AWS_ACCESS_KEY_ID: AKIDEXAMPLE, AWS_SECRET_ACCESS_KEY: not-a-real-secret, AWS_PROFILE: abc, AWS_CONFIG_FILE: "{home}/.aws/config"}
+    timeout: 60
+    expect:
+      exit: 11
+      stderr_not: ["panicked at", "internal error"]
+  - pgmi: [deploy, "{project}", --aws, --aws-region, us-west-2, --connection, "host=127.0.0.1 port={recorder_port} user=retry_profile_bogus dbname=postgres sslmode=require", -d, "{db}"]
+    env: {AWS_ACCESS_KEY_ID: AKIDEXAMPLE, AWS_SECRET_ACCESS_KEY: not-a-real-secret, AWS_PROFILE: bogus, AWS_CONFIG_FILE: "{home}/.aws/config"}
+    timeout: 60
+    expect:
+      exit: 11
+      stderr_not: ["panicked at", "internal error"]
