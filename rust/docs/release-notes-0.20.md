@@ -106,12 +106,14 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   (PREFLIGHT, BOOTSTRAP, DEPLOY, VERIFY, TAIL) and the file loop in plain
   sight; the setup lives in `deploy/` files it runs by name, with the lists a
   project edits in `deploy/settings.sql` and hosting providers in
-  `deploy/providers.sql`. Parameters are declared in `deploy/parameters.xml`
-  (was `session.xml`, root element `<parameters>`) and read only as
+  `deploy/providers.sql`. Parameters are declared once, as rows of
+  `pg_temp.parameter_declaration()` in `deploy/parameters.sql` (was
+  `session.xml`), with default, form check, description and a secret flag
+  that masks the value in the deploy log. They are read only as
   `pgmi.<key>` (the `deployment.<key>` copies are gone). On a server older
   than PostgreSQL 18 the refusal says the project's code can be adapted.
-  **Upgrading:** move `session.xml` to `deploy/parameters.xml` and rename its
-  root element, and replace `current_setting('deployment.<key>')` with
+  **Upgrading:** move each parameter of your `session.xml` to a row of
+  `pg_temp.parameter_declaration()`, and replace `current_setting('deployment.<key>')` with
   `current_setting('pgmi.<key>')` in your files, except in run-once files that
   already ran: an edit there is refused as drift. A project whose
   `lib/internal/environment.sql` already ran keeps that file, which reads

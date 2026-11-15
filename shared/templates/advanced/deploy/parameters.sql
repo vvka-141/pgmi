@@ -1,9 +1,78 @@
 -- ============================================================================
 -- deploy/parameters.sql
--- Parameters declared in deploy/parameters.xml, their defaults, their checks
--- and the environment label. Ends with each value set as pgmi.<key>, read
--- through pg_temp.deployment_setting.
+-- The parameters, declared once in pg_temp.parameter_declaration(), their
+-- checks and the environment label check. Ends with each value set as
+-- pgmi.<key>, read through pg_temp.deployment_setting. Writes nothing to the
+-- database.
 -- ============================================================================
+
+-- ############################################################################
+-- DECLARATION - the one place a parameter is named
+-- ############################################################################
+-- Every parameter the deploy takes, one row each: its default (NULL means
+-- required; a blank value counts as not given), the form a value must have
+-- with the message when it does not, and whether the log masks it. env has no
+-- default: a deploy that does not say which environment it targets must not be
+-- treated as dev. Values come from pgmi.yaml params, PGMI_PARAM_NAME
+-- variables, params files and the command line; pass a password as
+-- PGMI_PARAM_NAME (a CI secret) or in a params file read from stdin, never on
+-- the command line.
+CREATE FUNCTION pg_temp.parameter_declaration()
+RETURNS TABLE (key text, default_value text, pattern text, message text, description text, is_secret boolean)
+LANGUAGE sql STABLE AS $declaration$
+    VALUES
+        ('database_owner_role', current_database() || '_owner', NULL, NULL,
+         'Database owner role (NOLOGIN)',
+         false),
+        ('database_admin_role', current_database() || '_admin', NULL, NULL,
+         'Database admin role (LOGIN, full access)',
+         false),
+        ('database_admin_password', NULL, NULL, NULL,
+         'Database admin password. Required, except with env=dev on a new or dev-labelled database, where it defaults to postgres',
+         true),
+        ('database_api_role', current_database() || '_api', NULL, NULL,
+         'API group role (NOLOGIN, permission bundle)',
+         false),
+        ('database_kernel_role', current_database() || '_kernel', NULL, NULL,
+         'Kernel role (NOLOGIN): owns the membership kernels, which work across organizations; no login is ever granted it',
+         false),
+        ('database_jobs_role', current_database() || '_jobs', NULL, NULL,
+         'Background jobs login. The deploy never creates it; when a role of this name exists, every deploy grants it CONNECT, USAGE on schema api and EXECUTE on every api.job_* routine, nothing else. Defaults to <database>_jobs',
+         false),
+        ('platform_operators', '[]', NULL, NULL,
+         'Platform operators as a JSON array: [{"email": "...", "displayName": "...", "issuer": "...", "subject": "..."}], issuer and subject optional. Synced every deploy: a person left out loses the status. Defaults to [] (none)',
+         false),
+        ('oidc_issuers', '[]', NULL, NULL,
+         'OIDC issuers (iss claim URLs) people may sign in with, as a JSON array of strings. Synced every deploy; an issuer still holding logins cannot be dropped. Defaults to [] (none)',
+         false),
+        ('platform_mfa_required', 'true', '^(true|false)$', 'platform_mfa_required must be true or false',
+         'true: platform permissions need a login session whose amr claim includes mfa (dev impersonation sets it). false turns the check off. Defaults to true',
+         false),
+        ('exchange_retention_days', '30', '^0*[1-9][0-9]{0,4}$', 'exchange_retention_days must be a whole number of days from 1 to 99999',
+         'Days the exchange log (api.exchange) keeps a row: the retention of the purge_exchanges job (api.job_purge_exchanges) and the default of POST /admin/maintenance/purge-exchanges. Defaults to 30',
+         false),
+        ('api_base_path', '/api', '^(/|(/[A-Za-z0-9._~-]+)+)$', 'api_base_path must be / or a path like /api, without a trailing slash',
+         'The path the gateway serves REST under, e.g. /api (the reference gateways'' mount). It becomes the OpenAPI servers url, so generated clients and the /docs page call the right paths. / means the root. Defaults to /api',
+         false),
+        ('www_authenticate', 'Session', '^[^[:cntrl:]]*$', 'www_authenticate must be one header value, without control characters',
+         'The challenge a 401 carries in WWW-Authenticate (RFC 9110 15.5.2), e.g. Bearer realm="app". Defaults to Session (the login-session handle)',
+         false),
+        ('provider_role_pattern', pg_temp.provider_default('provider_role_pattern'), NULL, NULL,
+         'Roles a managed PostgreSQL provider grants on its own, as a LIKE pattern (Databricks Lakebase: databricks\_%). Every deploy revokes CREATE from those roles on the template''s schemas and extensions, and TRUNCATE, REFERENCES, TRIGGER and MAINTAIN on its tables. The guards then ignore their USAGE on schemas, their SELECT, INSERT, UPDATE and DELETE on membership tables (row-level security still binds them), and event-trigger functions another role keeps in schema public. Refused when it matches one of the template''s roles. Defaults to databricks\_% on Databricks Lakebase (detected by the role databricks_superuser and the schema __db_system), else empty (none)',
+         false),
+        ('provider_schemas', pg_temp.provider_default('provider_schemas'), NULL, NULL,
+         'Schemas a managed PostgreSQL provider keeps in every database, as a JSON array of names (Databricks Lakebase: ["__db_system"]). The schema guard does not hold them to the approved list. Refused when it names a schema of the template. Defaults to ["__db_system"] on Databricks Lakebase, else [] (none)',
+         false),
+        ('env', NULL, '^(dev|test|prod)$', 'env must be dev, test or prod',
+         'Deployment environment: dev, test or prod. Required, no default. The first deploy labels the database with it (internal.environment) and every redeploy must name the same label. Only env=dev deploys files under a dev/ folder',
+         false),
+        ('relabel_environment', '', NULL, NULL,
+         'Change the database''s environment label to this value, which must equal env. Refused when the database is new or already carries that label, so it cannot stay switched on. Relabelling to dev does not default passwords. Defaults to empty (no relabel)',
+         false),
+        ('upgrade', 'false', '^(true|false)$', 'upgrade must be true or false',
+         'true: refuse the deploy unless the database already carries the label env names, so a pipeline never builds a fresh database by mistake. Cannot be combined with relabel_environment. Defaults to false',
+         false)
+$declaration$;
 
 -- ############################################################################
 -- VALUES - each declared parameter with its given value or its default
@@ -12,8 +81,6 @@ CREATE TEMPORARY TABLE deployment_parameter (
     key TEXT PRIMARY KEY,
     original_key TEXT NOT NULL,
     value TEXT,
-    default_value TEXT,
-    description TEXT,
     is_redundant BOOLEAN NOT NULL DEFAULT FALSE
 );
 
@@ -24,69 +91,18 @@ RETURNS text LANGUAGE sql IMMUTABLE AS $$
     SELECT regexp_replace(lower(p_key), '[^a-z0-9]+', '_', 'g')
 $$;
 
-DO $$
-DECLARE
-    v_xml XML;
-BEGIN
-    SELECT content::xml INTO v_xml
-    FROM pg_temp.pgmi_source_view
-    WHERE path = './deploy/parameters.xml';
+INSERT INTO pg_temp.deployment_parameter (key, original_key, value, is_redundant)
+SELECT COALESCE(d.key, given.normalized_key),
+       COALESCE(d.key, given.key),
+       COALESCE(CASE WHEN btrim(given.value) <> '' THEN given.value END, d.default_value),
+       d.key IS NULL
+FROM pg_temp.parameter_declaration() d
+FULL OUTER JOIN (
+    SELECT key, value, pg_temp.parameter_key(key) AS normalized_key
+    FROM pg_temp.pgmi_parameter_view
+) given ON given.normalized_key = d.key;
 
-    IF v_xml IS NULL THEN
-        RAISE EXCEPTION 'deploy/parameters.xml not found in project. Create it to declare deployment parameters.'
-            USING ERRCODE = 'invalid_parameter_value';
-    END IF;
-
-    INSERT INTO pg_temp.deployment_parameter (key, original_key, value, description, is_redundant)
-    SELECT
-        COALESCE(xml.normalized_key, cli.normalized_key),
-        COALESCE(xml.original_key, cli.key),
-        CASE WHEN btrim(cli.value) <> '' THEN cli.value END,
-        xml.description,
-        xml.original_key IS NULL
-    FROM (
-        SELECT
-            trim(param_key) AS original_key,
-            pg_temp.parameter_key(trim(param_key)) AS normalized_key,
-            NULLIF(trim(COALESCE(param_desc, '')), '') AS description
-        FROM XMLTABLE('/parameters/parameter' PASSING v_xml
-            COLUMNS param_key TEXT PATH '@key', param_desc TEXT PATH '@description')
-        WHERE param_key IS NOT NULL AND trim(param_key) != ''
-    ) xml
-    FULL OUTER JOIN (
-        SELECT key, value, pg_temp.parameter_key(key) AS normalized_key
-        FROM pg_temp.pgmi_parameter_view
-    ) cli ON xml.normalized_key = cli.normalized_key;
-END $$;
-
-
-
--- Each parameter's default, beside its value. A parameter without one is
--- required, and a blank value counts as not given. env has none: a deploy that
--- does not say which environment it targets must not be treated as dev.
-UPDATE pg_temp.deployment_parameter
-SET default_value = CASE key
-    WHEN 'database_owner_role' THEN current_database()::text || '_owner'
-    WHEN 'database_admin_role' THEN current_database()::text || '_admin'
-    WHEN 'database_api_role' THEN current_database()::text || '_api'
-    WHEN 'database_kernel_role' THEN current_database()::text || '_kernel'
-    WHEN 'database_jobs_role' THEN current_database()::text || '_jobs'
-    WHEN 'relabel_environment' THEN ''
-    WHEN 'upgrade' THEN 'false'
-    WHEN 'platform_operators' THEN '[]'
-    WHEN 'platform_mfa_required' THEN 'true'
-    WHEN 'oidc_issuers' THEN '[]'
-    WHEN 'exchange_retention_days' THEN '30'
-    WHEN 'www_authenticate' THEN 'Session'
-    WHEN 'api_base_path' THEN '/api'
-    WHEN 'provider_role_pattern' THEN pg_temp.provider_default(key)
-    WHEN 'provider_schemas' THEN pg_temp.provider_default(key)
-END;
-
-UPDATE pg_temp.deployment_parameter
-SET value = default_value
-WHERE value IS NULL;
-
+-- Private to this file: everything after it reads pg_temp.deployment_setting.
 CREATE FUNCTION pg_temp.parameter_value(p_key text)
 RETURNS text LANGUAGE sql STABLE AS $$
     SELECT value FROM pg_temp.deployment_parameter WHERE key = p_key
@@ -105,7 +121,7 @@ BEGIN
     FROM pg_temp.deployment_parameter;
 
     IF v_redundant IS NOT NULL THEN
-        RAISE EXCEPTION 'Unknown parameters: %. These are not declared in deploy/parameters.xml', v_redundant
+        RAISE EXCEPTION 'Unknown parameters: %. These are not declared in pg_temp.parameter_declaration() (deploy/parameters.sql)', v_redundant
             USING ERRCODE = 'invalid_parameter_value';
     END IF;
 END $$;
@@ -121,34 +137,33 @@ BEGIN
         RAISE EXCEPTION 'Missing required parameter: env'
             USING ERRCODE = 'invalid_parameter_value', HINT = 'For a local, disposable database pass --param env=dev. For a shared one use env=test or env=prod, with the passwords in PGMI_PARAM_* variables or --params-file -, never --param.';
     END IF;
-    IF v_env NOT IN ('dev', 'test', 'prod') THEN
-        RAISE EXCEPTION 'Parameter env must be dev, test or prod, got %', quote_literal(v_env)
+END $$;
+
+-- Each value against the form its declaration gives. A secret is never echoed.
+DO $$
+DECLARE
+    v_bad record;
+BEGIN
+    FOR v_bad IN
+        SELECT d.message, d.is_secret, p.value
+        FROM pg_temp.parameter_declaration() d
+        JOIN pg_temp.deployment_parameter p USING (key)
+        WHERE p.value !~ d.pattern
+        ORDER BY d.key
+    LOOP
+        RAISE EXCEPTION 'Parameter %', v_bad.message || CASE WHEN v_bad.is_secret THEN '' ELSE ', got ' || quote_literal(v_bad.value) END
             USING ERRCODE = 'invalid_parameter_value';
-    END IF;
+    END LOOP;
+END $$;
+
+DO $$
+DECLARE
+    v_env     text := pg_temp.parameter_value('env');
+    v_relabel text := pg_temp.parameter_value('relabel_environment');
+BEGIN
     IF v_relabel NOT IN ('', v_env) THEN
         RAISE EXCEPTION 'Parameter relabel_environment=% does not name the label env=% asks for', v_relabel, v_env
             USING ERRCODE = 'invalid_parameter_value', HINT = 'To change a database''s label, pass the new label as both env and relabel_environment.';
-    END IF;
-END $$;
-
--- These values reach a setting, a header and a URL path as they are.
-DO $$
-BEGIN
-    IF pg_temp.parameter_value('platform_mfa_required') NOT IN ('true', 'false') THEN
-        RAISE EXCEPTION 'Parameter platform_mfa_required must be true or false'
-            USING ERRCODE = 'invalid_parameter_value';
-    END IF;
-    IF pg_temp.parameter_value('exchange_retention_days') !~ '^0*[1-9][0-9]{0,4}$' THEN
-        RAISE EXCEPTION 'Parameter exchange_retention_days must be a whole number of days from 1 to 99999'
-            USING ERRCODE = 'invalid_parameter_value';
-    END IF;
-    IF pg_temp.parameter_value('www_authenticate') ~ '[[:cntrl:]]' THEN
-        RAISE EXCEPTION 'Parameter www_authenticate must be one header value, without control characters'
-            USING ERRCODE = 'invalid_parameter_value';
-    END IF;
-    IF pg_temp.parameter_value('api_base_path') !~ '^(/|(/[A-Za-z0-9._~-]+)+)$' THEN
-        RAISE EXCEPTION 'Parameter api_base_path must be / or a path like /api, without a trailing slash'
-            USING ERRCODE = 'invalid_parameter_value';
     END IF;
 END $$;
 
@@ -200,10 +215,6 @@ DECLARE
     v_upgrade text := pg_temp.parameter_value('upgrade');
     v_relabel text := pg_temp.parameter_value('relabel_environment');
 BEGIN
-    IF v_upgrade NOT IN ('true', 'false') THEN
-        RAISE EXCEPTION 'Parameter upgrade must be true or false, got %', quote_literal(v_upgrade)
-            USING ERRCODE = 'invalid_parameter_value';
-    END IF;
     IF v_upgrade = 'true' AND v_relabel IS DISTINCT FROM '' THEN
         RAISE EXCEPTION 'upgrade=true and relabel_environment=% together: an upgrade never changes the environment label', v_relabel
             USING ERRCODE = 'invalid_parameter_value';
@@ -212,6 +223,7 @@ END $$;
 
 -- ############################################################################
 -- ENVIRONMENT - the label a database keeps, and the dev password default
+-- (the relabel itself is written by deploy/ledger.sql, as the owner)
 -- ############################################################################
 -- The environment the database was last deployed as: NULL for one never
 -- deployed, '(none)' for one whose label row is gone.
@@ -252,7 +264,7 @@ BEGIN
 END $$;
 
 -- The dev password default is a local convenience, for a new database or one
--- already labelled dev. It reads the label before the relabel below: a
+-- already labelled dev. It reads the label before deploy/ledger.sql relabels: a
 -- database relabelled to dev needs explicit passwords. Lakebase refuses a weak
 -- password when the transaction commits, so there it is a generated one.
 DO $$
@@ -271,21 +283,6 @@ BEGIN
         ELSIF v_defaulted > 0 THEN
             RAISE WARNING 'pgmi: env=dev — role password(s) defaulted to ''postgres''. This is for local/disposable databases only. For any shared deploy use env=test or env=prod and set each *_password through PGMI_PARAM_<NAME> or --params-file -, never --param.';
         END IF;
-    END IF;
-END $$;
-
--- The label check let a labelled database with another label through only
--- when relabel_environment names env: the label changes on purpose.
-DO $$
-DECLARE
-    v_env   text := pg_temp.parameter_value('env');
-    v_label text := pg_temp.environment_label();
-BEGIN
-    IF v_label IS NOT NULL AND v_label <> v_env THEN
-        INSERT INTO internal.environment (label) VALUES (v_env)
-        ON CONFLICT (singleton) DO UPDATE SET label = excluded.label, labelled_at = now();
-        RAISE WARNING 'pgmi: database % relabelled % -> %. A copy of a production database holds real data: scrub it before using it as dev.',
-            current_database(), v_label, v_env;
     END IF;
 END $$;
 
@@ -311,17 +308,20 @@ BEGIN
 END $$;
 
 -- Every value becomes pgmi.<key>, read through pg_temp.deployment_setting; the
--- log lists them with secrets masked.
+-- log lists them, a secret masked.
 DO $$
 DECLARE
-    v_param pg_temp.deployment_parameter;
+    v_param record;
 BEGIN
-    FOR v_param IN SELECT * FROM pg_temp.deployment_parameter ORDER BY key LOOP
+    FOR v_param IN
+        SELECT p.key, p.original_key, p.value, d.is_secret
+        FROM pg_temp.deployment_parameter p
+        JOIN pg_temp.parameter_declaration() d USING (key)
+        ORDER BY p.key
+    LOOP
         PERFORM set_config('pgmi.' || v_param.key, v_param.value, false);
-        RAISE NOTICE '[pgmi] Parameter: % = %',
-            v_param.original_key,
-            CASE WHEN lower(v_param.key) ~ '(password|secret|token|key|credential|auth)'
-                 THEN '********' ELSE v_param.value END;
+        RAISE NOTICE '[pgmi] Parameter: % = %', v_param.original_key,
+            CASE WHEN v_param.is_secret THEN '********' ELSE v_param.value END;
     END LOOP;
 END $$;
 
@@ -333,7 +333,7 @@ DECLARE
 BEGIN
     v_value := current_setting(v_normalized, true);
     IF v_value IS NULL AND p_required THEN
-        RAISE EXCEPTION 'Required deployment parameter "%" not set. Declare it in deploy/parameters.xml and set PGMI_PARAM_%.', p_key, upper(p_key)
+        RAISE EXCEPTION 'Required deployment parameter "%" not set. Declare it in pg_temp.parameter_declaration() in deploy/parameters.sql and set PGMI_PARAM_%.', p_key, upper(p_key)
             USING ERRCODE = 'invalid_parameter_value';
     END IF;
     RETURN v_value;

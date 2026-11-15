@@ -289,7 +289,7 @@ FROM pg_temp.pgmi_source_view WHERE ...
 ```
 
 Affected locations in advanced template:
-- Parameter loading (reads `pgmi_source_view` for `deploy/parameters.xml`)
+- Parameter loading (the list `pg_temp.parameter_declaration()` in `deploy/parameters.sql`)
 - Deploy function (joins `pgmi_plan_view` with `pgmi_source_view`)
 
 ### Basic Template (`deploy.sql`)

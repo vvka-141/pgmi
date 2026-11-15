@@ -308,6 +308,21 @@ fn deploy_template(template: &str) {
             );
         }
     }
+    if template == "advanced" {
+        for want in [
+            "[pgmi] Parameter: database_admin_password = ********",
+            "[pgmi] Parameter: www_authenticate = Session",
+        ] {
+            assert!(
+                first_notices.iter().any(|l| l == want),
+                "want the notice {want:?}"
+            );
+        }
+        assert!(
+            !first.lines().iter().any(|l| l.contains("TestPassword123!")),
+            "the admin password is printed"
+        );
+    }
     let (framework, chatty) = tally(&first_notices);
     assert!(
         framework <= framework_line_budget(template),

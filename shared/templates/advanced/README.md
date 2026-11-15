@@ -79,7 +79,7 @@ myproject/
 ├── data/catalogs/            # Reference data synced by pg_temp.sync_catalog (create when needed)
 ├── gateways/                  # Reference gateways per language (gateways/README.md); never deployed
 ├── deploy.sql                # The deployment, top to bottom: phases, transaction, file loop
-├── deploy/                   # Setup deploy.sql runs by name (settings.sql: the lists you edit; parameters.xml: the declared parameters)
+├── deploy/                   # Setup deploy.sql runs by name (settings.sql: the lists you edit; parameters.sql: the declared parameters)
 ├── pgmi.yaml                 # Project configuration (connection, params, timeout)
 ├── ARCHITECTURE.md           # Design rationale
 └── README.md
@@ -519,11 +519,11 @@ Any handler may declare a minimum isolation floor (`minTransactionIsolation`); a
 Pass the required password parameters as `PGMI_PARAM_*` environment variables,
 stdin or a params file, never as command-line `--param` — see [Deploy](#1-deploy).
 
-Defaults sit beside the values, in one `CASE` in `deploy/parameters.sql`. A parameter
-without a default is required, and a blank value counts as not given.
-
-The parameters are declared in `deploy/parameters.xml`; a parameter it does not
-declare is refused. Each value is readable in SQL as
+Each parameter is one row of `pg_temp.parameter_declaration()` in
+`deploy/parameters.sql`: its default, the form a value must have, its
+description, and whether the deploy log masks it. Adding a parameter is one
+row. A parameter without a default is required, a blank value counts as not
+given, and a parameter the list does not declare is refused. Each value is readable in SQL as
 `current_setting('pgmi.<key>')`, or through `pg_temp.deployment_setting('<key>')`
 during the deploy.
 

@@ -96,6 +96,18 @@ func testTemplateDeployment(t *testing.T, connString, templateName string) {
 			}
 		}
 	}
+	if templateName == "advanced" {
+		for _, want := range []string{"[pgmi] Parameter: database_admin_password = ********", "[pgmi] Parameter: www_authenticate = Session"} {
+			if !slices.Contains(notices(), want) {
+				t.Errorf("want the notice %q", want)
+			}
+		}
+		for _, n := range notices() {
+			if strings.Contains(n, params["database_admin_password"]) {
+				t.Errorf("the admin password is printed: %s", n)
+			}
+		}
+	}
 	if !testing.Verbose() {
 		assertQuietDeploy(t, templateName, notices())
 	}

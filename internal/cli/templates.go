@@ -192,7 +192,7 @@ func getTemplateDescriptions() map[string]templateDescription {
 			Long:  "A full SQL-native application built on pgmi, for you to read, trim, and own — not a framework to adopt wholesale. <pgmi-meta> sortKeys for explicit phase ordering, idempotency tracking, role hierarchy (owner/admin/api/kernel), identity-based authentication, REST/RPC/MCP routing, and an api.handler registry. Targets stock PostgreSQL — no proprietary extensions. More infrastructure than basic, not a higher safety tier — either is production-capable.",
 			Structure: []string{
 				"├── deploy.sql",
-				"├── deploy/          (the setup deploy.sql runs by name; parameters.xml declares the parameters)",
+				"├── deploy/          (the setup deploy.sql runs by name; parameters.sql declares the parameters)",
 				"├── pgmi.yaml",
 				"├── README.md",
 				"├── ARCHITECTURE.md",

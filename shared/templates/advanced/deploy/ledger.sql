@@ -1,8 +1,24 @@
 -- ============================================================================
 -- deploy/ledger.sql
 -- The run ledger behind the deploy loop: run-once files that changed after
--- they ran, which files already ran, and what each run records.
+-- they ran, which files already ran, and what each run records. First, the
+-- environment relabel a deploy asked for.
 -- ============================================================================
+
+-- deploy/parameters.sql let a labelled database with another label through
+-- only when relabel_environment names env: the label changes on purpose.
+DO $$
+DECLARE
+    v_env   text := pg_temp.deployment_setting('env');
+    v_label text := pg_temp.environment_label();
+BEGIN
+    IF v_label IS NOT NULL AND v_label <> v_env THEN
+        INSERT INTO internal.environment (label) VALUES (v_env)
+        ON CONFLICT (singleton) DO UPDATE SET label = excluded.label, labelled_at = now();
+        RAISE WARNING 'pgmi: database % relabelled % -> %. A copy of a production database holds real data: scrub it before using it as dev.',
+            current_database(), v_label, v_env;
+    END IF;
+END $$;
 
 -- A run-once file is skipped once it has run, so a later edit would reach only
 -- fresh databases: the databases that ran it keep the old structure, and a

@@ -10,7 +10,7 @@
 -- ############################################################################
 -- A file under a dev/ folder, at any depth, deploys only with env=dev. The plan
 -- loop, the file-contract check and the run-once drift check all ask this.
-CREATE FUNCTION pg_temp.deploys_file(p_path text, p_env text DEFAULT current_setting('pgmi.env'))
+CREATE FUNCTION pg_temp.deploys_file(p_path text, p_env text DEFAULT pg_temp.deployment_setting('env'))
 RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT p_path !~ '/dev/' OR p_env = 'dev'
 $$;
