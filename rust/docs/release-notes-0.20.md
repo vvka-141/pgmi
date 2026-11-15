@@ -168,8 +168,10 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   [Time box and retries](switch-day/timeout-and-retry.md).
 - **An RSA client key with primes of unequal length is refused.** A key
   whose two primes differ in length (for example 1023 and 1025 bits) stops
-  pgmi with exit 10 and a message that says to generate a new key. Keys
-  from openssl, ssh-keygen and the cloud consoles are not affected.
+  pgmi with exit 10 and a message that says to generate a new key. So does
+  any other RSA key pgmi's TLS library cannot sign with: pgmi signs a few
+  test messages with every RSA key when it loads it. Keys from openssl,
+  ssh-keygen and the cloud consoles are not affected.
 - **A bad `AWS_MAX_ATTEMPTS` or `AWS_RETRY_MODE` is exit 10.** pgmi reads
   the two variables itself: a valid value tunes the AWS SDK's retries as
   before, any other is refused before connecting. `max_attempts` and

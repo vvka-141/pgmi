@@ -9,6 +9,15 @@ these happens:
   prepared;
 - the Fable review (PGMI-892) flags the provider.
 
+Since then (PGMI-1051, 2026-11-15): graviola also fails every signature
+with RSA keys whose primes have unequal bit lengths in the same number of
+words (1100 and 1140 bits), and with keys whose modulus is not a multiple
+of 64 bits (1125-bit primes). pgmi now signs eight fixed messages with every
+RSA key it loads and refuses the key (exit 10) when one fails, so no key
+pgmi accepts fails later in a handshake. Standard 2048, 3072 and 4096-bit
+keys pass. This is a workaround, not a fix; it counts toward the first
+reopen condition above.
+
 It reopened owner decision 1 of record 0021 (graviola, 2026-11-11) because
 of PGMI-1013 and PGMI-1014. Measured on a throwaway worktree that was never
 merged or pushed.

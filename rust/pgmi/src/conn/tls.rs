@@ -54,10 +54,29 @@ impl rustls::crypto::KeyProvider for LargerPrimeFirst {
                 "this RSA key's two primes differ in length ({first} and {second} bits), which pgmi's TLS library cannot sign with; generate a new key (openssl, ssh-keygen and the cloud consoles all make primes of equal length)"
             )));
         }
-        rustls_graviola::default_provider()
+        let primes = prime_bits(&key);
+        let signing = rustls_graviola::default_provider()
             .key_provider
-            .load_private_key(larger_prime_first(key))
+            .load_private_key(larger_prime_first(key))?;
+        if let Some((first, second)) = primes {
+            self_test(signing.as_ref()).map_err(|_| {
+                rustls::Error::General(format!(
+                    "this RSA key (primes of {first} and {second} bits) fails a test signature with pgmi's TLS library; generate a new key (openssl, ssh-keygen and the cloud consoles all make keys it signs with)"
+                ))
+            })?;
+        }
+        Ok(signing)
     }
+}
+
+/// Signs a few fixed messages with `key`, so an RSA key the TLS library
+/// loads but cannot sign with is refused before any handshake. graviola
+/// checks each signature it makes.
+fn self_test(key: &dyn rustls::sign::SigningKey) -> std::result::Result<(), rustls::Error> {
+    let signer = key
+        .choose_scheme(&[rustls::SignatureScheme::RSA_PKCS1_SHA256])
+        .ok_or(rustls::Error::General("no RSA PKCS#1 scheme".into()))?;
+    (0u8..8).try_for_each(|i| signer.sign(&[i; 32]).map(drop))
 }
 
 /// The bit lengths of an RSA key's two primes when they fill a different
@@ -66,6 +85,12 @@ impl rustls::crypto::KeyProvider for LargerPrimeFirst {
 /// unequal length, against its own debug assertion), so pgmi refuses the
 /// key instead (PGMI-1029). Standard generators make primes of equal length.
 fn uneven_primes(key: &PrivateKeyDer<'_>) -> Option<(usize, usize)> {
+    prime_bits(key).filter(|(first, second)| first.div_ceil(64) != second.div_ceil(64))
+}
+
+/// The bit lengths of an RSA key's two primes, in the order stored; `None`
+/// for any other key.
+fn prime_bits(key: &PrivateKeyDer<'_>) -> Option<(usize, usize)> {
     use rsa::pkcs1::der::Decode;
     let pkcs1 = match key {
         PrivateKeyDer::Pkcs1(der) => der.secret_pkcs1_der(),
@@ -88,8 +113,7 @@ fn uneven_primes(key: &PrivateKeyDer<'_>) -> Option<(usize, usize)> {
             .map_or(0, |b| b.leading_zeros() as usize);
         (bytes * 8).saturating_sub(top)
     };
-    let (first, second) = (bits(key.prime1.as_bytes()), bits(key.prime2.as_bytes()));
-    (first.div_ceil(64) != second.div_ceil(64)).then_some((first, second))
+    Some((bits(key.prime1.as_bytes()), bits(key.prime2.as_bytes())))
 }
 
 fn larger_prime_first(key: PrivateKeyDer<'static>) -> PrivateKeyDer<'static> {
@@ -753,7 +777,10 @@ fn config_with(
                 read_certs(&cert)?,
                 read_key(&key, spec.sslpassword.as_ref().map(Secret::expose))?,
             )
-            .map_err(|e| Error::config(format!("client certificate: {e}")))?,
+            .map_err(|e| match e {
+                rustls::Error::General(why) => Error::config(format!("client certificate: {why}")),
+                e => Error::config(format!("client certificate: {e}")),
+            })?,
         None => builder.with_no_client_auth(),
     };
     config.enable_sni = spec.sslsni;
@@ -1084,6 +1111,63 @@ mod tests {
             let key = PrivateKeyDer::from_pem_slice(pem).unwrap();
             assert_eq!(uneven_primes(&key), None);
         }
+    }
+
+    #[test]
+    fn an_rsa_key_pgmi_loads_signs_every_message() {
+        for pem in [
+            &include_bytes!("testdata/same-words-1100-1140-p-below-q-pkcs1.key")[..],
+            &include_bytes!("testdata/same-words-1090-1150-p-below-q-pkcs8.key")[..],
+            &include_bytes!("testdata/balanced-1125-1125-pkcs1.key")[..],
+        ] {
+            let key = PrivateKeyDer::from_pem_slice(pem).unwrap();
+            let Err(e) = provider().key_provider.load_private_key(key) else {
+                panic!("a key graviola cannot sign with was loaded");
+            };
+            let text = e.to_string();
+            assert!(text.contains("fails a test signature"), "{text}");
+        }
+        for pem in [
+            &include_bytes!("testdata/go-pkcs1-p-below-q.key")[..],
+            &include_bytes!("testdata/go-pkcs8-p-below-q.key")[..],
+            &include_bytes!("cloud/testdata/sp.pem")[..],
+        ] {
+            assert!(signs_every_message(&provider(), pem));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_client_key_that_fails_the_test_signature_is_refused_before_connecting() {
+        use std::os::unix::fs::PermissionsExt;
+        install();
+        let dir = crate::testdir::TempDir::new("self-test-key");
+        let (crt, key) = (dir.join("c.crt"), dir.join("c.key"));
+        std::fs::write(&crt, include_bytes!("testdata/same-words-1100-1140.crt")).unwrap();
+        std::fs::write(
+            &key,
+            include_bytes!("testdata/same-words-1100-1140-p-below-q-pkcs1.key"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let given = spec(
+            &format!(
+                "sslmode=require sslcert={} sslkey={}",
+                crt.display(),
+                key.display()
+            ),
+            None,
+        );
+        let Err(e) = config(&given) else {
+            panic!("a key graviola cannot sign with was accepted")
+        };
+        assert_eq!(e.exit_code(), 10, "{}", e.text());
+        assert!(
+            e.text().contains("primes of 1100 and 1140 bits"),
+            "{}",
+            e.text()
+        );
+        assert!(!e.text().contains("unexpected error"), "{}", e.text());
     }
 
     #[test]
