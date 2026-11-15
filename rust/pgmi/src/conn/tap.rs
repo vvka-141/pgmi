@@ -33,6 +33,7 @@ pub enum Error {
     PlusOnly,
     SslAnswer(u8),
     StartupFlood,
+    ParameterFlood,
 }
 
 impl fmt::Display for Error {
@@ -62,6 +63,11 @@ impl fmt::Display for Error {
                 f,
                 "the server sent more than {} MiB, or more than {STARTUP_FRAMES_MAX} messages, before it was ready for queries; pgmi stops there",
                 STARTUP_BYTES_MAX >> 20
+            ),
+            Error::ParameterFlood => write!(
+                f,
+                "the server reported more than {} MiB of session parameters (ParameterStatus, the latest value of each name); pgmi stops there",
+                PARAMETERS_MAX >> 20
             ),
             Error::SslAnswer(b'E') => f.write_str(
                 "the server answered the TLS request with an error message ('E'), not S or N; pgmi does not read it, because the server is not authenticated yet",
@@ -100,6 +106,12 @@ pub const STARTUP_FRAME_MAX: usize = 64 * 1024;
 /// one of them until then.
 const STARTUP_BYTES_MAX: usize = 1 << 20;
 const STARTUP_FRAMES_MAX: usize = 10_000;
+/// The most the session parameters a server reports after sign-in may
+/// hold, counting the latest value of each name: the driver keeps every
+/// name for the whole session.
+const PARAMETERS_MAX: usize = 1 << 20;
+/// What one name costs in the two maps that hold it, beyond its bytes.
+const PARAMETER_OVERHEAD: usize = 64;
 /// PostgreSQL's own limit on one allocation (`MaxAllocSize`), so on a row.
 pub const DATA_FRAME_MAX: usize = 0x3fff_ffff;
 pub const SESSION_FRAME_MAX: usize = 64 * 1024 * 1024;
@@ -116,6 +128,9 @@ struct Frames {
     have: usize,
     remaining: usize,
     hidden: bool,
+    status: Option<Vec<u8>>,
+    parameters: std::collections::HashMap<Box<[u8]>, usize>,
+    parameter_bytes: usize,
 }
 
 const COPY_FAIL: &str = "COPY FROM STDIN cannot run in deploy.sql: pgmi sends no COPY data; load the rows with INSERT, or COPY FROM a file on the server";
@@ -158,19 +173,52 @@ impl Frames {
                     if body > max {
                         return Err(Error::SessionOversized { tag, len, max });
                     }
+                    if tag == b'S' {
+                        if body > PARAMETERS_MAX {
+                            return Err(Error::ParameterFlood);
+                        }
+                        self.status = Some(Vec::with_capacity(body));
+                    }
                     self.remaining = body;
+                    if body == 0 {
+                        self.reported()?;
+                    }
                 }
                 continue;
             }
             let take = self.remaining.min(bytes.len() - r);
+            if let Some(status) = &mut self.status {
+                status.extend_from_slice(&bytes[r..r + take]);
+            }
             if !self.hidden {
                 bytes.copy_within(r..r + take, w);
                 w += take;
             }
             self.remaining -= take;
             r += take;
+            if self.remaining == 0 {
+                self.reported()?;
+            }
         }
         Ok((w, copy_in))
+    }
+
+    /// Counts a complete `ParameterStatus` by the latest value of its name.
+    fn reported(&mut self) -> Result<(), Error> {
+        let Some(body) = self.status.take() else {
+            return Ok(());
+        };
+        let name = body.split(|&b| b == 0).next().unwrap_or_default();
+        let size = body.len() + PARAMETER_OVERHEAD;
+        let before = self
+            .parameters
+            .insert(name.into(), size)
+            .unwrap_or_default();
+        self.parameter_bytes = self.parameter_bytes - before + size;
+        if self.parameter_bytes > PARAMETERS_MAX {
+            return Err(Error::ParameterFlood);
+        }
+        Ok(())
     }
 }
 
@@ -987,6 +1035,63 @@ mod startup_tests {
         })
         .await;
         assert_eq!(tap_error(&e), &Error::StartupFlood);
+    }
+
+    #[tokio::test]
+    async fn a_flood_of_parameter_status_after_ready_is_refused() {
+        let e = refusal(|mut s| {
+            tokio::spawn(async move {
+                s.write_all(&auth(0, b"")).await.unwrap();
+                s.write_all(&frame(b'Z', b"I")).await.unwrap();
+                for i in 0u32.. {
+                    let mut body = format!("name{i}\0").into_bytes();
+                    body.extend(std::iter::repeat_n(b'v', 60_000));
+                    body.push(0);
+                    if s.write_all(&frame(b'S', &body)).await.is_err() {
+                        return;
+                    }
+                }
+            })
+        })
+        .await;
+        assert_eq!(tap_error(&e), &Error::ParameterFlood);
+    }
+
+    #[test]
+    fn parameter_status_is_counted_once_per_name_across_any_split() {
+        let mut one = Vec::new();
+        for _ in 0..1000 {
+            let mut body = b"application_name\0".to_vec();
+            body.extend(std::iter::repeat_n(b'v', 60_000));
+            body.push(0);
+            one.extend(frame(b'S', &body));
+        }
+        let mut f = Frames::default();
+        for chunk in one.chunks_mut(7_919) {
+            f.pass(chunk).unwrap();
+        }
+        let mut many = Vec::new();
+        for i in 0..20 {
+            let mut body = format!("p{i}\0").into_bytes();
+            body.extend(std::iter::repeat_n(b'v', 60_000));
+            body.push(0);
+            many.extend(frame(b'S', &body));
+        }
+        let mut f = Frames::default();
+        let refused = many
+            .chunks_mut(7_919)
+            .try_for_each(|c| f.pass(c).map(|_| ()));
+        assert_eq!(refused, Err(Error::ParameterFlood));
+        let mut tiny = Vec::new();
+        for i in 0..20_000 {
+            tiny.extend(frame(b'S', format!("{i}\0\0").as_bytes()));
+        }
+        let mut f = Frames::default();
+        assert_eq!(f.pass(&mut tiny).map(|_| ()), Err(Error::ParameterFlood));
+        let mut f = Frames::default();
+        let mut huge = vec![b'S'];
+        huge.extend_from_slice(&u32::try_from(PARAMETERS_MAX + 100).unwrap().to_be_bytes());
+        assert_eq!(f.pass(&mut huge).map(|_| ()), Err(Error::ParameterFlood));
     }
 
     #[tokio::test]
