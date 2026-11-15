@@ -36,6 +36,7 @@ them.
 | [0023](0023-databricks-lakebase.md) | Databricks Lakebase sign-in hand-written (PGMI-849): `POST /api/2.0/postgres/credentials`, PAT, OAuth M2M, the Databricks CLI and Azure, a credential refreshed five minutes before it expires; `impl: rust` black-box cases against a fake workspace |
 | [0024](0024-templates-on-every-host.md) | Templates that deploy and pass their tests on local PostgreSQL and every listed cloud host with only the README's edits (PGMI-874) |
 | [0025](0025-whole-deploy-retry.md) | Accepted (PGMI-882): a transient failure reruns the whole deploy from the start, like a redeploy, inside the `--timeout` time box; the retried and never-retried failures, backoff, reporting, open choices for the owner |
+| [0026](0026-crypto-provider-review.md) | Proposed: keep graviola or move to aws-lc-rs or ring, measured; recommends aws-lc-rs and a narrower no-C rule; the owner decides |
 | [go-review](go-review.md) | PGMI-830: Go behaviour missing from the contract, the cases added for it, and six owner questions |
 
 ## Contract coverage
