@@ -428,3 +428,4 @@ commits. It is a working demonstration of
 | Version the API surface | [Design: API versioning](../design/api-versioning.md) |
 | Change routing, OpenAPI, or handler metadata | [Design: the transactional web boundary](../design/transactional-web-boundary.md) |
 | Upgrade a database from an earlier template | [Upgrading](UPGRADING.md) |
+| Deploy to Lakebase, Azure or another managed host | [Hosting providers](PROVIDERS.md) |

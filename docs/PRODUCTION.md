@@ -85,7 +85,7 @@ Entity lifecycle standards (`created_at` / `deleted_at` on tables marked `object
 | Self-hosted / Docker / Kubernetes | Tested | Tested | CI covers PostgreSQL 15 for core/basic and 18 for everything. |
 | AWS RDS for PostgreSQL | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
 | AWS Aurora PostgreSQL | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
-| Azure Database for PostgreSQL — Flexible Server | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
+| Azure Database for PostgreSQL — Flexible Server | Expected | Tested by hand; the deploy checks the `azure.extensions` allowlist before it changes anything | Manual run in 2026-11, not in CI. See [Hosting providers](advanced/PROVIDERS.md). |
 | Azure Cosmos DB for PostgreSQL (formerly Citus) | Expected | Not validated for sharded tables | Citus-specific semantics need project-level validation. |
 | Google Cloud SQL for PostgreSQL | Expected | Capability-dependent | Not continuously tested against the managed service. Verify role and extension capabilities. |
 | Databricks Lakebase | Tested by hand | Tested by hand; the template sets `provider_role_pattern` and `provider_schemas` itself | Manual runs in 2026-11, not in CI. See [Databricks Lakebase](LAKEBASE.md). |
@@ -99,7 +99,8 @@ the core requirements are standard PostgreSQL features, but the provider is not
 part of continuous integration. `Capability-dependent` means the advanced
 template works only when the service offers PostgreSQL 18 and the actual deploy
 role can create roles and schemas and install all five required extensions. Verify those capabilities on the selected
-service and tier before production use.
+service and tier before production use. What the advanced template does differently
+on each host it knows, and how to override it, is in [Hosting providers](advanced/PROVIDERS.md).
 
 ---
 

@@ -170,7 +170,9 @@ Every host needs the same three things: PostgreSQL 18, a login with
 `CREATEDB` and `CREATEROLE` (the server's administrator login has both), and
 the extensions `uuid-ossp`, `pgcrypto`, `pg_trgm`, `hstore` and `btree_gist`.
 A first deploy checks the login and Azure's extension list before it changes
-anything, and names what is missing.
+anything, and names what is missing. What the template does differently on
+each host, and how to override it:
+[Hosting providers](https://vvka-141.github.io/pgmi/docs/advanced/providers/).
 
 | Host | Before the first deploy |
 |---|---|

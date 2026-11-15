@@ -247,7 +247,8 @@ provider_role_pattern=databricks\_%
 provider_schemas=["__db_system"]
 ```
 
-Pass them as `--param` only to override the detection. With both set, the deploy revokes the provider roles' `CREATE` on the
+Pass them as `--param` only to override the detection
+([Hosting providers](advanced/PROVIDERS.md) covers the override and the other hosts). With both set, the deploy revokes the provider roles' `CREATE` on the
 template's schemas and their `TRUNCATE`, `REFERENCES`, `TRIGGER` and `MAINTAIN`
 on its tables, and the unmodified template deploys and redeploys with all its
 tests. [Grants a provider makes on its own](PRODUCTION.md#grants-a-provider-makes-on-its-own)
