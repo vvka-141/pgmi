@@ -15,14 +15,14 @@ DECLARE
 BEGIN
     FOR v_key IN SELECT key FROM pg_temp.parameter_declaration() WHERE is_secret LOOP
         v_seen := current_setting('pgmi.' || v_key, true);
-        IF v_seen <> '' THEN
+        IF COALESCE(v_seen, '') IS DISTINCT FROM '' THEN
             RAISE EXCEPTION 'TEST FAILED: secret parameter % is still readable as pgmi.%', v_key, v_key;
         END IF;
     END LOOP;
 
     SELECT name INTO v_seen
     FROM pg_settings
-    WHERE name LIKE 'pgmi.%' AND name ~* 'password' AND setting <> ''
+    WHERE name LIKE 'pgmi.%' AND name ~* 'password' AND COALESCE(setting, '') IS DISTINCT FROM ''
     LIMIT 1;
     IF v_seen IS NOT NULL THEN
         RAISE EXCEPTION 'TEST FAILED: % still holds a value in pg_settings', v_seen;

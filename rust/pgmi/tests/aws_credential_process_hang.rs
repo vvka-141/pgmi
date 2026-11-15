@@ -18,24 +18,23 @@ struct Hung {
     started: Instant,
 }
 
-fn deploy_with_a_hung_credential_process(name: &str, args: &[&str]) -> Hung {
+fn deploy_with_a_hung_credential_process(name: &str, args: &[&str]) -> std::io::Result<Hung> {
     let root = std::env::temp_dir().join(format!("pgmi-aws-hang-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     for dir in ["project", "pids"] {
-        std::fs::create_dir_all(root.join(dir)).unwrap();
+        std::fs::create_dir_all(root.join(dir))?;
     }
-    std::fs::write(root.join("project/deploy.sql"), "SELECT 1;\n").unwrap();
+    std::fs::write(root.join("project/deploy.sql"), "SELECT 1;\n")?;
     let helper = root.join("helper.sh");
-    std::fs::write(&helper, HUNG_PROCESS).unwrap();
-    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(&helper, HUNG_PROCESS)?;
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755))?;
     std::fs::write(
         root.join("config"),
         format!(
             "[profile hung]\ncredential_process = {}\n",
             helper.display()
         ),
-    )
-    .unwrap();
+    )?;
     let child = Command::new(env!("CARGO_BIN_EXE_pgmi"))
         .arg("deploy")
         .arg(root.join("project"))
@@ -58,13 +57,12 @@ fn deploy_with_a_hung_credential_process(name: &str, args: &[&str]) -> Hung {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    Hung {
+        .spawn()?;
+    Ok(Hung {
         root,
         child,
         started: Instant::now(),
-    }
+    })
 }
 
 impl Hung {
@@ -83,10 +81,10 @@ impl Hung {
         }
     }
 
-    fn exit_within(&mut self, limit: Duration) -> (Option<i32>, String, Duration) {
+    fn exit_within(&mut self, limit: Duration) -> std::io::Result<(Option<i32>, String, Duration)> {
         use std::io::Read;
         let code = loop {
-            if let Some(status) = self.child.try_wait().unwrap() {
+            if let Some(status) = self.child.try_wait()? {
                 break status.code();
             }
             if self.started.elapsed() > limit {
@@ -101,7 +99,7 @@ impl Hung {
         if let Some(mut pipe) = self.child.stderr.take() {
             let _ = pipe.read_to_string(&mut stderr);
         }
-        (code, stderr, took)
+        Ok((code, stderr, took))
     }
 }
 
@@ -127,9 +125,9 @@ fn gone(pid: &str) -> bool {
 
 #[test]
 fn a_hung_credential_process_is_ended_after_its_limit_even_with_no_time_box() {
-    let mut run = deploy_with_a_hung_credential_process("limit", &["--timeout", "0"]);
+    let mut run = deploy_with_a_hung_credential_process("limit", &["--timeout", "0"]).unwrap();
     let (helper, sleep) = (run.pid("helper"), run.pid("sleep"));
-    let (code, stderr, took) = run.exit_within(Duration::from_secs(20));
+    let (code, stderr, took) = run.exit_within(Duration::from_secs(20)).unwrap();
     assert_eq!(code, Some(11), "{stderr}");
     assert!(
         stderr.contains("credential_process did not answer within 2 s and was ended"),
@@ -145,9 +143,9 @@ fn a_hung_credential_process_is_ended_after_its_limit_even_with_no_time_box() {
 
 #[test]
 fn the_time_box_ends_a_hung_credential_process_with_everything_it_started() {
-    let mut run = deploy_with_a_hung_credential_process("timebox", &["--timeout", "1s"]);
+    let mut run = deploy_with_a_hung_credential_process("timebox", &["--timeout", "1s"]).unwrap();
     let (helper, sleep) = (run.pid("helper"), run.pid("sleep"));
-    let (code, stderr, took) = run.exit_within(Duration::from_secs(20));
+    let (code, stderr, took) = run.exit_within(Duration::from_secs(20)).unwrap();
     assert!(code.is_some(), "pgmi did not exit: {stderr}");
     assert!(took < Duration::from_secs(5), "took {took:?}: {stderr}");
     assert!(
