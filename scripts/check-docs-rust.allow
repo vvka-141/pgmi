@@ -1,0 +1,10 @@
+# Allow-list for scripts/check-docs-rust.sh.
+# A line with no colon exempts a whole file; "path:text" exempts the lines of
+# that file containing text. Each entry needs a reason in the comment above it.
+
+# Go vs Rust comparison: it names Go behaviour on purpose.
+docs/design/behaviour-contract.md
+# Clients generated in Go for the advanced template's API, not pgmi itself.
+docs/advanced/clients/go.md
+# Installing an old (Go) pgmi as the base of a template upgrade comparison.
+docs/advanced/UPGRADING.md:@v0.13.0
