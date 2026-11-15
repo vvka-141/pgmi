@@ -971,6 +971,7 @@ pub(crate) async fn test(s: Settings, env: Env) -> TestResult {
         ..Default::default()
     };
     let spec = crate::conn::resolve::resolve(&flags, &env, None).map_err(TestError::Settings)?;
+    crate::conn::resolve::unsupported(&env, &spec).map_err(TestError::Settings)?;
     let dialer = crate::conn::dial::Dialer {
         notices: std::sync::Arc::new(|_| {}),
         log: std::sync::Arc::new(|_| {}),
@@ -1035,6 +1036,34 @@ pub(crate) fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn the_wizard_test_refuses_a_revocation_list_it_cannot_check_before_connecting() {
+        let home = crate::testdir::TempDir::new("wizard-crl");
+        let dir = home.join(".postgresql");
+        std::fs::create_dir_all(&dir).unwrap();
+        let settings = Settings {
+            host: Some("127.0.0.1".into()),
+            port: Some(1),
+            maintenance: "postgres".into(),
+            username: Some("u".into()),
+            sslmode: Some("verify-ca".into()),
+            sslrootcert: Some(dir.join("root.crt").display().to_string()),
+            ..Settings::default()
+        };
+        let h = home.path().display().to_string();
+        let env = Env::from_pairs(&[("HOME", h.as_str()), ("PGSSLCRL", "/etc/crl.pem")]);
+        let Err(TestError::Settings(e)) = test(settings.clone(), env).await else {
+            panic!("PGSSLCRL under verify-ca was not refused")
+        };
+        assert!(e.to_string().contains("PGSSLCRL is set"), "{e}");
+        std::fs::write(dir.join("root.crl"), "not read").unwrap();
+        let env = Env::from_pairs(&[("HOME", h.as_str())]);
+        let Err(TestError::Settings(e)) = test(settings, env).await else {
+            panic!("a default root.crl under verify-ca was not refused")
+        };
+        assert!(e.to_string().contains("root.crl exists"), "{e}");
+    }
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)

@@ -644,6 +644,14 @@ fn existing(p: PathBuf) -> Option<PathBuf> {
     p.is_file().then_some(p)
 }
 
+/// libpq's default revocation list, `root.crl` in the directory of
+/// `root.crt`, when it exists.
+pub(crate) fn default_crl(spec: &Spec) -> Option<PathBuf> {
+    spec.pg_files
+        .as_ref()
+        .and_then(|f| existing(f.dir.join("root.crl")))
+}
+
 pub(crate) fn effective_mode(spec: &Spec) -> SslMode {
     match spec.sslmode() {
         SslMode::Require if root_path(spec).is_some() => SslMode::VerifyCa,

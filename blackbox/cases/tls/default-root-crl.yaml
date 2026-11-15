@@ -1,0 +1,23 @@
+description: libpq checks ~/.postgresql/root.crl by default under verify-ca and verify-full. pgmi cannot check revocation lists, so the Rust binary refuses such a file when the connection verifies (verify-ca, verify-full, require with a root certificate) with exit 10, naming the file, instead of skipping it quietly; libpq reads it only when verifying, so prefer connects. Go ignores the file (PGMI-1053)
+servers: [tls]
+home:
+  .postgresql/root.crt: "{ca_pem}"
+  .postgresql/root.crl: "not read"
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=verify-ca", -d, "{db}"]
+    expect:
+      exit: 0
+      rust:
+        exit: 10
+        stderr: ['^pgmi: error: .*/\.postgresql/root\.crl exists, and libpq checks it under sslmode=verify-ca, but pgmi cannot check certificate revocation lists, so it cannot refuse a revoked server certificate; move the file away to connect without revocation checks$']
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=require", -d, "{db}"]
+    expect:
+      exit: 0
+      rust:
+        exit: 10
+        stderr: ['root\.crl exists, and libpq checks it under sslmode=require with a root certificate \(which verifies like verify-ca\)']
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=prefer", -d, "{db}"]
+    expect: {exit: 0, stderr_not: ["root.crl", "WARNING"]}

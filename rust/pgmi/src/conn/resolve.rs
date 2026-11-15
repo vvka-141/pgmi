@@ -278,6 +278,11 @@ pub(crate) enum ResolveError {
         /// `require` with a root certificate, which verifies like `verify-ca`.
         with_root: bool,
     },
+    DefaultRevocation {
+        path: std::path::PathBuf,
+        mode: SslMode,
+        with_root: bool,
+    },
     InvalidSslmodeFlag(String),
     ConnectionWith(Vec<&'static str>, Option<SslMode>),
     FlagWithEnvString {
@@ -322,21 +327,25 @@ impl fmt::Display for ResolveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ResolveError::Env(e) => f.write_str(&e.text()),
+            ResolveError::DefaultRevocation {
+                path,
+                mode,
+                with_root,
+            } => write!(
+                f,
+                "{} exists, and libpq checks it under {}, but pgmi cannot check certificate revocation lists, so it cannot refuse a revoked server certificate; move the file away to connect without revocation checks",
+                path.display(),
+                verifying(*mode, *with_root)
+            ),
             ResolveError::Revocation {
                 var,
                 mode,
                 with_root,
-            } => {
-                let relies = if *with_root {
-                    format!("sslmode={mode} with a root certificate (which verifies like verify-ca)")
-                } else {
-                    format!("sslmode={mode}")
-                };
-                write!(
-                    f,
-                    "{var} is set, but pgmi cannot check certificate revocation lists, so {relies} cannot refuse a revoked server certificate; unset {var} to connect without revocation checks"
-                )
-            }
+            } => write!(
+                f,
+                "{var} is set, but pgmi cannot check certificate revocation lists, so {} cannot refuse a revoked server certificate; unset {var} to connect without revocation checks",
+                verifying(*mode, *with_root)
+            ),
             ResolveError::ServiceEnv => f.write_str(
                 "PGSERVICE is set: service files (service=, PGSERVICE) are not supported: give host, port and dbname in the connection string, flags or PGHOST/PGPORT/PGDATABASE",
             ),
@@ -429,6 +438,14 @@ impl std::error::Error for ResolveError {
 impl From<Error> for ResolveError {
     fn from(e: Error) -> Self {
         ResolveError::Env(e)
+    }
+}
+
+fn verifying(mode: SslMode, with_root: bool) -> String {
+    if with_root {
+        format!("sslmode={mode} with a root certificate (which verifies like verify-ca)")
+    } else {
+        format!("sslmode={mode}")
     }
 }
 
@@ -577,6 +594,22 @@ const UNSUPPORTED_ENV: [(&str, &str); 3] = [
 /// modes promise a check pgmi cannot make.
 /// `written` is the sslmode as given, `effective` the one TLS applies:
 /// `require` with a root certificate verifies like `verify-ca`.
+/// [`unsupported_env`] for `spec`, after refusing the default revocation
+/// list (`root.crl` beside `root.crt`) that libpq reads when it verifies.
+pub(crate) fn unsupported(env: &Env, spec: &Spec) -> Result<Vec<String>> {
+    let (written, effective) = (spec.sslmode(), crate::conn::tls::effective_mode(spec));
+    if matches!(effective, SslMode::VerifyCa | SslMode::VerifyFull)
+        && let Some(path) = crate::conn::tls::default_crl(spec)
+    {
+        return Err(ResolveError::DefaultRevocation {
+            path,
+            mode: written,
+            with_root: written != effective,
+        });
+    }
+    unsupported_env(env, written, effective)
+}
+
 pub(crate) fn unsupported_env(
     env: &Env,
     written: SslMode,
