@@ -54,7 +54,12 @@ cc and ld removed.
 - **The CI gate** (in the `rust` job of PGMI-831):
   1. `cargo deny check bans` denies `cc`, `cmake`, `bindgen`, `pkg-config`,
      `vcpkg`, `openssl-sys`, `openssl`, `native-tls`, `aws-lc-sys`,
-     `aws-lc-rs`, `ring` and `libz-sys`;
+     `aws-lc-rs`, `ring` and `libz-sys`. It also allows a build script
+     only for the crates listed in `deny.toml` (`[bans.build]
+     allow-build-scripts`, workspace and path crates included): a build
+     script can call a compiler by name whatever `CC` says, so a new one
+     fails the gate until someone has read it and added its crate
+     (PGMI-1039);
   2. `rust/check-no-c.sh`, for every target in `rust/release/targets.txt`
      with all features: `cargo tree` of the normal and build graph fails on
      a banned crate, then `cargo check` runs with `CC`, `CXX`, `AR`, their
