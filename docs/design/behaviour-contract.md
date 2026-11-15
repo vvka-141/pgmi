@@ -1429,11 +1429,14 @@ or refused before deploy.sql runs (a connection lost while a unit of
 deploy.sql runs leaves that unit's outcome unknown and is never retried, even
 with `retry_after_commit`: exit 13, `not retried: unit U of T got no answer
 from the server, so whether it committed is unknown`, owner 2026-11-13,
-PGMI-970; likewise a failed unit that is one CALL, or one DO block that says
-COMMIT, run outside a transaction block, since it can commit inside itself:
+PGMI-970; likewise a failed unit that is one CALL, or one DO block whose text
+says COMMIT or CALL, run outside a transaction block, since it can commit
+inside itself and the server reports no such commit:
 `not retried: unit U of T is a DO block or CALL, which may have committed
 before it failed`, and the summary never says `nothing committed`, owner
-2026-11-14, PGMI-977; and a failed unit that ran PREPARE TRANSACTION, whose
+2026-11-14, PGMI-977, PGMI-1021; a failed unit in which the server reported
+a COMMIT before the failure: `not retried: unit U of T ran a COMMIT on the
+server before it failed`, PGMI-1021; and a failed unit that ran PREPARE TRANSACTION, whose
 work waits holding its locks: `not retried: unit U of T ran PREPARE
 TRANSACTION, which may have left a prepared transaction`, the summary
 pointing to `pg_prepared_xacts`, PGMI-991); 57P01 only when the server
@@ -1488,7 +1491,7 @@ and `timeUsedMs`, present once an attempt started. SIGINT or SIGTERM during
 an attempt or a wait is exit 130 at once. `retry: false` in `pgmi.yaml`
 turns it off; there is no flag.
 
-Cases: `retry/connection-lost-mid-run`, `retry/server-shutdown-mid-run`, `retry/connect-gave-up`, `retry/concurrency-errors`, `retry/read-only-on-a-standby`, `retry/sign-in-unavailable`, `retry/deadline-during-an-attempt`, `retry/wait-cut-at-the-deadline`, `retry/signal-during-a-wait`, `retry/failing-test-not-retried`, `retry/retry-false`, `retry/no-retry-after-commit`, `retry/commit-inside-a-do-block`, `retry/commit-inside-a-call`, `retry/orphaned-session-holds-lock`, `retry/lost-lock-reply`, `retry/no-time-box-five-attempts`, `exit-codes/11-connection-failed`. The table of transient failures, the backoff and the messages: the Rust unit tests of `deploy::retry`, `retry/lost-reply-never-retried`.
+Cases: `retry/connection-lost-mid-run`, `retry/server-shutdown-mid-run`, `retry/connect-gave-up`, `retry/concurrency-errors`, `retry/read-only-on-a-standby`, `retry/sign-in-unavailable`, `retry/deadline-during-an-attempt`, `retry/wait-cut-at-the-deadline`, `retry/signal-during-a-wait`, `retry/failing-test-not-retried`, `retry/retry-false`, `retry/no-retry-after-commit`, `retry/commit-inside-a-do-block`, `retry/commit-inside-a-call`, `retry/do-block-calls-committing-procedure`, `retry/commit-the-splitter-misses`, `retry/orphaned-session-holds-lock`, `retry/lost-lock-reply`, `retry/no-time-box-five-attempts`, `exit-codes/11-connection-failed`. The table of transient failures, the backoff and the messages: the Rust unit tests of `deploy::retry`, `retry/lost-reply-never-retried`.
 
 ## Behaviour changes in 0.20
 

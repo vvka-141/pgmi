@@ -148,12 +148,20 @@ not even with `retry_after_commit`:
 pgmi: attempt 1 failed (connection lost); not retried: unit 1 of 3 got no answer from the server, so whether it committed is unknown
 ```
 
-The same holds when the failed unit is one `CALL`, or one `DO` block that
-says `COMMIT`, run outside a transaction block: it can commit inside itself
-before it fails, so pgmi never runs it again:
+The same holds when the failed unit is one `CALL`, or one `DO` block whose
+text says `COMMIT` or `CALL`, run outside a transaction block: it can commit
+inside itself before it fails, and the server reports no such commit, so
+pgmi never runs it again:
 
 ```
 pgmi: attempt 1 failed (55P03 lock not available); not retried: unit 1 of 1 is a DO block or CALL, which may have committed before it failed
+```
+
+And when the server itself reported a `COMMIT` inside the unit before the
+unit failed, whatever pgmi made of the SQL text:
+
+```
+pgmi: attempt 1 failed (55P03 lock not available); not retried: unit 1 of 1 ran a COMMIT on the server before it failed
 ```
 
 Check the database, then deploy again. A connection lost before deploy.sql

@@ -1,0 +1,25 @@
+description: PGMI-1021. A top-level COMMIT that pgmi's head/tail splitter does not see still commits on the server; the server's own COMMIT answer tells pgmi so, and a later error that is otherwise retried does not run the deploy again (exit 13, the INSERT ran once). The SQL relies on a splitter gap (a column named begin followed by the alias atomic); if the splitter learns that shape, replace it with another COMMIT the splitter leaves inside one unit
+project:
+  files:
+    deploy.sql: |
+      BEGIN;
+      INSERT INTO ledger DEFAULT VALUES;
+      SELECT begin atomic FROM (SELECT 1 AS begin) s;
+      COMMIT;
+      SELECT 1;
+      DO $t$ BEGIN IF (SELECT count(*) FROM ledger) < 3 THEN RAISE EXCEPTION 'lock busy' USING ERRCODE = '55P03'; END IF; END $t$;
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - sql: CREATE TABLE ledger (id int GENERATED ALWAYS AS IDENTITY)
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --json]
+    timeout: 30
+    expect:
+      exit: 13
+      sql:
+        - query: SELECT count(*) FROM ledger
+          rows: [[1]]
+      rust:
+        json: {outcomeUnknown: true}
+        stderr: ["not retried: unit 1 of 1 ran a COMMIT on the server before it failed$"]
+        stderr_not: ["retrying in", "nothing committed"]

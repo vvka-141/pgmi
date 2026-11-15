@@ -52,8 +52,11 @@ pub(crate) fn head_commits(head: &str) -> bool {
         .is_some_and(|w| (eq(w[0], "COMMIT") || eq(w[0], "END")) && is_terminator(&w))
 }
 
-/// True when the unit is one CALL, or one DO block that says COMMIT: the
-/// only statements that can commit inside themselves.
+/// True when the unit is one CALL, or one DO block that can end a
+/// transaction: the only statements that can commit inside themselves, and
+/// the server reports no such commit. A DO block can only through a
+/// transaction command or a CALL written in its own text; PostgreSQL refuses
+/// one reached through EXECUTE or a function (2D000, 0A000).
 pub(crate) fn commits_inside(unit: &str) -> bool {
     let bytes = unit.as_bytes();
     let mut firsts = statements(unit)
@@ -63,9 +66,21 @@ pub(crate) fn commits_inside(unit: &str) -> bool {
         .map(|w| w[0]);
     match (firsts.next(), firsts.next()) {
         (Some(w), None) if eq(w, "CALL") => true,
-        (Some(w), None) if eq(w, "DO") => says_commit(bytes),
+        (Some(w), None) if eq(w, "DO") => can_end_a_transaction(bytes),
         _ => false,
     }
+}
+
+/// `commit` anywhere (PL/Python's `plpy.commit`, PL/Perl's `spi_commit` and
+/// PL/Tcl's `commit` too), or the word CALL.
+fn can_end_a_transaction(text: &[u8]) -> bool {
+    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$';
+    text.windows(6).any(|w| w.eq_ignore_ascii_case(b"COMMIT"))
+        || text.windows(4).enumerate().any(|(i, w)| {
+            w.eq_ignore_ascii_case(b"CALL")
+                && (i == 0 || !word(text[i - 1]))
+                && text.get(i + 4).is_none_or(|b| !word(*b))
+        })
 }
 
 /// True when the unit runs PREPARE TRANSACTION, which leaves its work in a
@@ -97,15 +112,6 @@ pub(crate) fn builds_concurrently(unit: &str) -> bool {
             Some(first) if eq(first, "REINDEX") => w.iter().any(|x| eq(x, "CONCURRENTLY")),
             _ => false,
         })
-}
-
-fn says_commit(text: &[u8]) -> bool {
-    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'$';
-    text.windows(6).enumerate().any(|(i, w)| {
-        w.eq_ignore_ascii_case(b"COMMIT")
-            && (i == 0 || !word(text[i - 1]))
-            && text.get(i + 6).is_none_or(|b| !word(*b))
-    })
 }
 
 pub(crate) fn statements(src: &str) -> Vec<(usize, usize)> {
@@ -635,7 +641,11 @@ mod tests {
                 true,
             ),
             ("DO $$ BEGIN RAISE EXCEPTION 'busy'; END $$;", false),
-            ("DO $$ BEGIN PERFORM committed(); END $$;", false),
+            ("DO $$ BEGIN PERFORM committed(); END $$;", true),
+            ("DO $$ BEGIN PERFORM recalled(); END $$;", false),
+            ("DO $$ BEGIN CALL public.batch(); END $$;", true),
+            ("do $$ begin\ncall batch();\nend $$", true),
+            ("DO LANGUAGE plperl $$ spi_commit(); $$;", true),
             ("CALL p();", true),
             ("call s.p(1) ;\n-- trailing\n", true),
             ("SELECT 1;", false),

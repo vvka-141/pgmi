@@ -355,6 +355,8 @@ pub(crate) const INVALID_INDEX: &str = "an INVALID index may be left behind; fin
 pub(crate) enum Unknown {
     /// The unit was sent and the server never answered.
     NoAnswer,
+    /// The server reported a COMMIT inside the unit before the unit failed.
+    CommittedOnServer,
     /// The unit is one DO block or CALL run outside a transaction block,
     /// which can COMMIT inside.
     CommitsInside,
@@ -368,6 +370,10 @@ impl Failure {
         self.unknown.map(|u| match u {
             Unknown::NoAnswer => format!(
                 "unit {} of {units} got no answer from the server, so whether it committed is unknown",
+                self.unit
+            ),
+            Unknown::CommittedOnServer => format!(
+                "unit {} of {units} ran a COMMIT on the server before it failed",
                 self.unit
             ),
             Unknown::CommitsInside => format!(

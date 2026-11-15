@@ -7,7 +7,7 @@ use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll, ready};
 
@@ -198,6 +198,7 @@ impl From<u8> for TxStatus {
 
 pub struct Shared {
     status: AtomicU8,
+    commits: AtomicU64,
     policy: Option<Policy>,
     asked_password: AtomicBool,
     login: OnceLock<Login>,
@@ -212,6 +213,7 @@ impl Shared {
     pub fn with_policy(policy: Option<Policy>) -> Arc<Self> {
         Arc::new(Shared {
             status: AtomicU8::new(b'I'),
+            commits: AtomicU64::new(0),
             policy,
             asked_password: AtomicBool::new(false),
             login: OnceLock::new(),
@@ -232,6 +234,14 @@ impl Shared {
     /// The status of the last `ReadyForQuery` read so far; `Idle` before any.
     pub fn status(&self) -> TxStatus {
         self.status.load(Ordering::Acquire).into()
+    }
+
+    /// How many commands the server has reported as committed so far: every
+    /// `CommandComplete` whose tag starts with `COMMIT` (`COMMIT PREPARED`
+    /// too). A COMMIT of a failed transaction reports `ROLLBACK`, and one
+    /// inside a DO block or procedure reports nothing.
+    pub fn commits(&self) -> u64 {
+        self.commits.load(Ordering::Acquire)
     }
 }
 
@@ -383,6 +393,9 @@ impl Parser {
             match self.tag {
                 b'Z' if before == 0 && self.body_len >= 1 => {
                     shared.status.store(self.body[0], Ordering::Release);
+                }
+                b'C' if before < 4 && self.body_len == 4 && &self.body == b"COMM" => {
+                    shared.commits.fetch_add(1, Ordering::AcqRel);
                 }
                 b'R' if before < 4 && self.body_len == 4 => {
                     let code = u32::from_be_bytes(self.body);
@@ -1123,6 +1136,32 @@ mod tests {
                 p.feed(part, &shared).unwrap();
             }
             assert_eq!(shared.status(), TxStatus::Failed, "chunk size {chunk}");
+        }
+    }
+
+    #[test]
+    fn commit_tags_are_counted_and_rollback_is_not() {
+        let mut bytes = Vec::new();
+        for tag in [
+            "COMMIT",
+            "ROLLBACK",
+            "COMMIT PREPARED",
+            "DO",
+            "SELECT 1",
+            "COMMIT",
+        ] {
+            let mut body = tag.as_bytes().to_vec();
+            body.push(0);
+            bytes.extend(frame(b'C', &body));
+        }
+        bytes.extend(frame(b'D', b"COMMIT"));
+        for chunk in 1..=bytes.len() {
+            let shared = Shared::new(None).unwrap();
+            let mut p = Parser::default();
+            for part in bytes.chunks(chunk) {
+                p.feed(part, &shared).unwrap();
+            }
+            assert_eq!(shared.commits(), 3, "chunk size {chunk}");
         }
     }
 

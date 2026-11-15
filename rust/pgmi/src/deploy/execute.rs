@@ -203,6 +203,7 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
             return Err(e);
         }
         let idle = session.tap.status() == TxStatus::Idle;
+        let commits = session.tap.commits();
         let outcome = guard
             .running(session, async {
                 session
@@ -223,7 +224,7 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
             };
             execution.failure = Some(Failure {
                 unit: i + 1,
-                unknown: unknown_outcome(&e, idle, &unit.text),
+                unknown: unknown_outcome(&e, idle, &unit.text, session.tap.commits() > commits),
                 concurrent: script::builds_concurrently(&unit.text),
                 blame: e
                     .sql_diagnostics()
@@ -250,9 +251,11 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
     Ok(())
 }
 
-fn unknown_outcome(e: &Error, idle: bool, unit: &str) -> Option<Unknown> {
+fn unknown_outcome(e: &Error, idle: bool, unit: &str, committed: bool) -> Option<Unknown> {
     if e.sql_diagnostics().is_none() {
         Some(Unknown::NoAnswer)
+    } else if committed {
+        Some(Unknown::CommittedOnServer)
     } else if idle && script::commits_inside(unit) {
         Some(Unknown::CommitsInside)
     } else if script::prepares(unit) {
@@ -304,24 +307,32 @@ mod tests {
         };
         let lost = Error::sql("connection reset");
         assert_eq!(
-            unknown_outcome(&lost, true, "SELECT 1"),
+            unknown_outcome(&lost, true, "SELECT 1", false),
             Some(Unknown::NoAnswer)
         );
         assert_eq!(
-            unknown_outcome(&lost, false, "SELECT 1"),
+            unknown_outcome(&lost, false, "SELECT 1", false),
             Some(Unknown::NoAnswer)
         );
         assert_eq!(
-            unknown_outcome(&answered(), true, "CALL p();"),
+            unknown_outcome(&answered(), true, "CALL p();", false),
             Some(Unknown::CommitsInside)
         );
-        assert_eq!(unknown_outcome(&answered(), false, "CALL p();"), None);
-        assert_eq!(unknown_outcome(&answered(), true, "SELECT 1;"), None);
+        assert_eq!(
+            unknown_outcome(&answered(), false, "CALL p();", false),
+            None
+        );
+        assert_eq!(unknown_outcome(&answered(), true, "SELECT 1;", false), None);
+        assert_eq!(
+            unknown_outcome(&answered(), false, "SELECT 1; COMMIT; SELECT 1/0;", true),
+            Some(Unknown::CommittedOnServer)
+        );
         assert_eq!(
             unknown_outcome(
                 &answered(),
                 false,
-                "BEGIN; PREPARE TRANSACTION 'x'; SELECT 1;"
+                "BEGIN; PREPARE TRANSACTION 'x'; SELECT 1;",
+                false
             ),
             Some(Unknown::Prepared)
         );

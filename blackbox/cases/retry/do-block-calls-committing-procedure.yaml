@@ -1,0 +1,32 @@
+description: owner decision 2026-11-14 (PGMI-977, completed by PGMI-1021). deploy.sql is one DO block that calls a procedure which commits, then fails with an error that is otherwise retried - the block's text never says COMMIT, yet the commit may have happened, so the deploy is never retried and never says nothing committed; the procedure ran once (exit 13)
+project:
+  files:
+    deploy.sql: |
+      DO $$
+      BEGIN
+          CALL public.batch();
+          IF (SELECT count(*) FROM public.ledger) < 3 THEN
+              RAISE EXCEPTION 'lock busy' USING ERRCODE = '55P03';
+          END IF;
+      END $$;
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - sql: |
+      CREATE TABLE public.ledger (id int GENERATED ALWAYS AS IDENTITY);
+      CREATE PROCEDURE public.batch() LANGUAGE plpgsql AS $p$
+      BEGIN
+          INSERT INTO public.ledger DEFAULT VALUES;
+          COMMIT;
+      END $p$;
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --json]
+    timeout: 30
+    expect:
+      exit: 13
+      sql:
+        - query: SELECT count(*) FROM public.ledger
+          rows: [[1]]
+      rust:
+        json: {outcomeUnknown: true}
+        stderr: ["not retried: unit 1 of 1 is a DO block or CALL, which may have committed before it failed$"]
+        stderr_not: ["retrying in", "nothing committed"]

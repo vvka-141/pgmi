@@ -138,8 +138,9 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   `retry_after_commit: true` in `pgmi.yaml` allows a rerun. A connection
   lost while a statement of deploy.sql runs is never retried: whether it
   committed is unknown, so pgmi says so and exits 13. Nor is a failed
-  deploy.sql that is one `CALL`, or one `DO` block that says `COMMIT`: it
-  may have committed inside itself.
+  deploy.sql that is one `CALL`, or one `DO` block that says `COMMIT` or
+  `CALL`: it may have committed inside itself. Nor is one in which the
+  server reported a `COMMIT` before the failure.
   `--json` lists the `attempts`; `retry: false` in `pgmi.yaml` turns it off.
   Pipelines need no retry step of their own. See
   [Time box and retries](switch-day/timeout-and-retry.md).
