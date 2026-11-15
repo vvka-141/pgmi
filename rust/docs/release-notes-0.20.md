@@ -121,6 +121,11 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   `HTTPS_PROXY` and the rest listed in the behaviour
   contract) are refused when a checked-out project sets them; the
   `.env applied:` line names them. Set them in the environment pgmi runs in.
+  That includes the home variables those files default from (`HOME`,
+  `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, `LOCALAPPDATA`,
+  `XDG_CONFIG_HOME`): where the environment has no `HOME`, as on Windows, a
+  cloned project could otherwise move `~/.aws/config` and its
+  `credential_process` into the repository.
 - **`pg_temp.pgmi_run_file(path)` in every deploy session.** deploy.sql can
   run one project file by its path, with errors named by file and line as
   before; both templates use it, and a helper of your own keeps working. See

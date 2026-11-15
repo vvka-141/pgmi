@@ -88,8 +88,10 @@ class Workspace:
             pattern = pattern.replace(key, re.escape(value))
         return pattern
 
-    def env(self, extra: dict[str, str]) -> dict[str, str]:
+    def env(self, extra: dict[str, str], unset: tuple[str, ...] = ()) -> dict[str, str]:
         base = {"PATH": "/usr/bin:/bin", "HOME": str(self.home), "LANG": "C.UTF-8"}
+        for name in unset:
+            base.pop(name, None)
         return base | {k: self.substitute(v) for k, v in extra.items()}
 
 
@@ -230,7 +232,7 @@ ANSI = re.compile(r"\x1b(\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(\x07|\x1b\\)|[PX^_][
 def _start_tty(ws: Workspace, step: Step, argv: list[str]) -> Running:
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
-    env = ws.env(step.env) | {"TERM": "xterm-256color"}
+    env = ws.env(step.env, step.unset_env) | {"TERM": "xterm-256color"}
     proc = subprocess.Popen(
         argv, cwd=ws.substitute(step.cwd), env=env, stdin=slave, stdout=slave, stderr=slave, start_new_session=True
     )
@@ -288,7 +290,7 @@ def _start(ws: Workspace, step: Step) -> Running:
     proc = subprocess.Popen(
         argv,
         cwd=ws.substitute(step.cwd),
-        env=ws.env(step.env),
+        env=ws.env(step.env, step.unset_env),
         stdin=subprocess.PIPE if step.stdin is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

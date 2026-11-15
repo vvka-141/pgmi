@@ -49,15 +49,25 @@ pub(crate) struct Dotenv {
 /// Keys a checked-out project may not set: they locate credentials,
 /// endpoints, proxies or trust roots, which only the operator decides.
 /// The behaviour contract lists the same keys.
-const REFUSED_EXACT: [&str; 21] = [
+const REFUSED_EXACT: [&str; 31] = [
+    "HOME",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "XDG_CONFIG_HOME",
     "AWS_CONFIG_FILE",
     "AWS_SHARED_CREDENTIALS_FILE",
     "AWS_WEB_IDENTITY_TOKEN_FILE",
     "AWS_PROFILE",
+    "AWS_LOGIN_CACHE_DIRECTORY",
     "AZURE_AUTHORITY_HOST",
+    "AZURE_CLIENT_CERTIFICATE_PATH",
     "AZURE_FEDERATED_TOKEN_FILE",
     "AZURE_CONFIG_DIR",
     "GOOGLE_APPLICATION_CREDENTIALS",
+    "GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES",
     "GCE_METADATA_HOST",
     "GCE_METADATA_IP",
     "DATABRICKS_CONFIG_FILE",
@@ -191,6 +201,38 @@ mod tests {
                 "https_proxy",
             ]
         );
+    }
+
+    #[test]
+    fn a_project_env_cannot_move_the_home_directory_the_credential_files_default_from() {
+        const KEYS: [&str; 10] = [
+            "HOME",
+            "USERPROFILE",
+            "HOMEDRIVE",
+            "HOMEPATH",
+            "APPDATA",
+            "LOCALAPPDATA",
+            "XDG_CONFIG_HOME",
+            "GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES",
+            "AWS_LOGIN_CACHE_DIRECTORY",
+            "AZURE_CLIENT_CERTIFICATE_PATH",
+        ];
+        for lower in [false, true] {
+            let keys = KEYS.map(|k| {
+                if lower {
+                    k.to_lowercase()
+                } else {
+                    k.to_string()
+                }
+            });
+            let mut text = keys.join("=./planted\n");
+            text.push_str("=./planted\nPGMI_PARAM_X=1\n");
+            let d = project_dotenv(&MemFs::default().file(".env", &text), &Env::default()).unwrap();
+            assert_eq!(d.applied, [("PGMI_PARAM_X".into(), "1".into())]);
+            let mut refused = keys.to_vec();
+            refused.sort();
+            assert_eq!(d.refused, refused);
+        }
     }
 
     #[cfg(unix)]

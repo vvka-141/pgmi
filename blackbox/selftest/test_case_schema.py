@@ -192,6 +192,11 @@ def _plan(*rules):
     return parse_case("cases/x.yaml", {**MINIMAL, "proxy": list(rules)}).proxy
 
 
+def test_a_step_can_drop_base_variables():
+    step = {"pgmi": ["deploy"], "unset_env": ["HOME"], "expect": {"exit": 0}}
+    assert parse_case("cases/x.yaml", {"description": "x", "steps": [step]}).steps[0].unset_env == ("HOME",)
+
+
 def test_a_proxy_plan_lists_faults():
     assert parse_case("cases/x.yaml", MINIMAL).proxy is None
     assert _plan() == ()

@@ -63,6 +63,7 @@ class Step:
     maintenance: bool
     expect: Expect
     read_rate: float | None = None
+    unset_env: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -401,6 +402,7 @@ def _step(r: _Reader, value: Any, field: str) -> Step:
             "sql",
             "database",
             "env",
+            "unset_env",
             "stdin",
             "delay",
             "background",
@@ -445,6 +447,7 @@ def _step(r: _Reader, value: Any, field: str) -> Step:
         maintenance=value.get("database") == "maintenance",
         expect=_expect(r, value.get("expect", {}), f"{field}.expect", pgmi=args is not None),
         read_rate=read_rate,
+        unset_env=r.strings(value.get("unset_env", []), f"{field}.unset_env"),
     )
 
 

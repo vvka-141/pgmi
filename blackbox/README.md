@@ -47,6 +47,7 @@ project:
 steps:
   - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
     env: {PGMI_PARAM_TOKEN: abc}   # optional
+    unset_env: [HOME]              # optional: base variables (PATH, HOME, LANG) the step runs without
     stdin: "a=b\n"                 # optional; or a list of lines, {wait: seconds},
                                    # {until: regex, timeout: 30} (holds the next line until stdout matches; not with tty),
                                    # {text: "...", times: n} and {hex: "ff0a", times: n} (no newline added)
