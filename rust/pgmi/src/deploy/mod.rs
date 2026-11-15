@@ -838,7 +838,9 @@ impl Steps<'_> {
         if let Some((provider, options)) = &cloud {
             cloud::check(*provider, options, &mut spec, env)?;
         }
-        for line in resolve::unsupported_env(env, spec.sslmode())? {
+        for line in
+            resolve::unsupported_env(env, spec.sslmode(), crate::conn::tls::effective_mode(&spec))?
+        {
             self.reporter.line(&line);
             log.lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)

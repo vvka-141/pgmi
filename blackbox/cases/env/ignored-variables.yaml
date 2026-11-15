@@ -1,4 +1,4 @@
-description: PGHOSTADDR is ignored, as in Go. PGSSLCRL, PGSSLCRLDIR and PGREQUIREPEER, which pgmi does not support, are ignored too and the deploy goes on; the Rust binary prints a WARNING naming each one that is set, also in the --json record's warnings, and refuses PGSSLCRL or PGSSLCRLDIR under sslmode verify-ca or verify-full with exit 10 (owner 2026-11-14, PGMI-996); Go says nothing
+description: PGHOSTADDR is ignored, as in Go. PGSSLCRL, PGSSLCRLDIR and PGREQUIREPEER, which pgmi does not support, are ignored too and the deploy goes on; the Rust binary prints a WARNING naming each one that is set, also in the --json record's warnings, and refuses PGSSLCRL or PGSSLCRLDIR under sslmode verify-ca or verify-full, and under require with a root certificate, which verifies like verify-ca, with exit 10 (owner 2026-11-14, PGMI-996, PGMI-1032); Go says nothing
 project:
   files:
     deploy.sql: SELECT 1;
@@ -37,3 +37,9 @@ steps:
         exit: 10
         stderr: ["^pgmi: error: PGSSLCRLDIR is set, but pgmi cannot check certificate revocation lists, so sslmode=verify-full cannot refuse a revoked server certificate; unset PGSSLCRLDIR to connect without revocation checks$"]
         json: {status: failed, exitCode: 10}
+  - pgmi: [deploy, "{project}", --connection, "{conn}?sslmode=require&sslrootcert={project}/deploy.sql", -d, "{db}"]
+    env: {PGSSLCRL: /no/such/file.crl}
+    expect:
+      exit: 10
+      rust:
+        stderr: ["^pgmi: error: PGSSLCRL is set, but pgmi cannot check certificate revocation lists, so sslmode=require with a root certificate \\(which verifies like verify-ca\\) cannot refuse a revoked server certificate; unset PGSSLCRL to connect without revocation checks$"]

@@ -40,8 +40,9 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   sign-in token are shown as `***` wherever pgmi prints them: notices,
   errors, `--json` and `pgmi serve` answers.
 - **Revocation lists are never dropped quietly.** pgmi does not check
-  `PGSSLCRL` or `PGSSLCRLDIR`. Under `sslmode=verify-ca` or `verify-full`
-  it refuses them (exit 10); under other modes it warns on stderr and in
+  `PGSSLCRL` or `PGSSLCRLDIR`. Under `sslmode=verify-ca` or `verify-full`,
+  and under `require` with a root certificate (which verifies like
+  `verify-ca`), it refuses them (exit 10); under other modes it warns on stderr and in
   the `--json` record's `warnings`.
 - **One unreachable host no longer uses the whole time box.** With several
   hosts and no `connect_timeout`, each host but the last gets at most its

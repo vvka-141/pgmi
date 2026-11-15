@@ -73,7 +73,7 @@ A test failure or any other SQL error is never retried. Once a unit of deploy.sq
 - **One unreachable host no longer uses the whole time box.** With several hosts and no `connect_timeout`, each host but the last gets at most its share of `--timeout` (and at most 30 s).
 - **A stopped `CREATE INDEX CONCURRENTLY` is named.** pgmi says an INVALID index may be left, and how to find and drop it.
 - **`sslmode=verify-ca` without a root file checks the host name,** because the system trust store then vouches for the server.
-- **Revocation lists are never dropped quietly.** pgmi does not check `PGSSLCRL` or `PGSSLCRLDIR`. Under `verify-ca` or `verify-full` it refuses them (exit 10); otherwise it warns.
+- **Revocation lists are never dropped quietly.** pgmi does not check `PGSSLCRL` or `PGSSLCRLDIR`. Under `verify-ca` or `verify-full`, and under `require` with a root certificate (which verifies like `verify-ca`), it refuses them (exit 10); otherwise it warns.
 - **Templates on managed clouds.** `pgmi init` no longer writes `sslmode: prefer`, so a new project works with `--azure`, `--aws`, `--google` and `--databricks` as it is. The advanced template names a login's missing `CREATEDB` or `CREATEROLE`, and extensions Azure has not allow-listed, before it changes anything. On Databricks Lakebase it sets its provider parameters itself.
 - **The advanced template's deploy.sql reads top to bottom,** in five banners (PREFLIGHT, BOOTSTRAP, DEPLOY, VERIFY, TAIL) with the file loop in plain sight. Its setup lives in `deploy/` files that it runs by name.
 - **Google Cloud SQL** goes through pgmi's own dialer, and a transient connection failure is retried as on every other route.

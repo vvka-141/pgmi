@@ -578,7 +578,7 @@ fn existing(p: PathBuf) -> Option<PathBuf> {
     p.is_file().then_some(p)
 }
 
-fn effective_mode(spec: &Spec) -> SslMode {
+pub(crate) fn effective_mode(spec: &Spec) -> SslMode {
     match spec.sslmode() {
         SslMode::Require if root_path(spec).is_some() => SslMode::VerifyCa,
         mode => mode,

@@ -272,16 +272,33 @@ impl serde::Serialize for SslMode {
 pub(crate) enum ResolveError {
     Env(Error),
     ServiceEnv,
-    Revocation { var: &'static str, mode: SslMode },
+    Revocation {
+        var: &'static str,
+        mode: SslMode,
+        /// `require` with a root certificate, which verifies like `verify-ca`.
+        with_root: bool,
+    },
     InvalidSslmodeFlag(String),
     ConnectionWith(Vec<&'static str>, Option<SslMode>),
-    FlagWithEnvString { flag: &'static str, source: Source },
-    Parse { source: Source, error: ParseError },
+    FlagWithEnvString {
+        flag: &'static str,
+        source: Source,
+    },
+    Parse {
+        source: Source,
+        error: ParseError,
+    },
     NoDatabase,
     Port(String),
     FlagPort(i64),
-    PortCount { ports: usize, hosts: usize },
-    Value { key: &'static str, value: String },
+    PortCount {
+        ports: usize,
+        hosts: usize,
+    },
+    Value {
+        key: &'static str,
+        value: String,
+    },
     WeakForSystemRoots(SslMode),
     WeakForDirect(SslMode),
     CertModeRequire,
@@ -290,8 +307,14 @@ pub(crate) enum ResolveError {
     ProtocolUnsupported(String),
     ConnectTimeout(String),
     ConnectTimeoutRange(String),
-    HostaddrCount { addrs: usize, hosts: usize },
-    NotSupported { setting: String, why: &'static str },
+    HostaddrCount {
+        addrs: usize,
+        hosts: usize,
+    },
+    NotSupported {
+        setting: String,
+        why: &'static str,
+    },
     Unhandled(String),
 }
 
@@ -299,11 +322,21 @@ impl fmt::Display for ResolveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ResolveError::Env(e) => f.write_str(&e.text()),
-            ResolveError::Revocation { var, mode } => write!(
-                f,
-                "{var} is set, but pgmi cannot check certificate revocation lists, so sslmode={} cannot refuse a revoked server certificate; unset {var} to connect without revocation checks",
-                mode.as_str()
-            ),
+            ResolveError::Revocation {
+                var,
+                mode,
+                with_root,
+            } => {
+                let relies = if *with_root {
+                    format!("sslmode={mode} with a root certificate (which verifies like verify-ca)")
+                } else {
+                    format!("sslmode={mode}")
+                };
+                write!(
+                    f,
+                    "{var} is set, but pgmi cannot check certificate revocation lists, so {relies} cannot refuse a revoked server certificate; unset {var} to connect without revocation checks"
+                )
+            }
             ResolveError::ServiceEnv => f.write_str(
                 "PGSERVICE is set: service files (service=, PGSERVICE) are not supported: give host, port and dbname in the connection string, flags or PGHOST/PGPORT/PGDATABASE",
             ),
@@ -542,12 +575,24 @@ const UNSUPPORTED_ENV: [(&str, &str); 3] = [
 /// One WARNING line per libpq variable pgmi does not support that is set.
 /// A revocation list under `verify-ca` or `verify-full` is refused: those
 /// modes promise a check pgmi cannot make.
-pub(crate) fn unsupported_env(env: &Env, mode: SslMode) -> Result<Vec<String>> {
+/// `written` is the sslmode as given, `effective` the one TLS applies:
+/// `require` with a root certificate verifies like `verify-ca`.
+pub(crate) fn unsupported_env(
+    env: &Env,
+    written: SslMode,
+    effective: SslMode,
+) -> Result<Vec<String>> {
     let mut lines = Vec::new();
     for (var, what) in UNSUPPORTED_ENV {
         if env.non_empty(var)?.is_some() {
-            if var != "PGREQUIREPEER" && matches!(mode, SslMode::VerifyCa | SslMode::VerifyFull) {
-                return Err(ResolveError::Revocation { var, mode });
+            if var != "PGREQUIREPEER"
+                && matches!(effective, SslMode::VerifyCa | SslMode::VerifyFull)
+            {
+                return Err(ResolveError::Revocation {
+                    var,
+                    mode: written,
+                    with_root: written != effective,
+                });
             }
             lines.push(format!(
                 "WARNING: {var} is set, but pgmi does not support it: {what}; continuing without it"

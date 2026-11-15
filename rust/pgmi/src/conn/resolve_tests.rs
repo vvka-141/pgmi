@@ -122,7 +122,11 @@ fn pghostaddr_is_ignored_as_in_go() {
     let env = Env::from_pairs(&[("PGHOSTADDR", "10.0.0.5")]);
     let spec = resolve(&conn("host=h dbname=d"), &env, None).unwrap();
     assert_eq!((spec.first().name.as_str(), spec.first().addr), ("h", None));
-    assert!(unsupported_env(&env, SslMode::Prefer).unwrap().is_empty());
+    assert!(
+        unsupported_env(&env, SslMode::Prefer, SslMode::Prefer)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -130,20 +134,57 @@ fn a_revocation_list_under_a_verifying_sslmode_is_refused() {
     for var in ["PGSSLCRL", "PGSSLCRLDIR"] {
         let env = Env::from_pairs(&[(var, "/etc/crl")]);
         for mode in [SslMode::VerifyCa, SslMode::VerifyFull] {
-            let e = unsupported_env(&env, mode).unwrap_err();
+            let e = unsupported_env(&env, mode, mode).unwrap_err();
             assert!(
-                matches!(e, ResolveError::Revocation { var: v, mode: m } if v == var && m == mode),
+                matches!(e, ResolveError::Revocation { var: v, mode: m, with_root: false } if v == var && m == mode),
                 "{e}"
             );
             assert!(e.to_string().contains(&format!("unset {var}")), "{e}");
         }
-        assert_eq!(unsupported_env(&env, SslMode::Require).unwrap().len(), 1);
+        assert_eq!(
+            unsupported_env(&env, SslMode::Require, SslMode::Require)
+                .unwrap()
+                .len(),
+            1
+        );
     }
     let peer = Env::from_pairs(&[("PGREQUIREPEER", "postgres")]);
     assert_eq!(
-        unsupported_env(&peer, SslMode::VerifyFull).unwrap().len(),
+        unsupported_env(&peer, SslMode::VerifyFull, SslMode::VerifyFull)
+            .unwrap()
+            .len(),
         1
     );
+}
+
+#[test]
+fn a_revocation_list_under_require_with_a_root_is_refused() {
+    let root = std::env::temp_dir().join(format!("pgmi-crl-root-{}.crt", std::process::id()));
+    std::fs::write(&root, "not read here").unwrap();
+    let flags = Flags {
+        connection: Some(
+            format!(
+                "host=h dbname=d sslmode=require sslrootcert={}",
+                root.display()
+            )
+            .into(),
+        ),
+        ..Flags::default()
+    };
+    let spec = resolve(&flags, &Env::default(), None).unwrap();
+    let effective = crate::conn::tls::effective_mode(&spec);
+    assert_eq!(effective, SslMode::VerifyCa);
+    for var in ["PGSSLCRL", "PGSSLCRLDIR"] {
+        let env = Env::from_pairs(&[(var, "/etc/crl")]);
+        let e = unsupported_env(&env, spec.sslmode(), effective).unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            format!(
+                "{var} is set, but pgmi cannot check certificate revocation lists, so sslmode=require with a root certificate (which verifies like verify-ca) cannot refuse a revoked server certificate; unset {var} to connect without revocation checks"
+            )
+        );
+    }
+    let _ = std::fs::remove_file(root);
 }
 
 #[test]
@@ -155,7 +196,7 @@ fn unsupported_libpq_variables_are_ignored_with_a_warning_each() {
     ]);
     resolve(&conn("host=h dbname=d"), &env, None).unwrap();
     assert_eq!(
-        unsupported_env(&env, SslMode::Prefer).unwrap(),
+        unsupported_env(&env, SslMode::Prefer, SslMode::Prefer).unwrap(),
         [
             "WARNING: PGSSLCRL is set, but pgmi does not support it: certificate revocation lists are not checked; continuing without it",
             "WARNING: PGSSLCRLDIR is set, but pgmi does not support it: certificate revocation lists are not checked; continuing without it",
@@ -163,9 +204,13 @@ fn unsupported_libpq_variables_are_ignored_with_a_warning_each() {
         ]
     );
     assert!(
-        unsupported_env(&Env::from_pairs(&[("PGSSLCRL", "")]), SslMode::VerifyFull)
-            .unwrap()
-            .is_empty()
+        unsupported_env(
+            &Env::from_pairs(&[("PGSSLCRL", "")]),
+            SslMode::VerifyFull,
+            SslMode::VerifyFull
+        )
+        .unwrap()
+        .is_empty()
     );
 }
 
