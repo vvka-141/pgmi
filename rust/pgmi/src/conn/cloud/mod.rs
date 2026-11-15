@@ -323,7 +323,19 @@ pub(crate) async fn token(
     env: &Env,
     log: crate::conn::dial::LogSink,
 ) -> Result<Token> {
-    crate::conn::tls::require_cpu()?;
+    sign_in(provider, req, env, log, &crate::conn::tls::missing_cpu()).await
+}
+
+async fn sign_in(
+    provider: Provider,
+    req: &Options,
+    env: &Env,
+    log: crate::conn::dial::LogSink,
+    missing_cpu: &[&str],
+) -> Result<Token> {
+    if !missing_cpu.is_empty() {
+        return Err(crate::conn::tls::cpu_error(missing_cpu));
+    }
     match provider {
         Provider::Azure => renew::Renewing::start(azure::Signin::new(
             req.clone(),
@@ -347,6 +359,34 @@ pub(crate) async fn token(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_cpu_without_the_tls_features_is_refused_before_any_sign_in() {
+        for provider in [
+            Provider::Azure,
+            Provider::Aws,
+            Provider::Google,
+            Provider::Databricks,
+        ] {
+            let Err(e) = sign_in(
+                provider,
+                &Options::default(),
+                &Env::default(),
+                Arc::new(|_| {}),
+                &["avx2"],
+            )
+            .await
+            else {
+                panic!("{provider:?}: signed in on a CPU the TLS library cannot run on")
+            };
+            assert_eq!(e.exit_code(), 10, "{provider:?}: {}", e.text());
+            assert!(
+                e.text().starts_with("this CPU lacks avx2"),
+                "{provider:?}: {}",
+                e.text()
+            );
+        }
+    }
 
     async fn minted_on_dial(expires: jiff::Timestamp) -> usize {
         crate::conn::tls::install();

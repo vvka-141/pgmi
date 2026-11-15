@@ -186,14 +186,6 @@ pub(crate) fn missing_cpu() -> Vec<&'static str> {
     missing_cpu_features(cpu_has)
 }
 
-pub(crate) fn require_cpu() -> Result<()> {
-    let missing = missing_cpu();
-    if missing.is_empty() {
-        return Ok(());
-    }
-    Err(cpu_error(&missing))
-}
-
 pub(crate) fn cpu_error(missing: &[&str]) -> Error {
     Error::config(format!(
         "this CPU lacks {} needed for TLS and cloud sign-in; pgmi needs a CPU with {} (x86-64 from about 2014 on, or arm64 with the crypto extensions)",
@@ -1096,7 +1088,7 @@ mod tests {
 
     #[test]
     fn this_machine_runs_the_crypto_provider() {
-        assert!(require_cpu().is_ok());
+        assert_eq!(missing_cpu(), Vec::<&str>::new());
     }
 
     #[test]

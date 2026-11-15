@@ -865,6 +865,8 @@ pub(crate) struct Dialer {
     pub(crate) secret: SecretSink,
     /// The end of the run's time box, which several hosts share.
     pub(crate) deadline: Option<Instant>,
+    /// The CPU features the TLS library needs and this CPU lacks.
+    pub(crate) missing_cpu: fn() -> Vec<&'static str>,
 }
 
 impl Dialer {
@@ -878,7 +880,7 @@ impl Dialer {
         spec.require_auth
             .policy()
             .map_err(|e| Error::config(e.to_string()))?;
-        tls_runs_here(spec, &super::tls::missing_cpu())?;
+        tls_runs_here(spec, &(self.missing_cpu)())?;
         let tls = if needs_tls(spec) {
             let owned = spec.clone();
             let built = crate::blocking::spawn(move || tls::config(&owned))
@@ -1063,9 +1065,6 @@ impl Round<'_> {
     }
 }
 
-/// On a CPU the TLS library cannot run on, `allow` and `prefer` connect
-/// without TLS, as libpq built without SSL does; a mode that needs TLS is
-/// refused.
 /// Refuses a connection that would use TLS on a CPU the TLS library cannot
 /// run on. Only `sslmode=disable` connects without TLS there: pgmi never
 /// drops encryption on its own.
@@ -1309,6 +1308,7 @@ pub(crate) mod fake {
             log: Arc::new(|_| {}),
             secret: Arc::new(|_| {}),
             deadline: None,
+            missing_cpu: Vec::new,
         }
     }
 
@@ -1638,6 +1638,31 @@ mod tests {
             e.text(),
             "connect to \"app\": h:5432: password authentication failed (SQLSTATE 28P01)\ncheck $PGPASSWORD, ~/.pgpass, or the connection string"
         );
+    }
+
+    #[tokio::test]
+    async fn the_dialer_refuses_tls_on_a_cpu_without_the_tls_features_before_any_socket_opens() {
+        let (listener, port) = super::fake::listen().await;
+        let dialer = Dialer {
+            missing_cpu: || vec!["avx2"],
+            ..quiet()
+        };
+        for mode in ["prefer", "require"] {
+            let spec = spec_for(&format!(
+                "host=127.0.0.1 port={port} user=u dbname=d sslmode={mode} connect_timeout=2"
+            ));
+            let Err(e) = dialer.connect(&spec, "d").await else {
+                panic!("{mode}: connected on a CPU the TLS library cannot run on")
+            };
+            assert_eq!(e.exit_code(), 10, "{mode}: {}", e.text());
+            assert!(
+                e.text().starts_with("this CPU lacks avx2"),
+                "{mode}: {}",
+                e.text()
+            );
+        }
+        let accepted = tokio::time::timeout(Duration::from_millis(200), listener.accept()).await;
+        assert!(accepted.is_err(), "a socket was opened");
     }
 
     #[tokio::test]

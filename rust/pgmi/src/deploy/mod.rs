@@ -973,6 +973,7 @@ impl Steps<'_> {
             }),
             secret: Arc::new(move |secret: &Secret| found.insert(secret)),
             deadline: Some(self.guard.deadline),
+            missing_cpu: crate::conn::tls::missing_cpu,
         }
     }
 
