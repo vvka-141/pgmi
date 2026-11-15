@@ -5,13 +5,14 @@
 # the docs, so a doc edit that breaks the walkthrough fails here.
 #
 # Usage: scripts/verify-walkthrough.sh <path-to-pgmi-binary>
-# Needs docker. WALKTHROUGH_PORT overrides the documented host port (5434).
+# Needs docker. It runs its server on port 55962, pgmi's reserved walkthrough port
+# (CONTRIBUTING.md, "Ports"); WALKTHROUGH_PORT overrides it.
 set -euo pipefail
 
 [ $# -eq 1 ] || { echo "usage: $0 <path-to-pgmi-binary>" >&2; exit 2; }
 bin="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
 repo="$(cd "$(dirname "$0")/.." && pwd)"
-port="${WALKTHROUGH_PORT:-5434}"
+port="${WALKTHROUGH_PORT:-55962}"
 container=pgmi-demo
 
 if docker inspect "$container" >/dev/null 2>&1; then

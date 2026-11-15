@@ -16,7 +16,7 @@
                 "--verbose"
             ],
             "env": {
-                "PGMI_CONNECTION_STRING": "postgresql://postgres:postgres@localhost:5433/postgres"
+                "PGMI_CONNECTION_STRING": "postgresql://postgres:postgres@localhost:55961/postgres"
             }
         },
         {
@@ -32,7 +32,7 @@
                 "--verbose"
             ],
             "env": {
-                "PGMI_CONNECTION_STRING": "postgresql://postgres:postgres@localhost:5433/postgres"
+                "PGMI_CONNECTION_STRING": "postgresql://postgres:postgres@localhost:55961/postgres"
             }
         },
         {
@@ -50,7 +50,7 @@
                 "--verbose"
             ],
             "env": {
-                "PGMI_CONNECTION_STRING": "postgresql://postgres:postgres@localhost:5433/postgres"
+                "PGMI_CONNECTION_STRING": "postgresql://postgres:postgres@localhost:55961/postgres"
             }
         },
         {
@@ -63,7 +63,7 @@
                 "deploy",
                 "./example-project",
                 "--host", "localhost",
-                "--port", "5433",
+                "--port", "55961",
                 "--username", "postgres",
                 "--database", "pgmi_granular_db",
                 "--overwrite",
@@ -87,7 +87,7 @@
             ],
             "env": {
                 "PGHOST": "localhost",
-                "PGPORT": "5433",
+                "PGPORT": "55961",
                 "PGUSER": "postgres",
                 "PGDATABASE": "postgres"
             }
@@ -119,7 +119,7 @@
             ],
             "env": {
                 "PGHOST": "localhost",
-                "PGPORT": "5433",
+                "PGPORT": "55961",
                 "PGUSER": "postgres"
             }
         },
@@ -134,7 +134,7 @@
                 "-test.timeout", "5m"
             ],
             "env": {
-                "PGMI_TEST_CONN": "postgresql://postgres:postgres@localhost:5433/postgres"
+                "PGMI_TEST_CONN": "postgresql://postgres:postgres@localhost:55961/postgres"
             }
         },
         {
@@ -149,7 +149,7 @@
                 "-test.timeout", "5m"
             ],
             "env": {
-                "PGMI_TEST_CONN": "postgresql://postgres:postgres@localhost:5433/postgres"
+                "PGMI_TEST_CONN": "postgresql://postgres:postgres@localhost:55961/postgres"
             }
         },
         {
@@ -164,7 +164,7 @@
                 "-test.timeout", "5m"
             ],
             "env": {
-                "PGMI_TEST_CONN": "postgresql://postgres:postgres@localhost:5433/postgres"
+                "PGMI_TEST_CONN": "postgresql://postgres:postgres@localhost:55961/postgres"
             }
         },
         {
@@ -182,7 +182,7 @@
                 "--verbose"
             ],
             "env": {
-                "PGMI_CONNECTION_STRING": "postgresql://postgres:postgres@localhost:5433/postgres"
+                "PGMI_CONNECTION_STRING": "postgresql://postgres:postgres@localhost:55961/postgres"
             }
         }
     ]

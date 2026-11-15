@@ -44,8 +44,10 @@ pgmi is one Rust binary, `rust/pgmi`, with the files it embeds (templates,
 skills, the session SQL) in the `shared` crate. You need:
 
 - `rustup`; it installs the toolchain pinned in `rust-toolchain.toml`, with
-  rustfmt and clippy. No C compiler is needed: every dependency is pure Rust,
-  and `rust/check-no-c.sh` keeps it that way. The minimum supported Rust
+  rustfmt and clippy. No C code is compiled: every dependency is pure Rust,
+  and `rust/check-no-c.sh` keeps it that way. The build needs only the
+  platform linker (`cc` on Linux, the Xcode command-line tools on macOS, the
+  MSVC build tools on Windows). The minimum supported Rust
   version is `rust-version` in the root `Cargo.toml`.
 - `cargo-deny` 0.20.2 (`cargo install --locked cargo-deny@0.20.2`)
 - A PostgreSQL 18 server for the database tests, named by `PGMI_TEST_CONN`
@@ -62,11 +64,23 @@ The tests that deploy templates take more locks than PostgreSQL allows by
 default, so start the test server with `-c max_locks_per_transaction=256`:
 
 ```bash
-docker run -d --name pgmi-test -p 5432:5432 -e POSTGRES_PASSWORD=postgres \
+docker run -d --name pgmi-test -p 55961:5432 -e POSTGRES_PASSWORD=postgres \
   postgres:18 -c max_locks_per_transaction=256
-export PGMI_TEST_CONN=postgresql://postgres:postgres@127.0.0.1:5432/postgres
+export PGMI_TEST_CONN=postgresql://postgres:postgres@127.0.0.1:55961/postgres
 export PGMI_REQUIRE_DB=1     # fail, rather than skip, when the database is missing
 ```
+
+**Ports.** pgmi's development uses two fixed host ports, chosen so they do
+not clash with other PostgreSQL work on the same machine (5432 to 5434 are
+common defaults):
+
+| Port | Used by |
+|---|---|
+| 55961 | the development and test server above (`PGMI_TEST_CONN`, `.env.example`, the VS Code launch configurations) |
+| 55962 | the throwaway server `scripts/verify-walkthrough.sh` starts to run the README's "See it work" blocks (`WALKTHROUGH_PORT` overrides it) |
+
+Tests that start their own server (testcontainers, the black-box fakes) take
+a free port from the system and need neither.
 
 ### The black-box suite
 
