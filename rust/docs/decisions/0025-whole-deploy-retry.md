@@ -26,7 +26,10 @@ files are skipped by their ledger, everything else is rerunnable by design.
 COMMIT is atomic; when the reply to a COMMIT is lost, the next attempt finds
 the work done, as any redeploy would. The docs say: "a retry runs the deploy
 again, exactly like a redeploy". PostgreSQL does not undo sequence advances
-or effects outside the database (the existing note stays).
+or effects outside the database (the existing note stays). A commit made
+through another connection (`dblink`, `postgres_fdw`) is outside the deploy's
+transaction and invisible to pgmi, so a retry runs it again; this is a known
+limit, documented, not detected (owner 2026-11-15, PGMI-1047).
 
 `--overwrite` drops and recreates once, before the first attempt; a retry
 runs against the recreated database and never drops it again or asks again.

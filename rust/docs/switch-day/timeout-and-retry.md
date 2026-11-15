@@ -168,6 +168,15 @@ Check the database, then deploy again. A connection lost before deploy.sql
 starts (while connecting, taking the lock or loading the session) is still
 retried.
 
+### Commits through another connection
+
+pgmi sees only its own session. A write that commits through a side
+connection, such as `dblink_exec`, a `postgres_fdw` table or a background
+worker, is outside the deploy's transaction: the failed attempt leaves it
+committed, and pgmi neither sees that commit nor counts it. A retry then runs
+it again. A deploy.sql that writes through such a channel must be safe to run
+twice, or turn retry off (below).
+
 ## Turning it off
 
 A project whose deploy must never run twice (a tail that is not rerunnable)

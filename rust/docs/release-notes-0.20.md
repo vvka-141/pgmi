@@ -159,7 +159,10 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   committed is unknown, so pgmi says so and exits 13. Nor is a failed
   deploy.sql that is one `CALL`, or one `DO` block that says `COMMIT` or
   `CALL`: it may have committed inside itself. Nor is one in which the
-  server reported a `COMMIT` before the failure.
+  server reported a `COMMIT` before the failure. A write committed through
+  another connection (`dblink`, `postgres_fdw`) is invisible to pgmi and runs
+  again on a retry, so such a deploy must be safe to rerun or set
+  `retry: false`.
   `--json` lists the `attempts`; `retry: false` in `pgmi.yaml` turns it off.
   Pipelines need no retry step of their own. See
   [Time box and retries](switch-day/timeout-and-retry.md).
