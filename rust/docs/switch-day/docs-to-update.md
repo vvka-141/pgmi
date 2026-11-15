@@ -27,7 +27,14 @@ Line numbers are from main on 2026-11-11; re-check them on the day.
 
 - Checking a download with `gh attestation verify`, and the SBOM: the
   install pages and install scripts, with the text staged in
-  `switch-day/verify-download.md` (PGMI-1004).
+  `switch-day/verify-download.md` (PGMI-1004). README.md's direct-download
+  block, `docs/QUICKSTART.md`, `docs/CICD.md`, `docs/LAKEBASE.md` and the hint
+  lines of `scripts/install.sh` and `scripts/install.ps1` take the stricter
+  command on switch day (`--signer-workflow ...release-rust.yml --source-ref
+  refs/heads/main`, PGMI-1041), not before: until then the scripts install Go
+  releases, which `release.yml` signed from a tag. If PGMI-835 moves the
+  publish to a tag push, `--source-ref` becomes `refs/tags/v<version>` in
+  every one of these places and in `verify-install.yml`.
 
 ## Go internals named in the docs (wording, not behaviour)
 

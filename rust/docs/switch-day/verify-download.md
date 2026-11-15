@@ -13,12 +13,17 @@ Text for the install pages (INSTALL, the README install section):
 > To check that a download was built by pgmi's release workflow from this
 > repository, run the GitHub CLI on the file:
 >
->     gh attestation verify pgmi_<version>_linux_amd64.tar.gz --repo vvka-141/pgmi
+>     gh attestation verify pgmi_<version>_linux_amd64.tar.gz \
+>       --repo vvka-141/pgmi \
+>       --signer-workflow vvka-141/pgmi/.github/workflows/release-rust.yml \
+>       --source-ref refs/heads/main
 >
-> It prints the workflow run and the commit. `checksums.txt` lists the
+> `--repo` alone would accept a file attested by any workflow on any branch
+> of the repository; the two other options name the release workflow and the
+> branch it runs on. It prints the workflow run and the commit. `checksums.txt` lists the
 > SHA-256 of every file; `sha256sum -c checksums.txt --ignore-missing` checks
 > the ones you downloaded.
 
 Text for the install scripts: after the checksum check, when `gh` is on the
-PATH, run `gh attestation verify "$archive" --repo vvka-141/pgmi` and stop
+PATH, run `gh attestation verify "$archive" --repo vvka-141/pgmi --signer-workflow vvka-141/pgmi/.github/workflows/release-rust.yml --source-ref refs/heads/main` and stop
 on failure; without `gh`, print one line saying how to check by hand.

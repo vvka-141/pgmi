@@ -43,7 +43,7 @@ A test failure or any other SQL error is never retried. Once a unit of deploy.sq
 
 ### Upgrading
 
-- **Install.** 0.20 ships as the GitHub release archives (and `.deb` files on the release page), through Homebrew, and through `install.sh` and `install.ps1`. `go install` no longer installs current pgmi. Check a download with `gh attestation verify <file> --repo vvka-141/pgmi`.
+- **Install.** 0.20 ships as the GitHub release archives (and `.deb` files on the release page), through Homebrew, and through `install.sh` and `install.ps1`. `go install` no longer installs current pgmi. Check a download with `gh attestation verify <file> --repo vvka-141/pgmi --signer-workflow vvka-141/pgmi/.github/workflows/release-rust.yml --source-ref refs/heads/main`.
 - **The Go library is gone.** pgmi 0.20 is a Rust program with no library crate. Go programs that embedded `pkg/pgmi` pin the `go-legacy` tag, or call `pgmi deploy --json` and read the record.
 - **Newly refused before connecting (exit 10).** Check your CI for these:
   - a client private key that group or others can read (`chmod 600` it);

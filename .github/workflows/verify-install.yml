@@ -96,7 +96,12 @@ jobs:
           VERSION: ${{ needs.expected.outputs.version }}
         run: |
           gh release download "v$VERSION" --repo "${{ github.repository }}" --pattern "pgmi_${VERSION}_linux_amd64.tar.gz"
-          gh attestation verify "pgmi_${VERSION}_linux_amd64.tar.gz" --repo "${{ github.repository }}"
+          case "$VERSION" in
+            0.[0-9].*|0.1[0-9].*) signer=release.yml ref="refs/tags/v$VERSION" ;;
+            *) signer=release-rust.yml ref=refs/heads/main ;;
+          esac
+          gh attestation verify "pgmi_${VERSION}_linux_amd64.tar.gz" --repo "${{ github.repository }}" \
+            --signer-workflow "${{ github.repository }}/.github/workflows/$signer" --source-ref "$ref"
 
   linux:
     name: ${{ matrix.channel }} (${{ matrix.os }})

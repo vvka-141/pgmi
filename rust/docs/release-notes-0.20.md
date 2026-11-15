@@ -28,7 +28,9 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
 
 - **Every download can be checked.** The release is made public only after
   GitHub has attested its files, and ships a CycloneDX SBOM. Check a file
-  with `gh attestation verify <file> --repo vvka-141/pgmi`. See
+  with `gh attestation verify <file> --repo vvka-141/pgmi --signer-workflow
+  vvka-141/pgmi/.github/workflows/release-rust.yml --source-ref
+  refs/heads/main`. See
   [verify-download](switch-day/verify-download.md).
 
 - **Templates on managed clouds.** `pgmi init` no longer writes `sslmode:
