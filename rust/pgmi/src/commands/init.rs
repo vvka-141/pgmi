@@ -91,12 +91,10 @@ pub(crate) fn run(
     };
     let reporter = Reporter::new(verbose, env);
     scaffold(&target, template, None, &|n| reporter.verbose(n))?;
-    crate::output::drain();
-    let _ = writeln!(
-        std::io::stderr(),
-        "Wrote {} ({template} template).",
+    super::stderr(&format!(
+        "Wrote {} ({template} template).\n",
         target.display()
-    );
+    ));
     let absolute = std::path::absolute(&target).unwrap_or_else(|_| target.clone());
     let _ = std::io::stdout()
         .lock()
@@ -104,23 +102,17 @@ pub(crate) fn run(
     let mut db = None;
     if let Some(s) = &connection {
         if let Err(e) = crate::commands::config::save(&target, s, false) {
-            let _ = writeln!(
-                std::io::stderr(),
-                "WARNING: could not save connection: {}",
+            super::stderr(&format!(
+                "WARNING: could not save connection: {}\n",
                 e.text()
-            );
+            ));
         } else {
-            let _ = writeln!(
-                std::io::stderr(),
-                "Wrote {}",
-                target.join("pgmi.yaml").display()
-            );
+            super::stderr(&format!("Wrote {}\n", target.join("pgmi.yaml").display()));
             crate::commands::config::offer_pgpass(s, env);
             db = s.database.as_deref();
         }
     }
-    let _ = std::io::stderr()
-        .write_all(next_steps(template, &target.display().to_string(), db).as_bytes());
+    super::stderr(&next_steps(template, &target.display().to_string(), db));
     Ok(())
 }
 

@@ -1,0 +1,23 @@
+description: metadata scaffold --write names each file it wrote on stderr; a file name holding ESC or a bidirectional control is shown escaped, so it cannot recolour the terminal or read backwards. Go prints the names raw (Rust, contract "On stderr the Rust binary shows ... escaped", PGMI-1056)
+project:
+  files:
+    sub/a.sql: |
+      /* <pgmi-meta id="2d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e01" idempotent="true"><sortKeys><key>./sub/a.sql</key></sortKeys></pgmi-meta> */
+      SELECT 1;
+    "sub/b_esc\e[31mred.sql": SELECT 2;
+    "sub/c_fi‮le.sql": SELECT 3;
+steps:
+  - pgmi: [metadata, scaffold, "{project}", --write, --sort-key, ./]
+    expect:
+      exit: 0
+      rust:
+        exit: 0
+        stderr: ['Written to .*b_esc\\x1b\[31mred\.sql$', 'Written to .*c_fi\\u\{202e\}le\.sql$']
+        stderr_not: ["\x1b", "‮"]
+  - pgmi: [init, "{workdir}/new\e[31mproj"]
+    expect:
+      exit: 0
+      rust:
+        exit: 0
+        stderr: ['^Wrote .*new\\x1b\[31mproj \(minimal template\)\.$']
+        stderr_not: ["\x1b"]

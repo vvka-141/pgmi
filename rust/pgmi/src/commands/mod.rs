@@ -20,6 +20,7 @@ pub(crate) fn stdout(text: &str) -> Result<()> {
 
 pub(crate) fn stderr(text: &str) {
     crate::output::drain();
+    let text = crate::output::printable(text);
     let _ = std::io::stderr().lock().write_all(text.as_bytes());
 }
 

@@ -696,7 +696,11 @@ cannot be made to read backwards or look like a second line (PGMI-1037, case
 window title or rewrite an earlier line. pgmi's own colours and progress
 line are unchanged, and the `--json` record keeps the original text. Go
 prints them raw, as psql does (PGMI-1002; cases `notices/escape-sequences`,
-`errors/escape-sequences`).
+`errors/escape-sequences`). The same holds for every other command's stderr
+lines (`metadata`, `config`, `init`: "Written to", "Wrote", warnings; case
+`commands/metadata-names-escaped-on-stderr`, PGMI-1056). stdout is data and
+keeps names as they are (`metadata plan` and `scaffold` tables, `--json`), as
+in Go.
 
 Cases: `errors/refused-before-deploy-no-summary`, `errors/refusal-wording`, `notices/streaming`, `notices/severity`, `notices/deploy-sql-message-level`, `commands/verbose`, `terminal/colors`, `notices/summary-line`, `notices/secrets-redacted`, `execution/pgmi-test-without-tests`, `execution/setup-psql-fixture`, `terminal/no-color-words`.
 
