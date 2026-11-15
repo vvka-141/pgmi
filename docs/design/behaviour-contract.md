@@ -1534,7 +1534,7 @@ release notes take their "Behaviour changes" section from this table.
 | `pgmi completion bash` script | Cobra's first version: also offers `--flag=` forms of flags that take a value | Cobra's second version: the same words without the `--flag=` forms | agent 2026-11-12 (PGMI-905), owner may revisit |
 | `--sslmode ''` | treated as unset | refused, exit 10 | agent 2026-11-12 (PGMI-906), owner may revisit |
 | `.env` with a leading UTF-8 BOM | whole file refused | applied | agent 2026-11-12 (PGMI-906), owner may revisit |
-| `metadata scaffold --write` on a file with a UTF-8 BOM | BOM kept before the inserted block | BOM removed | agent 2026-11-12 (PGMI-906), owner may revisit |
+| `--timeout` with a negative value (`--timeout -1s`) | exit 11, `the deploy exceeded --timeout -1s` | exit 2, a usage error: the value must not be negative | PGMI-1038: Rust is right |
 | `CALL pgmi_test('it''s')` (doubled quote in the pattern) | not expanded; the server answers 42883, exit 13 | expanded with pattern `it's`; no test matches, exit 13 | agent 2026-11-12 (PGMI-906), owner may revisit |
 | `--json` `ignoredPaths` path of a directory | `./lib` | `./lib/`, as the serve schema says | agent 2026-11-12 (PGMI-906), owner may revisit |
 | A parameter key in an error message | lowercased | as typed | agent 2026-11-12 (PGMI-906), owner may revisit |

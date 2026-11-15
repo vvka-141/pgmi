@@ -420,12 +420,8 @@ fn scaffold(a: &ScaffoldArgs, env: &Env) -> Result<()> {
         if a.write {
             let file = root.join(f.path.trim_start_matches("./"));
             let name = f.path.rsplit('/').next().unwrap_or(&f.path);
-            let text = format!(
-                "{}{}",
-                block(&id, a.idempotent, name, key.as_deref()),
-                f.content
-            );
-            write_atomic(&file, &text)?;
+            let block = block(&id, a.idempotent, name, key.as_deref());
+            write_atomic(&file, &with_block(&file, &block, &f.content))?;
             stderr(&format!("    Written to {}\n", file.display()));
         }
         stdout("\n")?;
@@ -438,9 +434,42 @@ fn scaffold(a: &ScaffoldArgs, env: &Env) -> Result<()> {
     Ok(())
 }
 
+/// The file's new text: the metadata block ahead of its content, behind the
+/// UTF-8 byte order mark when the file on disk starts with one (the scanner
+/// has taken it off `content`).
+fn with_block(file: &Path, block: &str, content: &str) -> String {
+    use std::io::Read;
+    let mut head = [0u8; 3];
+    let bom = std::fs::File::open(file)
+        .and_then(|mut f| f.read_exact(&mut head))
+        .is_ok_and(|()| head == *b"\xef\xbb\xbf");
+    format!("{}{block}{content}", if bom { "\u{feff}" } else { "" })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scaffold_write_keeps_a_bom_first() {
+        let dir = crate::testdir::TempDir::new("scaffold-bom");
+        std::fs::write(dir.join("bom.sql"), b"\xef\xbb\xbfSELECT 1;\n").unwrap();
+        std::fs::write(dir.join("plain.sql"), "SELECT 2;\n").unwrap();
+        std::fs::write(dir.join("short.sql"), "x").unwrap();
+        let block = "/* block */\n";
+        assert_eq!(
+            with_block(&dir.join("bom.sql"), block, "SELECT 1;\n").as_bytes(),
+            b"\xef\xbb\xbf/* block */\nSELECT 1;\n"
+        );
+        assert_eq!(
+            with_block(&dir.join("plain.sql"), block, "SELECT 2;\n"),
+            "/* block */\nSELECT 2;\n"
+        );
+        assert_eq!(
+            with_block(&dir.join("short.sql"), block, "x"),
+            "/* block */\nx"
+        );
+    }
 
     #[test]
     fn validate_reports_each_unreadable_block_as_its_own_error() {

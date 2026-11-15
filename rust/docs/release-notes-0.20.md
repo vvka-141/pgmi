@@ -84,8 +84,8 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   disconnected.
 - **Ambiguous `<pgmi-meta>` is refused.** A file with two `<pgmi-meta>`
   blocks, also two in one comment, or an attribute written twice (two
-  `id`s) stops the deploy with exit 10 before connecting. Go silently
-  picked one. The message names the file and says to keep one.
+  `id`s) stops the deploy with exit 10 before connecting. Go took the
+  last one. The message names the file and says to keep one.
 - **Closer to PostgreSQL.** `ÄCALL pgmi_test()` is one identifier, as
   PostgreSQL reads it, so pgmi no longer expands it. `--overwrite -d POSTGRES`
   compares database names exactly, as PostgreSQL does. The wizards' lists
