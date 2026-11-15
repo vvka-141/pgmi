@@ -859,9 +859,10 @@ directories too. A params file is read only for a project
 directory that holds a `deploy.sql` (exit 14 otherwise), so a call cannot
 name `/` as its project to probe other files. The `init` tool writes only
 inside `PGMI_SERVE_ROOTS` when it is set, and never into a directory that
-holds a symbolic link. A server that is not allowed gets no client
-certificate of the operator either, unless the call names its own
-`sslcert`. With `PGMI_SERVE_ROOTS` unset there is no directory limit: a tool
+holds a symbolic link. The `metadata_plan` and `metadata_validate` tools
+read only inside `PGMI_SERVE_ROOTS` when it is set. A server that is not
+allowed gets no client certificate of the operator either, unless the call
+names its own `sslcert` and `sslkey`, both non-empty. With `PGMI_SERVE_ROOTS` unset there is no directory limit: a tool
 call may deploy any pgmi project, and scaffold into any empty directory, the
 account can reach.
 
@@ -945,7 +946,7 @@ pgmi respects standard PostgreSQL environment variables and its own:
 | `PGMI_PARAM_<NAME>` | `deploy`, `serve` | Deploy parameter `<name>` (lower-cased); empty value exits 10 |
 | `PGMI_SERVE_HOSTS` | `serve` | Servers, besides the operator's own, that may receive the operator's credentials (`host`, `host:port`, `[ipv6]:port`, comma-separated). See [pgmi serve](#pgmi-serve) |
 | `PGMI_SERVE_CLOUDSQL_INSTANCES` | `serve` | Cloud SQL instance connection names (`project:region:instance`, comma-separated) a deploy may sign in to with the operator's Google credentials. See [pgmi serve](#pgmi-serve) |
-| `PGMI_SERVE_ROOTS` | `serve` | Directories a deploy tool call's `paramsFile` and project may lie in, besides the project (comma-separated) |
+| `PGMI_SERVE_ROOTS` | `serve` | Directories the `deploy`, `init`, `metadata_plan` and `metadata_validate` tool calls may use (comma-separated); a deploy's `paramsFile` may also lie in its project |
 | `PGMI_SERVE_ALLOW_OVERWRITE` | `serve` | `1` lets a deploy tool call drop and recreate a database (`overwrite: true`); otherwise exit 12 |
 | `PGMI_MAX_FILE_SIZE` | `deploy` | Per-file cap in bytes for project files, params files and `.env` (default 10 MiB) |
 | `PGMI_NON_INTERACTIVE` | any | Set to `1` to disable TUI wizards |

@@ -231,7 +231,11 @@ pub(crate) fn restrict_to_allowed(
     }
     spec.ambient_passfile = false;
     let own_certificate = flags.connection.as_ref().is_some_and(|c| {
-        crate::conn::parse::parse(c.expose()).is_ok_and(|f| f.contains_key("sslcert"))
+        crate::conn::parse::parse(c.expose()).is_ok_and(|f| {
+            ["sslcert", "sslkey"]
+                .iter()
+                .all(|k| f.get(*k).is_some_and(|v| !v.is_empty()))
+        })
     });
     if !own_certificate {
         spec.sslcertmode = SslCertMode::Disable;
@@ -285,6 +289,17 @@ mod tests {
             mode("host=evil.example user=u dbname=d sslcert=/mine.crt sslkey=/mine.key"),
             SslCertMode::Disable
         );
+        for conn in [
+            "host=evil.example user=u dbname=d sslcert=",
+            "host=evil.example user=u dbname=d sslcert= sslkey=",
+            "host=evil.example user=u dbname=d sslcert=/operator/client.crt",
+            "host=evil.example user=u dbname=d sslkey=/mine.key",
+            "host=evil.example user=u dbname=d sslcert=/mine.crt sslkey=",
+            "postgresql://u@evil.example/d?sslcert=&sslkey=",
+            "postgresql://u@evil.example/d?sslcert=%2Fmine.crt",
+        ] {
+            assert_eq!(mode(conn), SslCertMode::Disable, "{conn}");
+        }
         assert_ne!(
             mode("host=db.internal user=u dbname=d"),
             SslCertMode::Disable

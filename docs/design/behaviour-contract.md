@@ -224,7 +224,9 @@ committed before, such as a head whose `COMMIT` ran or an earlier
 statement of the psql tail, stays committed. Other tool calls finish and are
 answered. The cancelled deploy call is answered too (`isError`, exit code
 130, and the record with what it committed), and stderr gets `pgmi serve:
-stdin closed; tool call <id> was cancelled after N committed unit(s)`; only
+stdin closed; tool call <id> was cancelled after N committed unit(s)` (a
+call that ended on its own instead, refused or finished, says `... ended on
+its own with exit <code> after N committed unit(s)`, PGMI-1055); only
 a call the client withdrew with `notifications/cancelled` gets no answer
 (PGMI-1034). A script that pipes a deploy call into `pgmi serve` and wants
 the deploy to run must still keep stdin open until the answer arrives. Go

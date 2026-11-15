@@ -82,18 +82,29 @@ impl Toolbox for Tools {
     }
 }
 
-/// The stderr line for a call the end of input cancelled: a client that
-/// never reads the answer still leaves what was committed in its log.
+/// The stderr line for a call still running when input ended: a client
+/// that never reads the answer still leaves what was committed in its log.
+/// Only a call that stopped for the cancel (exit 130) says it was cancelled.
 fn cancelled_line(id: &str, outcome: &Outcome) -> String {
-    let committed = outcome
+    let record = outcome
         .structured
         .as_deref()
-        .and_then(|r| serde_json::from_str::<Value>(r.get()).ok())
-        .and_then(|v| v.get("unitsCommitted").and_then(Value::as_u64))
-        .unwrap_or(0);
-    format!(
-        "pgmi serve: stdin closed; tool call {id} was cancelled after {committed} committed unit(s)"
-    )
+        .and_then(|r| serde_json::from_str::<Value>(r.get()).ok());
+    let field = |k: &str| {
+        record
+            .as_ref()
+            .and_then(|v| v.get(k).and_then(Value::as_u64))
+    };
+    let committed = field("unitsCommitted").unwrap_or(0);
+    match field("exitCode") {
+        Some(130) => format!(
+            "pgmi serve: stdin closed; tool call {id} was cancelled after {committed} committed unit(s)"
+        ),
+        code => format!(
+            "pgmi serve: stdin closed; tool call {id} ended on its own with exit {} after {committed} committed unit(s)",
+            code.unwrap_or(0)
+        ),
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -201,16 +212,16 @@ impl Blocking {
                 Err(e) => Outcome::failed(&e),
             },
             Blocking::MetadataPlan => {
-                match path_argument(arguments, &["path"], "cli.mcpPathArgs")
-                    .and_then(|(p, _)| metadata::plan_report(std::path::Path::new(&p), env))
+                match readable_path(arguments, env)
+                    .and_then(|p| metadata::plan_report(std::path::Path::new(&p), env))
                 {
                     Ok(plan) => Outcome::json(&plan),
                     Err(e) => Outcome::failed(&e),
                 }
             }
             Blocking::MetadataValidate => {
-                match path_argument(arguments, &["path"], "cli.mcpPathArgs")
-                    .and_then(|(p, _)| metadata::validate_report(std::path::Path::new(&p), env))
+                match readable_path(arguments, env)
+                    .and_then(|p| metadata::validate_report(std::path::Path::new(&p), env))
                 {
                     Ok(metadata::Validated::Report(v)) => Outcome::json(&v),
                     Ok(metadata::Validated::Unreadable(errors)) => {
@@ -499,15 +510,10 @@ fn scaffold_target(target: &Path, env: &Env) -> Result<(), Error> {
     Ok(())
 }
 
-/// Keeps a tool call's project and params files where the operator allows:
-/// a params file inside the project, or inside a directory of the
-/// comma-separated `PGMI_SERVE_ROOTS`; when that is set, the project too.
-/// A params file is looked at only for a directory that holds a deploy.sql,
-/// so a call cannot name `/` as its project and probe any file.
-fn confine(project: &Path, params_files: &[String], env: &Env) -> Result<(), Error> {
-    let roots = serve_roots(env)?;
+/// The canonical `project`, refused when it lies outside `roots`.
+fn within(roots: Option<&[PathBuf]>, project: &Path) -> Result<PathBuf, Error> {
     let project = real(project, "project path")?;
-    if let Some(roots) = &roots
+    if let Some(roots) = roots
         && !roots.iter().any(|r| project.starts_with(r))
     {
         return Err(Error::config(format!(
@@ -515,6 +521,27 @@ fn confine(project: &Path, params_files: &[String], env: &Env) -> Result<(), Err
             project.display().to_string()
         )));
     }
+    Ok(project)
+}
+
+/// A read-only tool's `path`, inside `PGMI_SERVE_ROOTS` when the operator
+/// set it.
+fn readable_path(arguments: Option<&RawValue>, env: &Env) -> Result<String, Error> {
+    let (path, _) = path_argument(arguments, &["path"], "cli.mcpPathArgs")?;
+    if let Some(roots) = serve_roots(env)? {
+        within(Some(&roots), Path::new(&path))?;
+    }
+    Ok(path)
+}
+
+/// Keeps a tool call's project and params files where the operator allows:
+/// a params file inside the project, or inside a directory of the
+/// comma-separated `PGMI_SERVE_ROOTS`; when that is set, the project too.
+/// A params file is looked at only for a directory that holds a deploy.sql,
+/// so a call cannot name `/` as its project and probe any file.
+fn confine(project: &Path, params_files: &[String], env: &Env) -> Result<(), Error> {
+    let roots = serve_roots(env)?;
+    let project = within(roots.as_deref(), project)?;
     if !params_files.is_empty() && !project.join("deploy.sql").is_file() {
         return Err(Error::new(
             Kind::NoDeploySql,
@@ -946,6 +973,35 @@ mod tests {
     }
 
     #[test]
+    fn serve_metadata_tools_stay_inside_the_serve_roots() {
+        let root = crate::testdir::TempDir::new("serve-metadata-root");
+        let other = crate::testdir::TempDir::new("serve-metadata-other");
+        for dir in [root.path(), other.path()] {
+            std::fs::write(dir.join("deploy.sql"), "SELECT 1;").unwrap();
+            std::fs::write(dir.join("a.sql"), "SELECT 1;").unwrap();
+        }
+        let roots = root.path().display().to_string();
+        let env = Env::from_pairs(&[("PGMI_SERVE_ROOTS", &roots)]);
+        for tool in [Blocking::MetadataPlan, Blocking::MetadataValidate] {
+            let call = |dir: &std::path::Path, env: &Env| {
+                tool.answer(Some(&raw(&json!({"path": dir}).to_string())), env)
+            };
+            let refused = call(other.path(), &env);
+            assert!(refused.is_error, "{}", refused.text);
+            assert!(
+                refused.text.contains("outside PGMI_SERVE_ROOTS"),
+                "{}",
+                refused.text
+            );
+            assert!(!refused.text.contains("a.sql"), "{}", refused.text);
+            let inside = call(root.path(), &env);
+            assert!(!inside.is_error, "{}", inside.text);
+            let anywhere = call(other.path(), &Env::default());
+            assert!(!anywhere.is_error, "{}", anywhere.text);
+        }
+    }
+
+    #[test]
     fn serve_init_stays_inside_the_serve_roots() {
         let root = crate::testdir::TempDir::new("serve-init-root");
         let other = crate::testdir::TempDir::new("serve-init-other");
@@ -992,7 +1048,8 @@ mod tests {
 
     #[test]
     fn a_call_cancelled_by_the_end_of_input_says_what_it_committed() {
-        let committed = Outcome::json(&json!({"status": "failed", "unitsCommitted": 2}));
+        let committed =
+            Outcome::json(&json!({"status": "failed", "exitCode": 130, "unitsCommitted": 2}));
         assert_eq!(
             cancelled_line("7", &committed),
             "pgmi serve: stdin closed; tool call 7 was cancelled after 2 committed unit(s)"
@@ -1000,7 +1057,13 @@ mod tests {
         let refused = Outcome::failed(&Error::config("project path \"/x\" does not exist"));
         assert_eq!(
             cancelled_line("\"a\"", &refused),
-            "pgmi serve: stdin closed; tool call \"a\" was cancelled after 0 committed unit(s)"
+            "pgmi serve: stdin closed; tool call \"a\" ended on its own with exit 10 after 0 committed unit(s)"
+        );
+        let finished =
+            Outcome::json(&json!({"status": "success", "exitCode": 0, "unitsCommitted": 3}));
+        assert_eq!(
+            cancelled_line("8", &finished),
+            "pgmi serve: stdin closed; tool call 8 ended on its own with exit 0 after 3 committed unit(s)"
         );
     }
 
