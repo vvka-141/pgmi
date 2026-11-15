@@ -742,9 +742,22 @@ file's `CREATE OR REPLACE` works, and the file hands it over again.
 | `internal` | Deployment tracking, infrastructure | kernel |
 | `extensions` | `uuid-ossp`, `pgcrypto`, `pg_trgm`, `hstore`, `btree_gist`, kept out of `search_path` conflicts | PUBLIC |
 
-`pg_temp.approved_schema_grant()` in `deploy/settings.sql` holds this table as a list,
-and `lib/__test__/test_approved_schemas.sql` fails the deploy on a schema or
-schema grant it does not name. A project that creates a schema adds its rows.
+The deploy creates and grants from lists in `deploy/settings.sql`, so the
+table above is those lists:
+
+- `pg_temp.template_schema()`: the schemas the deploy creates, with their
+  comments. Adding a schema is one row.
+- `pg_temp.approved_schema_grant()`: each privilege on a schema. Adding a grant
+  is one row; the deploy grants it and never revokes.
+- `pg_temp.approved_default_privilege()`: what the owner role grants on every
+  new routine of a schema (`EXECUTE` in `common` and `membership` to the
+  kernel).
+- `pg_temp.template_role()`: the `NOLOGIN` roles the deploy creates.
+
+`lib/__test__/test_approved_schemas.sql` fails the deploy on a schema, a schema
+grant or a per-schema default privilege made anywhere that the lists do not
+hold. A schema one of your own files creates has its rows in
+`pg_temp.approved_schema_grant()` and is granted by that file.
 
 The database-wide settings come from one list, `pg_temp.database_setting()` in
 `deploy/settings.sql`; add a row there rather than an `ALTER DATABASE` elsewhere. An

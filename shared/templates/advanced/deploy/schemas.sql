@@ -9,37 +9,39 @@
 
 DO $schemas$
 DECLARE
-    v_admin_role TEXT := pg_temp.deployment_setting('database_admin_role');
-    v_api_role TEXT := pg_temp.deployment_setting('database_api_role');
-    v_kernel_role TEXT := pg_temp.deployment_setting('database_kernel_role');
+    v_schema record;
+    v_grant  record;
 BEGIN
-    PERFORM pg_temp.quiet_bootstrap();
-    CREATE SCHEMA IF NOT EXISTS internal;
-    CREATE SCHEMA IF NOT EXISTS core;
-    CREATE SCHEMA IF NOT EXISTS api;
-    CREATE SCHEMA IF NOT EXISTS common;
-    CREATE SCHEMA IF NOT EXISTS membership;
-    PERFORM pg_temp.unquiet_bootstrap();
-
-    COMMENT ON SCHEMA internal IS 'Deployment infrastructure and system tables. Not for application use.';
-    COMMENT ON SCHEMA core IS 'Core domain entities and business logic. The heart of your application.';
-    COMMENT ON SCHEMA api IS 'Public API layer. Functions and views exposed to applications and external clients.';
-    COMMENT ON SCHEMA common IS 'Cross-cutting primitives (casting, encoding, text) shared across all schemas and roles.';
-    COMMENT ON SCHEMA membership IS 'User identity, organizations, invitations, and access control.';
+    FOR v_schema IN SELECT * FROM pg_temp.template_schema() LOOP
+        IF to_regnamespace(quote_ident(v_schema.name)) IS NULL THEN
+            EXECUTE format('CREATE SCHEMA %I', v_schema.name);
+        END IF;
+        EXECUTE format('COMMENT ON SCHEMA %I IS %L', v_schema.name, v_schema.comment);
+        EXECUTE format('REVOKE ALL ON SCHEMA %I FROM PUBLIC', v_schema.name);
+    END LOOP;
 
     -- The owner role's half of closing public (deploy/bootstrap.sql explains).
     IF has_schema_privilege('public', 'USAGE WITH GRANT OPTION') THEN
         REVOKE ALL ON SCHEMA public FROM PUBLIC;
     END IF;
-    REVOKE ALL ON SCHEMA common, api, core, internal, membership FROM PUBLIC;
 
-    EXECUTE format('GRANT USAGE ON SCHEMA api, common, core, membership TO %I', v_api_role);
-    EXECUTE format('GRANT USAGE ON SCHEMA common, membership TO %I', v_admin_role);
-    EXECUTE format('GRANT USAGE ON SCHEMA api, common, core, internal, membership TO %I', v_kernel_role);
-    -- The kernel calls the helpers of membership and common from the moment
-    -- they exist; the request-context readers it calls are granted with them.
-    EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA common, membership GRANT EXECUTE ON ROUTINES TO %I', v_kernel_role);
-    PERFORM pg_temp.revoke_provider_create('{internal,core,api,common,membership}');  -- deploy/providers.sql
+    -- Grant only: a revoke here would remove access behind the back of the
+    -- lost-access check (deploy/finalize.sql).
+    FOR v_grant IN
+        SELECT g.* FROM pg_temp.approved_schema_grant() g
+        JOIN pg_temp.template_schema() s ON s.name = g.schema_name
+        WHERE g.role_key <> 'database_jobs_role'
+    LOOP
+        EXECUTE format('GRANT %s ON SCHEMA %I TO %I', v_grant.privilege, v_grant.schema_name,
+                       pg_temp.deployment_setting(v_grant.role_key));
+    END LOOP;
+
+    FOR v_grant IN SELECT * FROM pg_temp.approved_default_privilege() LOOP
+        EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT %s ON ROUTINES TO %I', v_grant.schema_name,
+                       v_grant.privilege, pg_temp.deployment_setting(v_grant.role_key));
+    END LOOP;
+
+    PERFORM pg_temp.revoke_provider_create(ARRAY(SELECT name FROM pg_temp.template_schema()));  -- deploy/providers.sql
 
     RAISE NOTICE '[pgmi] Schemas configured';
 END $schemas$;

@@ -1,7 +1,7 @@
 -- ============================================================================
 -- deploy/settings.sql
--- The lists a project edits: required extensions, database settings,
--- schema grants, tenant columns and the optional deploy guards, with
+-- The lists a project edits: required extensions, database settings, roles,
+-- schemas and their grants, tenant columns and the optional deploy guards, with
 -- enforce_guard, which holds a switched-on guard to its exemptions. Pure
 -- definitions; nothing here changes the database.
 -- ============================================================================
@@ -20,11 +20,36 @@ RETURNS TABLE (name text, value text) LANGUAGE sql IMMUTABLE AS $$
         ('search_path', 'core, api, membership, internal, extensions, common, pg_temp')
 $$;
 
--- The application schemas and each privilege granted on them, the role named
--- by its deploy parameter; a schema without a grant has one row with a NULL
--- role. public is PostgreSQL's own and stays closed. A project that adds a
--- schema or a grant adds its rows here: lib/__test__/test_approved_schemas.sql
--- fails on any schema or schema grant this list does not hold.
+-- The NOLOGIN roles deploy/bootstrap.sql creates when missing, each named by
+-- its deploy parameter. The admin login has a password and the jobs login is
+-- the operator's to create, so neither is here.
+CREATE FUNCTION pg_temp.template_role()
+RETURNS TABLE (role_key text, attributes text) LANGUAGE sql IMMUTABLE AS $$
+    VALUES ('database_owner_role',  'NOLOGIN'),
+           ('database_kernel_role', 'NOLOGIN'),
+           ('database_api_role',    'NOLOGIN')
+$$;
+
+-- The schemas deploy/schemas.sql creates when missing, comments and closes to
+-- PUBLIC. extensions is the deploy login's (deploy/bootstrap.sql) and public is
+-- PostgreSQL's own.
+CREATE FUNCTION pg_temp.template_schema()
+RETURNS TABLE (name text, comment text) LANGUAGE sql IMMUTABLE AS $$
+    VALUES ('internal',   'Deployment infrastructure and system tables. Not for application use.'),
+           ('core',       'Core domain entities and business logic. The heart of your application.'),
+           ('api',        'Public API layer. Functions and views exposed to applications and external clients.'),
+           ('common',     'Cross-cutting primitives (casting, encoding, text) shared across all schemas and roles.'),
+           ('membership', 'User identity, organizations, invitations, and access control.')
+$$;
+
+-- Each privilege on an application schema, the role named by its deploy
+-- parameter; a schema without a grant has one row with a NULL role. public
+-- stays closed. deploy/schemas.sql grants these on the schemas of
+-- pg_temp.template_schema(), and never revokes; the jobs row is granted only
+-- to a registered login (internal.grant_jobs). A schema a project file creates
+-- has its rows here too, and that file grants them.
+-- lib/__test__/test_approved_schemas.sql fails on a schema or schema grant
+-- made anywhere that this list does not hold.
 CREATE FUNCTION pg_temp.approved_schema_grant()
 RETURNS TABLE (schema_name text, role_key text, privilege text)
 LANGUAGE sql IMMUTABLE AS $$
@@ -41,6 +66,17 @@ LANGUAGE sql IMMUTABLE AS $$
            ('membership', 'database_api_role',    'USAGE'),
            ('membership', 'database_kernel_role', 'USAGE'),
            ('public',     NULL,                   NULL)
+$$;
+
+-- What the owner role grants on every routine it will create in a schema.
+-- deploy/schemas.sql sets these; the same test fails on a per-schema default
+-- the list does not hold. The kernel calls the helpers of membership and
+-- common from the moment they exist.
+CREATE FUNCTION pg_temp.approved_default_privilege()
+RETURNS TABLE (schema_name text, role_key text, privilege text)
+LANGUAGE sql IMMUTABLE AS $$
+    VALUES ('common',     'database_kernel_role', 'EXECUTE'),
+           ('membership', 'database_kernel_role', 'EXECUTE')
 $$;
 
 -- The columns that name a row's organization: core tables use organization_id

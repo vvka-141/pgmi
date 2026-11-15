@@ -88,9 +88,8 @@ BEGIN
     FROM pg_auth_members a
     JOIN pg_roles r ON r.oid = a.roleid
     JOIN pg_roles m ON m.oid = a.member
-    WHERE r.rolname IN (v_owner_role, v_admin_role, v_kernel_role,
-                        pg_temp.deployment_setting('database_api_role'),
-                        pg_temp.deployment_setting('database_jobs_role'))
+    WHERE r.rolname IN (SELECT pg_temp.deployment_setting(t.role_key) FROM pg_temp.template_role() t
+                        UNION ALL VALUES (v_admin_role), (pg_temp.deployment_setting('database_jobs_role')))
       AND m.rolname <> CURRENT_USER
       AND (a.admin_option
            OR r.rolname = v_admin_role
@@ -106,29 +105,25 @@ BEGIN
     END IF;
 END $$;
 
--- The NOLOGIN roles. The owner owns every database object. The kernel owns
--- the SECURITY DEFINER routines that work across organizations or before one
--- exists (pg_temp.kernel_owns); forced RLS lets it pass by its own policies
+-- The NOLOGIN roles of pg_temp.template_role() (deploy/settings.sql). The
+-- owner owns every database object. The kernel owns the SECURITY DEFINER
+-- routines that work across organizations or before one exists
+-- (pg_temp.kernel_owns); forced RLS lets it pass by its own policies
 -- (pg_temp.kernel_passes). The api role is the gateway's permission bundle:
 -- the entry points deploy/finalize.sql grants it, nothing else.
 DO $$
 DECLARE
-    v_owner_role  TEXT := pg_temp.deployment_setting('database_owner_role');
-    v_kernel_role TEXT := pg_temp.deployment_setting('database_kernel_role');
-    v_api_role    TEXT := pg_temp.deployment_setting('database_api_role');
+    v_role record;
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_owner_role) THEN
-        EXECUTE format('CREATE ROLE %I NOLOGIN', v_owner_role);
-        RAISE NOTICE '[pgmi] Created owner role: %', v_owner_role;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_kernel_role) THEN
-        EXECUTE format('CREATE ROLE %I NOLOGIN', v_kernel_role);
-        RAISE NOTICE '[pgmi] Created kernel role: %', v_kernel_role;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_api_role) THEN
-        EXECUTE format('CREATE ROLE %I NOLOGIN', v_api_role);
-        RAISE NOTICE '[pgmi] Created API role: %', v_api_role;
-    END IF;
+    FOR v_role IN
+        SELECT t.role_key, t.attributes, pg_temp.deployment_setting(t.role_key) AS name
+        FROM pg_temp.template_role() t
+    LOOP
+        IF to_regrole(quote_ident(v_role.name)) IS NULL THEN
+            EXECUTE format('CREATE ROLE %I %s', v_role.name, v_role.attributes);
+            RAISE NOTICE '[pgmi] Created role % (%)', v_role.name, v_role.role_key;
+        END IF;
+    END LOOP;
 END $$;
 
 -- Roles belong to the cluster: an existing admin role that is not yet a

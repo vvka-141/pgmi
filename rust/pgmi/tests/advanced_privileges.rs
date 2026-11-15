@@ -245,6 +245,55 @@ fn access_baseline() {
     );
 }
 
+const DEFAULT_PRIVILEGE_PROBE: &str = r#"/*
+<pgmi-meta id="ffffffff-1006-4000-8000-000000000001" idempotent="true">
+  <sortKeys><key>900/000</key></sortKeys>
+</pgmi-meta>
+*/
+DO $$
+BEGIN
+    EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA core GRANT EXECUTE ON ROUTINES TO %I', current_database() || '_api');
+END $$;
+"#;
+
+#[test]
+fn default_privileges_listed() {
+    let Some(pg) = pg() else { return };
+    let p = project(
+        "advanced",
+        &[("core/default_privilege_probe.sql", DEFAULT_PRIVILEGE_PROBE)],
+    );
+    let db = pg.database("pgmi_rs_b_advanced_default_acl");
+    let f = refused(
+        deploy(&pg, &p, &db, true, DEV),
+        "a file set a default privilege the list does not hold",
+    );
+    let want = format!(
+        "core: EXECUTE on new routines granted to {}_api by default, not in the list",
+        db.name()
+    );
+    assert!(f.says(&want), "want {want:?} in:\n{}", f.text);
+
+    let typo = project("advanced", &[]);
+    let row = "('core',       'database_api_role',    'USAGE')";
+    assert!(
+        typo.read("deploy/settings.sql").contains(row),
+        "deploy/settings.sql has no core row for the api role in pg_temp.approved_schema_grant()"
+    );
+    typo.replace(
+        "deploy/settings.sql",
+        row,
+        "('core',       'database_apy_role',    'USAGE')",
+    );
+    let typo_db = pg.database("pgmi_rs_b_advanced_grant_typo");
+    let f = refused(
+        deploy(&pg, &typo, &typo_db, true, DEV),
+        "a mistyped role parameter in the schema grant list",
+    );
+    let want = r#"Required deployment parameter "database_apy_role" not set"#;
+    assert!(f.says(want), "want {want:?} in:\n{}", f.text);
+}
+
 const PROVIDER_ROLES: [&str; 3] = ["pgmi_lbx_reader", "pgmi_lbx_writer", "pgmi_lbx_control"];
 
 /// What Lakebase puts in every database: the schema `__db_system` and event

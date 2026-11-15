@@ -9,7 +9,9 @@
 -- (provider_schemas) are left out, and so is USAGE granted to its own roles
 -- (provider_role_pattern), or anything on public; CREATE on a schema the
 -- template puts on a search_path still fails, as does CREATE on extensions
--- for any role but its owner.
+-- for any role but its owner. What the owner role grants by default on new
+-- routines of a schema is held to pg_temp.approved_default_privilege() the
+-- same way.
 -- ============================================================================
 
 CREATE FUNCTION pg_temp.schema_drift()
@@ -60,6 +62,53 @@ LANGUAGE sql STABLE AS $$
     CROSS JOIN LATERAL aclexplode(n.nspacl) g
     WHERE n.nspname = 'extensions' AND g.privilege_type = 'CREATE' AND g.grantee IS DISTINCT FROM n.nspowner
 $$;
+
+-- Per-schema defaults only: the owner's database-wide entry is the revoke
+-- from PUBLIC in deploy/bootstrap.sql.
+CREATE FUNCTION pg_temp.default_privilege_drift()
+RETURNS SETOF text
+LANGUAGE sql STABLE AS $$
+    WITH expected AS (
+        SELECT a.schema_name, r.oid AS grantee, a.privilege
+        FROM pg_temp.approved_default_privilege() a
+        JOIN pg_roles r ON r.rolname = pg_temp.deployment_setting(a.role_key, false)
+    ),
+    actual AS (
+        SELECT s.name AS schema_name, g.grantee, g.privilege_type AS privilege
+        FROM pg_default_acl d
+        JOIN pg_temp.application_schema() s ON s.oid = d.defaclnamespace
+        CROSS JOIN LATERAL aclexplode(d.defaclacl) g
+        WHERE d.defaclobjtype = 'f'
+          AND d.defaclrole = to_regrole(quote_ident(pg_temp.deployment_setting('database_owner_role')))
+    )
+    SELECT format('%s: %s on new routines granted to %s by default, not in the list', x.schema_name, x.privilege,
+                  CASE x.grantee WHEN 0 THEN 'PUBLIC' ELSE x.grantee::regrole::text END)
+    FROM (SELECT * FROM actual EXCEPT SELECT * FROM expected) x
+    UNION ALL
+    SELECT format('%s: %s on new routines to %s is listed, not a default', x.schema_name, x.privilege, x.grantee::regrole)
+    FROM (SELECT * FROM expected EXCEPT SELECT * FROM actual) x
+$$;
+
+DO $$
+DECLARE
+    v_bad text;
+BEGIN
+    SELECT string_agg(d, E'\n  ' ORDER BY d) INTO v_bad FROM pg_temp.default_privilege_drift() d;
+    IF v_bad IS NOT NULL THEN
+        RAISE EXCEPTION E'TEST FAILED: default privileges differ from pg_temp.approved_default_privilege():\n  %', v_bad
+            USING HINT = 'A default grant on a schema''s new routines is a row of pg_temp.approved_default_privilege() in deploy/settings.sql.';
+    END IF;
+
+    EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA core GRANT EXECUTE ON ROUTINES TO %I', pg_temp.deployment_setting('database_api_role'));
+    EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA common REVOKE EXECUTE ON ROUTINES FROM %I', pg_temp.deployment_setting('database_kernel_role'));
+    SELECT string_agg(d, '; ' ORDER BY d) INTO v_bad FROM pg_temp.default_privilege_drift() d;
+    IF v_bad IS DISTINCT FROM format('common: EXECUTE on new routines to %s is listed, not a default; '
+                                     'core: EXECUTE on new routines granted to %s by default, not in the list',
+                                     pg_temp.deployment_setting('database_kernel_role')::regrole,
+                                     pg_temp.deployment_setting('database_api_role')::regrole) THEN
+        RAISE EXCEPTION 'TEST FAILED: the guard must name an extra and a missing default privilege, named: %', v_bad;
+    END IF;
+END $$;
 
 DO $$
 DECLARE

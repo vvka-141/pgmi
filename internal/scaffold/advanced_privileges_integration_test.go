@@ -234,6 +234,60 @@ func TestAdvancedTemplate_AccessBaseline(t *testing.T) {
 	}
 }
 
+const defaultPrivilegeProbe = `/*
+<pgmi-meta id="ffffffff-1006-4000-8000-000000000001" idempotent="true">
+  <sortKeys><key>900/000</key></sortKeys>
+</pgmi-meta>
+*/
+DO $$
+BEGIN
+    EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA core GRANT EXECUTE ON ROUTINES TO %I', current_database() || '_api');
+END $$;
+`
+
+// The schema grants and default privileges come from the lists in
+// deploy/settings.sql: a default privilege a file sets on its own fails the
+// deploy, and a list row naming a role parameter that does not exist stops it.
+func TestAdvancedTemplate_DefaultPrivilegesListed(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+	params := map[string]string{"env": "dev"}
+
+	const db = "pgmi_advanced_default_acl"
+	defer testhelpers.CleanupTestDB(t, connString, db)
+	projectPath := scaffoldAdvanced(t, map[string]string{"core/default_privilege_probe.sql": defaultPrivilegeProbe})
+	err := deployAdvanced(t, connString, db, projectPath, true, params)
+	if err == nil {
+		t.Fatal("deploy succeeded although a file set a default privilege the list does not hold")
+	}
+	if want := "core: EXECUTE on new routines granted to " + db + "_api by default, not in the list"; !strings.Contains(err.Error(), want) {
+		t.Errorf("want the error to contain %q, got: %v", want, err)
+	}
+
+	const typoDB = "pgmi_advanced_grant_typo"
+	defer testhelpers.CleanupTestDB(t, connString, typoDB)
+	typoPath := scaffoldAdvanced(t, nil)
+	settings := filepath.Join(typoPath, "deploy", "settings.sql")
+	src, err := os.ReadFile(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const row = "('core',       'database_api_role',    'USAGE')"
+	if !strings.Contains(string(src), row) {
+		t.Fatal("deploy/settings.sql has no core row for the api role in pg_temp.approved_schema_grant()")
+	}
+	patched := strings.Replace(string(src), row, "('core',       'database_apy_role',    'USAGE')", 1)
+	if err := os.WriteFile(settings, []byte(patched), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = deployAdvanced(t, connString, typoDB, typoPath, true, params)
+	if err == nil {
+		t.Fatal("deploy succeeded with a mistyped role parameter in the schema grant list")
+	}
+	if want := `Required deployment parameter "database_apy_role" not set`; !strings.Contains(err.Error(), want) {
+		t.Errorf("want the error to contain %q, got: %v", want, err)
+	}
+}
+
 // approveSchema adds a schema without grants to the project's
 // pg_temp.approved_schema_grant(), as a project that creates one does.
 func approveSchema(t *testing.T, projectPath, schema string) {
