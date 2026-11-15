@@ -3,6 +3,8 @@ name: Gateway audit
 # The reference gateways ship pinned dependencies into users' projects, and a
 # CVE can be published between releases, so their audits also run weekly. They
 # read the template tree directly: no database, no scaffold.
+# The weekly and the manual run also check pgmi's own Cargo.lock for new
+# advisories; CI checks it on every push, so the call from CI skips that job.
 on:
   schedule:
     - cron: '17 5 * * 1'
@@ -21,6 +23,17 @@ env:
   GATEWAYS: shared/templates/advanced/gateways
 
 jobs:
+  pgmi:
+    name: pgmi's own Cargo.lock (cargo deny advisories)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: |
+          rustup toolchain install
+          cargo install --locked cargo-deny@0.20.2
+          cargo deny --locked check advisories
+
   python:
     name: Python (pip-audit)
     runs-on: ubuntu-latest
