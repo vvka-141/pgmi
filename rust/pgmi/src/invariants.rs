@@ -85,7 +85,7 @@ impl Conn {
             hosts.push(("h".into(), None));
         }
         let or = |s: &str, d: &str| {
-            if s.is_empty() {
+            if s.trim().is_empty() {
                 d.to_string()
             } else {
                 s.to_string()
@@ -99,7 +99,7 @@ impl Conn {
             sslmode: self
                 .sslmode
                 .map(|m| u8::try_from(SSLMODES.len()).map_or(m, |n| m % n)),
-            application_name: self.application_name.clone(),
+            application_name: self.application_name.as_deref().map(|a| or(a, "a")),
         }
     }
 
@@ -113,7 +113,7 @@ impl Conn {
             let ports: Vec<String> = self
                 .hosts
                 .iter()
-                .map(|(_, p)| p.map(|p| p.to_string()).unwrap_or_default())
+                .map(|(_, p)| p.unwrap_or(5432).to_string())
                 .collect();
             ports.join(",")
         })

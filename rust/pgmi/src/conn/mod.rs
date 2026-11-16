@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod blank_tests;
 pub(crate) mod cloud;
 pub(crate) mod dial;
 mod keys;

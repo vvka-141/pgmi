@@ -358,11 +358,11 @@ fn ports_per_host() {
 }
 
 #[test]
-fn one_port_serves_every_host_and_an_empty_host_is_localhost() {
-    let s = resolve(&conn("host=a,,c port=7 dbname=d"), &Env::default(), None).unwrap();
+fn one_port_serves_every_host() {
+    let s = resolve(&conn("host=a,b,c port=7 dbname=d"), &Env::default(), None).unwrap();
     assert_eq!(
         hosts(&s),
-        vec![("a".into(), 7), ("localhost".into(), 7), ("c".into(), 7)]
+        vec![("a".into(), 7), ("b".into(), 7), ("c".into(), 7)]
     );
     assert_eq!(first(&s), ("a", 7));
     assert_eq!(s.describe(), "a:7/d");
@@ -608,7 +608,6 @@ fn pgport_edge_cases() {
         )
     };
     assert_eq!(port("6004").unwrap().first().port, 6004);
-    assert_eq!(port("").unwrap().first().port, 5432);
     assert_eq!(port(" 5432 ").unwrap().first().port, 5432);
     for bad in ["abc", "-1", "999999", "0", "not-a-number"] {
         assert_eq!(
@@ -899,7 +898,7 @@ fn pgmi_yaml_certificates_apply_beside_a_connection_string() {
 
     let env = Env::from_pairs(&[("PGSSLKEY", "env.key")]);
     let s = resolve(
-        &conn("postgresql://u@h/db?sslcert=conn.crt&sslrootcert="),
+        &conn("postgresql://u@h/db?sslcert=conn.crt"),
         &env,
         Some(&y),
     )
@@ -1433,7 +1432,6 @@ fn an_invalid_tls_or_protocol_variable_is_refused_like_its_key() {
     for (name, value, key) in [
         ("PGSSLSNI", "2", "sslsni"),
         ("PGSSLCERTMODE", "bogus", "sslcertmode"),
-        ("PGSSLCERTMODE", "", "sslcertmode"),
         ("PGMINPROTOCOLVERSION", "bogus", "min_protocol_version"),
         ("PGMAXPROTOCOLVERSION", "9.9", "max_protocol_version"),
     ] {
@@ -1452,7 +1450,6 @@ fn an_invalid_tls_or_protocol_variable_is_refused_like_its_key() {
         refused(from_env("PGMINPROTOCOLVERSION", "3.2")),
         ResolveError::ProtocolUnsupported(_)
     ));
-    invalid("sslcertmode=''", "sslcertmode");
 }
 
 #[test]
@@ -1549,7 +1546,6 @@ fn gssapi_keys_are_honoured_without_gssapi_and_refused_when_they_need_it() {
         "gssencmode=disable",
         "gssencmode=prefer",
         "gssdelegation=0",
-        "gsslib=''",
         "krbsrvname=postgres",
     ] {
         assert!(keyword(ok).is_ok(), "{ok}");
@@ -1605,7 +1601,6 @@ fn a_named_client_encoding_beats_pgclientencoding_and_auto_is_refused() {
         with("client_encoding=WIN1252", &env).unwrap().as_deref(),
         Some("WIN1252")
     );
-    assert_eq!(with("client_encoding=''", &Env::default()).unwrap(), None);
     for auto in ["client_encoding=auto", "client_encoding=AUTO"] {
         let e = refused(keyword(auto));
         assert!(matches!(e, ResolveError::NotSupported { .. }), "{e:?}");
@@ -1663,10 +1658,6 @@ fn require_auth_is_parsed_and_an_invalid_value_kept_for_the_connect() {
         )
     };
     assert_eq!(spec("").unwrap().require_auth, RequireAuth::Any);
-    assert_eq!(
-        spec("require_auth=").unwrap().require_auth,
-        RequireAuth::Any
-    );
     assert!(matches!(
         spec("require_auth=scram-sha-256").unwrap().require_auth,
         RequireAuth::Only(_)
@@ -1778,205 +1769,4 @@ fn a_revocation_list_is_not_refused_with_the_system_trust_store() {
     }
     assert_eq!(check("sslmode=prefer", &at_home(&[])).unwrap(), [""; 0]);
     assert_eq!(check("sslmode=require", &at_home(&[])).unwrap(), [""; 0]);
-}
-
-#[track_caller]
-fn blank(r: Result<Spec, ResolveError>, key: &str, origin: &str) {
-    let e = Error::from(refused(r));
-    assert_eq!(e.exit_code(), 10, "{}", e.text());
-    assert_eq!(
-        e.text(),
-        format!(
-            "the {key} from {origin} is only whitespace; write the {key}, or leave it empty so the next source applies"
-        )
-    );
-}
-
-const ELSEWHERE: [(&str, &str); 2] = [("PGHOST", "elsewhere"), ("PGPORT", "6000")];
-
-#[test]
-fn a_whitespace_host_in_a_keyword_string_is_refused_not_localhost() {
-    for text in [
-        "host=' ' dbname=d",
-        "host='\t' dbname=d",
-        "host='  \n' dbname=d",
-        "host='\u{a0}' dbname=d",
-    ] {
-        let env = Env::from_pairs(&ELSEWHERE);
-        blank(resolve(&conn(text), &env, None), "host", "--connection");
-    }
-}
-
-#[test]
-fn a_whitespace_host_in_a_uri_authority_is_refused_not_localhost() {
-    for text in ["postgresql://u@%20:5433/d", "postgresql://u:p@%20%09/d"] {
-        let env = Env::from_pairs(&ELSEWHERE);
-        blank(resolve(&conn(text), &env, None), "host", "--connection");
-    }
-}
-
-#[test]
-fn a_whitespace_host_in_a_uri_query_is_refused_not_localhost() {
-    for text in [
-        "postgresql://u@:5433/d?host=%20",
-        "postgresql://u@h/d?host=%20",
-    ] {
-        let env = Env::from_pairs(&ELSEWHERE);
-        blank(resolve(&conn(text), &env, None), "host", "--connection");
-    }
-}
-
-#[test]
-fn a_whitespace_host_in_an_ado_string_is_refused_not_localhost() {
-    for text in [
-        "Host=' ';Database=d",
-        "Server=\" \";Database=d",
-        "Data Source=' ';Port=5433;Database=d",
-    ] {
-        let env = Env::from_pairs(&ELSEWHERE);
-        blank(resolve(&conn(text), &env, None), "host", "--connection");
-    }
-}
-
-#[test]
-fn a_whitespace_host_flag_is_refused_not_localhost() {
-    let fl = Flags {
-        host: Some(" ".into()),
-        database: Some("d".into()),
-        ..Flags::default()
-    };
-    blank(
-        resolve(&fl, &Env::from_pairs(&ELSEWHERE), None),
-        "host",
-        "-h",
-    );
-    blank(resolve(&fl, &Env::default(), Some(&yaml())), "host", "-h");
-}
-
-#[test]
-fn a_whitespace_pghost_is_refused_not_localhost() {
-    let fl = Flags {
-        database: Some("d".into()),
-        ..Flags::default()
-    };
-    for value in [" ", "\t", "   "] {
-        let env = Env::from_pairs(&[("PGHOST", value)]);
-        blank(resolve(&fl, &env, None), "host", "PGHOST");
-        blank(resolve(&fl, &env, Some(&yaml())), "host", "PGHOST");
-        blank(
-            resolve(&conn("user=u dbname=d"), &env, None),
-            "host",
-            "PGHOST",
-        );
-        blank(
-            resolve(&conn("postgresql://u@:5433/d"), &env, None),
-            "host",
-            "PGHOST",
-        );
-    }
-}
-
-#[test]
-fn a_whitespace_host_in_pgmi_yaml_is_refused_not_localhost() {
-    let y = Connection {
-        host: Some(" ".into()),
-        ..yaml()
-    };
-    blank(
-        resolve(&flags(), &Env::default(), Some(&y)),
-        "host",
-        "pgmi.yaml",
-    );
-}
-
-#[test]
-fn a_whitespace_host_in_an_environment_connection_string_is_refused_not_localhost() {
-    for (name, text) in [
-        ("PGMI_CONNECTION_STRING", "host=' ' dbname=d"),
-        ("PGMI_CONNECTION_STRING", "postgresql://u@%20/d"),
-        ("DATABASE_URL", "postgresql://u@%20/d"),
-        ("DATABASE_URL", "Host=' ';Database=d"),
-    ] {
-        let env = Env::from_pairs(&[(name, text), ("PGHOST", "elsewhere")]);
-        blank(resolve(&flags(), &env, None), "host", name);
-    }
-}
-
-#[test]
-fn a_whitespace_entry_in_a_host_list_is_refused_and_an_empty_one_stays_the_default() {
-    for text in [
-        "host=' ,h2' dbname=d",
-        "host='h1, ' dbname=d",
-        "host='h1, ,h3' dbname=d",
-        "postgresql://u@%20,h2/d",
-        "postgresql://u@h1,%20/d",
-    ] {
-        blank(
-            resolve(&conn(text), &Env::default(), None),
-            "host",
-            "--connection",
-        );
-    }
-    let s = resolve(&conn("host='h1, h2 ,,h4' dbname=d"), &Env::default(), None).unwrap();
-    assert_eq!(
-        hosts(&s),
-        [
-            ("h1".to_string(), 5432),
-            ("h2".to_string(), 5432),
-            ("localhost".to_string(), 5432),
-            ("h4".to_string(), 5432)
-        ]
-    );
-}
-
-#[test]
-fn a_whitespace_hostaddr_is_refused_not_looked_up_by_name() {
-    for text in [
-        "hostaddr=' ' dbname=d",
-        "host=h hostaddr=' ' dbname=d",
-        "host=h1,h2 hostaddr='10.0.0.1, ' dbname=d",
-        "postgresql://u@h/d?hostaddr=%20",
-    ] {
-        blank(
-            resolve(&conn(text), &Env::from_pairs(&ELSEWHERE), None),
-            "hostaddr",
-            "--connection",
-        );
-    }
-}
-
-#[test]
-fn a_whitespace_port_is_refused_not_5432() {
-    for text in [
-        "host=h port=' ' dbname=d",
-        "host=h1,h2 port='6000, ' dbname=d",
-        "postgresql://u@h/d?port=%20",
-        "Host=h;Port=' ';Database=d",
-    ] {
-        blank(
-            resolve(&conn(text), &Env::from_pairs(&ELSEWHERE), None),
-            "port",
-            "--connection",
-        );
-    }
-    let fl = Flags {
-        database: Some("d".into()),
-        ..Flags::default()
-    };
-    let env = Env::from_pairs(&[("PGHOST", "h"), ("PGPORT", " ")]);
-    blank(resolve(&fl, &env, None), "port", "PGPORT");
-    blank(
-        resolve(&conn("host=h dbname=d"), &env, None),
-        "port",
-        "PGPORT",
-    );
-    let y = Connection {
-        port: Some(" ".into()),
-        ..yaml()
-    };
-    blank(
-        resolve(&flags(), &Env::default(), Some(&y)),
-        "port",
-        "pgmi.yaml",
-    );
 }

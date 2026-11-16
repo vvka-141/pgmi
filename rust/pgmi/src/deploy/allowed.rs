@@ -354,15 +354,23 @@ mod tests {
             SslCertMode::Disable
         );
         for conn in [
-            "host=evil.example user=u dbname=d sslcert=",
-            "host=evil.example user=u dbname=d sslcert= sslkey=",
             "host=evil.example user=u dbname=d sslcert=/operator/client.crt",
             "host=evil.example user=u dbname=d sslkey=/mine.key",
-            "host=evil.example user=u dbname=d sslcert=/mine.crt sslkey=",
-            "postgresql://u@evil.example/d?sslcert=&sslkey=",
             "postgresql://u@evil.example/d?sslcert=%2Fmine.crt",
         ] {
             assert_eq!(mode(conn), SslCertMode::Disable, "{conn}");
+        }
+        for conn in [
+            "host=evil.example user=u dbname=d sslcert=",
+            "host=evil.example user=u dbname=d sslcert=/mine.crt sslkey=",
+            "postgresql://u@evil.example/d?sslcert=&sslkey=",
+        ] {
+            let flags = resolve::Flags {
+                connection: Some(conn.into()),
+                ..resolve::Flags::default()
+            };
+            let e = resolve::resolve(&flags, &Env::from_pairs(&env), None).unwrap_err();
+            assert!(matches!(e, resolve::ResolveError::Blank { .. }), "{conn}");
         }
         assert_ne!(
             mode("host=db.internal user=u dbname=d"),
@@ -799,7 +807,6 @@ mod tests {
             "host=db user=u dbname=d sslmode=verify-full sslrootcert=/mitm/ca.crt",
             "postgresql://u@db/d?sslrootcert=%2Fmitm%2Fca.crt",
             "postgresql://u@db/d?sslrootcert=system",
-            "postgresql://u@db/d?sslrootcert=",
             "Host=db;Username=u;Database=d;Root Certificate=/mitm/ca.crt",
         ] {
             let (code, text) = refused(conn, &[], None).unwrap_or_else(|| panic!("{conn}"));

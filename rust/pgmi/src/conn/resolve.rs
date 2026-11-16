@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
-use super::parse::{self, Fields, ParseError};
+use super::parse::{self, Blank, Fields, ParseError};
 use super::socket::{Keepalive, Tcp};
 use super::tap;
 use crate::config::yaml::Connection as YamlConnection;
@@ -295,10 +295,11 @@ pub(crate) enum ResolveError {
     },
     NoDatabase,
     Port(String),
-    /// A host, port or `hostaddr` written as white space only, and where.
+    /// A setting written empty or as white space only, and where.
     Blank {
         key: &'static str,
         origin: &'static str,
+        how: Blank,
     },
     FlagPort(i64),
     PortCount {
@@ -379,7 +380,7 @@ impl fmt::Display for ResolveError {
                 "database name is required\nProvide via:\n  1. --database/-d flag: pgmi deploy . -d mydb\n  2. Connection string: pgmi deploy . --connection \"postgresql://user@host/mydb\"\n  3. pgmi.yaml: connection.database: mydb\n  4. Environment variable: export PGDATABASE=mydb, or a database in PGMI_CONNECTION_STRING / DATABASE_URL",
             ),
             ResolveError::Port(p) => write!(f, "invalid port \"{p}\""),
-            ResolveError::Blank { key, origin } => f.write_str(&blank(key, origin)),
+            ResolveError::Blank { key, origin, how } => f.write_str(&blank(key, origin, *how)),
             ResolveError::FlagPort(p) => write!(
                 f,
                 "invalid --port flag: invalid port {p}: must be between 1 and 65535"
@@ -447,9 +448,10 @@ impl From<Error> for ResolveError {
     }
 }
 
-fn blank(key: &str, origin: &str) -> String {
+fn blank(key: &str, origin: &str, how: Blank) -> String {
     format!(
-        "the {key} from {origin} is only whitespace; write the {key}, or leave it empty so the next source applies"
+        "the {key} from {origin} is {}; write the {key}, or remove it so the next source applies",
+        how.as_str()
     )
 }
 
@@ -667,6 +669,16 @@ pub(crate) fn resolve(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) -
     if flags.connection.is_some() && (!granular.is_empty() || flags.sslmode.is_some()) {
         return Err(ResolveError::ConnectionWith(granular, flags.sslmode));
     }
+    for (key, flag, given) in [
+        ("host", "-h", &flags.host),
+        ("user", "-U", &flags.username),
+        ("dbname", "-d", &flags.database),
+        ("sslcert", "--sslcert", &flags.sslcert),
+        ("sslkey", "--sslkey", &flags.sslkey),
+        ("sslrootcert", "--sslrootcert", &flags.sslrootcert),
+    ] {
+        written(key, flag, given.as_deref())?;
+    }
     let string = connection_string(flags, env)?;
     if let (Some((_, source)), Some(flag)) = (&string, granular.first()) {
         return Err(ResolveError::FlagWithEnvString {
@@ -696,9 +708,15 @@ impl Given {
         string: Option<(String, Source)>,
     ) -> Result<Self> {
         if let Some((text, source)) = string {
-            let mut fields =
-                parse::parse(&text).map_err(|error| ResolveError::Parse { source, error })?;
-            let string_db = fields.remove("dbname").filter(|d| !d.is_empty());
+            let mut fields = parse::parse(&text).map_err(|error| match error {
+                ParseError::Blank { key, how } => ResolveError::Blank {
+                    key,
+                    origin: source.label(),
+                    how,
+                },
+                error => ResolveError::Parse { source, error },
+            })?;
+            let string_db = fields.remove("dbname");
             return Ok(Given {
                 fields,
                 source,
@@ -742,12 +760,31 @@ pub(super) fn connection_string(flags: &Flags, env: &Env) -> Result<Option<(Stri
     if let Some(c) = &flags.connection {
         return Ok(Some((c.expose().to_string(), Source::ConnectionFlag)));
     }
-    if let Some(c) = env.non_empty("PGMI_CONNECTION_STRING")? {
-        return Ok(Some((c.to_string(), Source::PgmiConnectionString)));
+    for source in [Source::PgmiConnectionString, Source::DatabaseUrl] {
+        if let Some(c) = variable(env, source.label(), "connection string")? {
+            return Ok(Some((c.to_string(), source)));
+        }
     }
-    Ok(env
-        .non_empty("DATABASE_URL")?
-        .map(|c| (c.to_string(), Source::DatabaseUrl)))
+    Ok(None)
+}
+
+/// A value as written, refused when it is empty or white space: read as
+/// unset, it would give way to the next source or to the built-in default,
+/// a server or a setting the operator did not name.
+fn written<'a>(
+    key: &'static str,
+    origin: &'static str,
+    value: Option<&'a str>,
+) -> Result<Option<&'a str>> {
+    match value.and_then(|v| parse::blank(key, v)) {
+        Some(how) => Err(ResolveError::Blank { key, origin, how }),
+        None => Ok(value),
+    }
+}
+
+/// The connection variable `name`, which sets `key`; unset is `None`.
+fn variable<'a>(env: &'a Env, name: &'static str, key: &'static str) -> Result<Option<&'a str>> {
+    written(key, name, env.get(name)?)
 }
 
 fn host_source(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>) -> Result<Source> {
@@ -777,7 +814,6 @@ fn finish(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>, given: Given)
         string_db,
     } = given;
     let sslmode_source = SslModeSource::of(flags, &fields, source, env, yaml)?;
-    let written = Written::of(&fields, source, env)?;
     merge(&mut fields, flags, env, yaml, source)?;
     let f = &mut fields;
     let Databases {
@@ -785,7 +821,7 @@ fn finish(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>, given: Given)
         maintenance: maintenance_db,
         replaced: replaced_db,
     } = databases(flags, string_db.as_deref(), source, env, yaml)?;
-    let hosts = take_hosts(f, &written)?;
+    let hosts = take_hosts(f)?;
     let tls = TlsSettings::take(f)?;
     check_protocol(f)?;
     let channel_binding = keyword(f, "channel_binding", ChannelBinding::Prefer)?;
@@ -821,8 +857,8 @@ fn finish(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>, given: Given)
         requested_sslmode: tls.requested_sslmode,
         sslmode_source,
         sslrootcert: tls.sslrootcert,
-        sslcert: f.remove("sslcert").filter(|v| !v.is_empty()),
-        sslkey: f.remove("sslkey").filter(|v| !v.is_empty()),
+        sslcert: f.remove("sslcert"),
+        sslkey: f.remove("sslkey"),
         sslpassword: f.remove("sslpassword").map(Secret::from),
         sslnegotiation: tls.negotiation,
         sslsni: tls.sni,
@@ -834,7 +870,7 @@ fn finish(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>, given: Given)
             .or(fallback_application_name)
             .unwrap_or_else(|| "pgmi".into()),
         connect_timeout,
-        options: f.remove("options").filter(|o| !o.trim().is_empty()),
+        options: f.remove("options"),
         timezone: env.non_empty("PGTZ")?.map(str::to_string),
         target_session_attrs,
         load_balance_hosts,
@@ -861,40 +897,31 @@ fn merge(
     source: Source,
 ) -> Result<()> {
     for (env_name, key) in ENV_DEFAULTS {
-        let given = if *key == "sslcertmode" {
-            env.get(env_name)?
-        } else {
-            env.non_empty(env_name)?
-        };
         if !f.contains_key(*key)
-            && let Some(v) = given
+            && let Some(v) = variable(env, env_name, key)?.filter(|v| !v.is_empty())
         {
             f.insert((*key).into(), v.to_string());
         }
     }
-    if let Some(y) = yaml.filter(|_| !source.is_string()) {
-        for (k, v) in [
-            ("host", &y.host),
-            ("port", &y.port),
-            ("user", &y.username),
-            ("sslmode", &y.sslmode),
-        ] {
-            if let Some(v) = v {
-                f.entry(k.into()).or_insert_with(|| v.clone());
-            }
-        }
-    }
-    if let Some(y) = yaml {
-        for (k, v) in [
-            ("sslcert", &y.sslcert),
-            ("sslkey", &y.sslkey),
-            ("sslrootcert", &y.sslrootcert),
-        ] {
-            if let Some(v) = v.as_ref().filter(|v| !v.is_empty())
-                && f.get(k).is_none_or(String::is_empty)
-            {
-                f.insert(k.into(), v.clone());
-            }
+    let none = YamlConnection::default();
+    let y = yaml.unwrap_or(&none);
+    let server = [
+        ("host", &y.host),
+        ("port", &y.port),
+        ("user", &y.username),
+        ("sslmode", &y.sslmode),
+    ];
+    let files = [
+        ("sslcert", &y.sslcert),
+        ("sslkey", &y.sslkey),
+        ("sslrootcert", &y.sslrootcert),
+    ];
+    let server = server.into_iter().filter(|_| !source.is_string());
+    for (key, v) in server.chain(files) {
+        if !f.contains_key(key)
+            && let Some(v) = written(key, Source::Yaml.label(), v.as_deref())?
+        {
+            f.insert(key.into(), v.to_string());
         }
     }
     if let Some(m) = flags.sslmode {
@@ -926,21 +953,29 @@ fn databases(
     env: &Env,
     yaml: Option<&YamlConnection>,
 ) -> Result<Databases> {
-    let target = flags
-        .database
-        .clone()
-        .or_else(|| string_db.map(str::to_string))
-        .or(env.non_empty("PGDATABASE")?.map(str::to_string))
-        .or_else(|| yaml.and_then(|y| y.database.clone()))
-        .filter(|d| !d.is_empty())
-        .ok_or(ResolveError::NoDatabase)?;
-    let maintenance = flags
-        .database
-        .as_ref()
-        .and(string_db)
-        .map(str::to_string)
-        .or_else(|| yaml.and_then(|y| y.maintenance_database.clone()))
-        .unwrap_or_else(|| "postgres".into());
+    let yaml_label = Source::Yaml.label();
+    let named = match flags.database.as_deref().or(string_db) {
+        Some(d) => Some(d),
+        None => match variable(env, "PGDATABASE", "dbname")? {
+            Some(d) => Some(d),
+            None => written(
+                "dbname",
+                yaml_label,
+                yaml.and_then(|y| y.database.as_deref()),
+            )?,
+        },
+    };
+    let target = named.ok_or(ResolveError::NoDatabase)?.to_string();
+    let maintenance = match flags.database.as_ref().and(string_db) {
+        Some(d) => d,
+        None => written(
+            "maintenance_database",
+            yaml_label,
+            yaml.and_then(|y| y.maintenance_database.as_deref()),
+        )?
+        .unwrap_or("postgres"),
+    }
+    .to_string();
     let own = match string_db {
         Some(d) => Some(d.to_string()),
         None if source.is_string() => env.non_empty("PGDATABASE")?.map(str::to_string),
@@ -954,51 +989,8 @@ fn databases(
     })
 }
 
-/// Where the host and the port were written, for the message that refuses
-/// one that is white space only.
-struct Written {
-    host: &'static str,
-    port: &'static str,
-    string: &'static str,
-}
-
-impl Written {
-    fn of(given: &Fields, source: Source, env: &Env) -> Result<Self> {
-        let from = |key: &str, flag: &'static str, variable: &'static str| -> Result<_> {
-            Ok(if !given.contains_key(key) {
-                match env.non_empty(variable)? {
-                    Some(_) => variable,
-                    None => Source::Yaml.label(),
-                }
-            } else if source.is_string() {
-                source.label()
-            } else {
-                flag
-            })
-        };
-        Ok(Written {
-            host: from("host", "-h", "PGHOST")?,
-            port: from("port", "-p", "PGPORT")?,
-            string: source.label(),
-        })
-    }
-}
-
-/// A list entry that is white space only names no server, and trimmed to
-/// empty it would read as the default one: localhost, port 5432.
-fn refuse_blank(text: Option<&String>, key: &'static str, origin: &'static str) -> Result<()> {
-    let blank = |e: &str| !e.is_empty() && e.trim().is_empty();
-    if text.is_some_and(|t| t.split(',').any(blank)) {
-        return Err(ResolveError::Blank { key, origin });
-    }
-    Ok(())
-}
-
-fn take_hosts(f: &mut Fields, written: &Written) -> Result<Hosts> {
-    refuse_blank(f.get("host"), "host", written.host)?;
-    refuse_blank(f.get("port"), "port", written.port)?;
-    refuse_blank(f.get("hostaddr"), "hostaddr", written.string)?;
-    let hostaddr = f.remove("hostaddr").filter(|a| !a.is_empty());
+fn take_hosts(f: &mut Fields) -> Result<Hosts> {
+    let hostaddr = f.remove("hostaddr");
     let host_text = f.remove("host").or_else(|| hostaddr.clone());
     hosts(
         host_text.as_deref().unwrap_or("localhost"),
@@ -1018,7 +1010,7 @@ struct TlsSettings {
 
 impl TlsSettings {
     fn take(f: &mut Fields) -> Result<Self> {
-        let sslrootcert = f.remove("sslrootcert").filter(|v| !v.is_empty());
+        let sslrootcert = f.remove("sslrootcert");
         let system_roots = sslrootcert.as_deref() == Some("system");
         let requested_sslmode = f
             .remove("sslmode")
@@ -1226,15 +1218,15 @@ fn split_list(text: &str) -> (&str, Vec<&str>) {
 
 fn hosts(host_text: &str, port_text: &str, addr_text: Option<&str>) -> Result<Hosts> {
     let port = |p: &str| -> Result<u16> {
-        if p.is_empty() {
-            return Ok(5432);
-        }
         p.parse::<u16>()
             .ok()
             .filter(|n| *n > 0)
             .ok_or_else(|| ResolveError::Port(p.to_string()))
     };
     let (first_name, rest_names) = split_list(host_text);
+    if first_name.is_empty() || rest_names.iter().any(|n| n.is_empty()) {
+        return Err(ResolveError::Unhandled("host".into()));
+    }
     let (first_port, rest_ports) = split_list(port_text);
     let first_port = port(first_port)?;
     let rest_ports = rest_ports
@@ -1267,7 +1259,7 @@ fn hosts(host_text: &str, port_text: &str, addr_text: Option<&str>) -> Result<Ho
         });
     }
     let mut host = |name: &str, port: u16| Endpoint {
-        name: if name.is_empty() { "localhost" } else { name }.to_string(),
+        name: name.to_string(),
         port,
         addr: addrs.next().flatten(),
     };

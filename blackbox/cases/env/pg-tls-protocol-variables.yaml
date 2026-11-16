@@ -14,7 +14,11 @@ steps:
     expect: {exit: 10, stderr: ["invalid sslcertmode.*bogus"]}
   - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
     env: {PGSSLCERTMODE: ""}
-    expect: {exit: 10, stderr: ["invalid sslcertmode"]}
+    expect:
+      exit: 10
+      stderr: ["invalid sslcertmode"]
+      rust:
+        stderr: ['^pgmi: error: the sslcertmode from PGSSLCERTMODE is empty; write the sslcertmode, or remove it so the next source applies$']
   - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
     env: {PGSSLSNI: "0", PGSSLCERTMODE: disable, PGMINPROTOCOLVERSION: "3.0", PGMAXPROTOCOLVERSION: "3.2"}
     expect: {exit: 0}

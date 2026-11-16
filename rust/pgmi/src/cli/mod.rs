@@ -295,15 +295,15 @@ impl From<DeployArgs> for crate::deploy::Request {
             project: a.project,
             connection: Flags {
                 connection: a.connection,
-                host: given(a.host),
+                host: a.host,
                 port: a.port.filter(|p| *p != 0),
-                username: given(a.username),
-                database: given(a.database),
+                username: a.username,
+                database: a.database,
                 sslmode: a.sslmode.as_deref().and_then(|m| m.parse().ok()),
                 invalid_sslmode: a.sslmode.filter(|m| m.parse::<SslMode>().is_err()),
-                sslcert: given(a.sslcert),
-                sslkey: given(a.sslkey),
-                sslrootcert: given(a.sslrootcert),
+                sslcert: a.sslcert,
+                sslkey: a.sslkey,
+                sslrootcert: a.sslrootcert,
             },
             maintenance_db: None,
             cloud,
@@ -323,10 +323,6 @@ impl From<DeployArgs> for crate::deploy::Request {
             json: a.json,
         }
     }
-}
-
-fn given(flag: Option<String>) -> Option<String> {
-    flag.filter(|v| !v.is_empty())
 }
 
 pub(crate) fn go_bool(s: &str) -> Result<bool, String> {
@@ -654,7 +650,7 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_text_flag_is_unset_as_in_go() {
+    fn an_empty_text_flag_reaches_the_connection_settings_as_written() {
         let request = crate::deploy::Request::from(deploy(&[
             ".",
             "-h",
@@ -671,12 +667,16 @@ mod tests {
             "",
         ]));
         let c = request.connection;
+        let empty = || Some(String::new());
         assert_eq!(
             (c.host, c.username, c.database),
-            (None, None, None),
+            (empty(), empty(), empty()),
             "empty -h, -U and -d"
         );
-        assert_eq!((c.sslcert, c.sslkey, c.sslrootcert), (None, None, None));
+        assert_eq!(
+            (c.sslcert, c.sslkey, c.sslrootcert),
+            (empty(), empty(), empty())
+        );
     }
 
     #[test]

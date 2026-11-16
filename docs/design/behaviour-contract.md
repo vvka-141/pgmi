@@ -440,10 +440,30 @@ inside; a port in `Host=h:port` wins over `Port=` wherever it stands;
 `dbname` and any libpq keyword spelled exactly are taken as written). In a URI
 query only `%XX` is decoded (`+` stays a plus), keys are read in any case,
 `applicationname` and `connecttimeout` stand for `application_name` and
-`connect_timeout`, and a repeated key takes its last value, as libpq (Go takes the first; row "Repeated URI query key"). As in Go: an
-empty connection flag (`-h ''`, `-U ''`, `-d ''`, `--sslcert ''`, `--sslkey ''`,
-`--sslrootcert ''`) is unset, so the next source applies and is announced; an
-empty `sslmode` in any form of string is unset, and so is an empty host (`postgresql://u@:5433/db`, `?host=`, `host=''`, `Host=;`), so `PGHOST` applies and the deploy never goes to localhost instead (PGMI-1073, case `connection/empty-host-uses-pghost`); a host, port or `hostaddr` that is only white space, whole or as one entry of a list, from any source (a string of any form, `-h`, `PGHOST`, `PGPORT`, `PGMI_CONNECTION_STRING`, `DATABASE_URL`, `pgmi.yaml`), is refused, exit 10, naming the setting and its source, since trimmed it would read as localhost or 5432 (PGMI-1094, case `connection/whitespace-host-refused`; Go refuses the same forms in its own words, except a blank entry after the first of a host list, which it never reaches when the first host answers); ADO.NET text after a closing
+`connect_timeout`, and a repeated key takes its last value, as libpq (Go takes the first; row "Repeated URI query key"). A connection
+setting written empty or as white space only is refused by the Rust binary,
+exit 10, naming the setting and where it was written, and is never read as
+unset (PGMI-1105; row "A connection setting written empty or as white space
+only" under "Behaviour changes in 0.20"). Read as unset it would give way to
+the next source or to the built-in default (localhost, 5432, `prefer`), a
+server or a setting the operator did not name. This holds for every key of a
+connection string in each form (`host=''`, `?sslmode=`, `Port=;`; ADO.NET
+trims a value without quotes, so `Port= ;` is empty too), for an entry of a
+host or port list (`host=a,,c`), for a URI that writes a user or a port but
+no host (`postgresql://u@:5433/db`), a colon and no port (`@h:/db`) or an `@`
+and no user, for a connection flag (`-h ''`, `-U ''`, `-d ''`, `--sslcert ''`,
+`--sslkey ''`, `--sslrootcert ''`), for a `PG*` connection variable,
+`PGMI_CONNECTION_STRING` and `DATABASE_URL`, and for a `pgmi.yaml` connection
+value. A variable or `pgmi.yaml` value is judged only where it would apply:
+one that a nearer source replaces is not read. Not refused: a password
+(`password`, `sslpassword`, `PGPASSWORD`, `PGSSLPASSWORD`), where empty means
+none and white space is the password as written; a URI with no authority
+(`postgresql:///db`) or no path, which writes no host and no database; an
+empty `hostaddr` entry beside a host name, which looks that host up; a host
+without a port in a URI list beside one with a port, which is 5432. Go reads
+an empty value as unset and refuses white space in its own words (cases
+`connection/empty-value-refused`, `connection/empty-host-uses-pghost`,
+`connection/whitespace-host-refused`); ADO.NET text after a closing
 quote is dropped up to the next `;`; a keyword/value `connect_timeout` that is
 not a number is refused even when the key comes again with a number (any other
 repeated keyword takes its last value) (case `connection/empty-and-trailing-values`). `-d` (or `PGDATABASE`, or
@@ -1555,6 +1575,7 @@ release notes take their "Behaviour changes" section from this table.
 
 | Change | 0.14 (Go) | 0.20 (Rust) | Decided |
 |---|---|---|---|
+| A connection setting written empty or as white space only | an empty value is unset: the next source or the built-in default applies (localhost, 5432, `prefer`), also for `-h ''`, `PGHOST=`, `host=''`, `Host=;`, `?sslmode=`; only some forms are refused (`Port=;`, white space in a host or port) | refused before connecting, exit 10, naming the setting and where it was written: every key of a connection string in each form, a list entry, a connection flag, a `PG*` connection variable, `PGMI_CONNECTION_STRING`, `DATABASE_URL` and a `pgmi.yaml` connection value, each where it would apply. A password is not judged (empty is none) | owner 2026-11-16 (PGMI-1105; replaces the PGMI-1073 and PGMI-1094 rules) |
 | Whole-deployment retry | the first failure ends the run | a transient failure (class 08, a lost connection, 57P01 after a server restart, 57P02, 57P03, 53300, 40001, 40P01, 55P03, 25006 on a hot standby, a sign-in or connect retry that gave up) runs the deploy again from the start inside `--timeout`, once an attempt has reached the server (a first attempt that never connects fails at once, as in Go), waiting 1 s doubling to 30 s; once a unit has committed the failure is final, as in Go, unless `retry_after_commit: true` in `pgmi.yaml` allows a rerun (owner 2026-11-12, PGMI-918); a unit whose reply was lost is never retried (owner 2026-11-13, PGMI-970); `retry: false` turns retrying off; `--json` adds `attempts` (each with its `unitsCommitted`) and `timeUsedMs` | owner 2026-11-12 (record 0025) |
 | `sslmode=verify-ca` with no `sslrootcert` (the system trust store) | any certificate a trusted CA issued, for any host name | the host name is checked too, as in `verify-full`; with an explicit root file `verify-ca` checks no name, as before | owner 2026-11-12 (PGMI-923) |
 | project `.env` that starts with a UTF-8 byte-order mark | warning, none of it applied | applied, the mark ignored | owner 2026-11-12 (PGMI-943) |

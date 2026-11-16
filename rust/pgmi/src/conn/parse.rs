@@ -56,6 +56,43 @@ pub(crate) const KNOWN: &[&str] = &[
 
 const HIDDEN: &str = "not shown, it may hold a password";
 
+/// How a written value names nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Blank {
+    Empty,
+    Whitespace,
+}
+
+impl Blank {
+    fn of(text: &str) -> Option<Self> {
+        if text.is_empty() {
+            Some(Blank::Empty)
+        } else if text.trim().is_empty() {
+            Some(Blank::Whitespace)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Blank::Empty => "empty",
+            Blank::Whitespace => "only whitespace",
+        }
+    }
+}
+
+/// Whether the value written for `key` names nothing: it is empty or white
+/// space, or one entry of a host, port or `hostaddr` list is. A password is
+/// never judged: an empty one is no password and white space is a password.
+pub(crate) fn blank(key: &str, value: &str) -> Option<Blank> {
+    match key {
+        "password" | "sslpassword" => None,
+        "host" | "port" | "hostaddr" => value.split(',').find_map(Blank::of),
+        _ => Blank::of(value),
+    }
+}
+
 /// Why a connection string was refused. The text never shows the string
 /// itself, which may hold a password.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +103,7 @@ pub(crate) enum ParseError {
     UnknownKey(String),
     UnknownKeyBesidePassword,
     InvalidPort,
+    Blank { key: &'static str, how: Blank },
     PercentEncoding,
     NotUtf8,
     UnterminatedBracket,
@@ -96,6 +134,11 @@ impl fmt::Display for ParseError {
             ParseError::InvalidPort => write!(
                 f,
                 "invalid port in connection string ({HIDDEN}): want a number from 1 to 65535"
+            ),
+            ParseError::Blank { key, how } => write!(
+                f,
+                "the {key} in the connection string is {}; write the {key}, or remove it",
+                how.as_str()
             ),
             ParseError::PercentEncoding => {
                 f.write_str("invalid percent-encoding in connection string")
@@ -157,7 +200,7 @@ fn after_password(s: &str, key: &str) -> bool {
 
 fn fields(t: &str) -> Result<Fields> {
     let scheme = t.get(..t.find("://").map_or(0, |i| i + 3)).unwrap_or("");
-    let mut fields = if scheme.eq_ignore_ascii_case("postgresql://")
+    let fields = if scheme.eq_ignore_ascii_case("postgresql://")
         || scheme.eq_ignore_ascii_case("postgres://")
     {
         uri(t)?
@@ -169,11 +212,6 @@ fn fields(t: &str) -> Result<Fields> {
         keyword(t)?
     };
     check(&fields)?;
-    for key in ["sslmode", "host"] {
-        if fields.get(key).is_some_and(String::is_empty) {
-            fields.remove(key);
-        }
-    }
     Ok(fields)
 }
 
@@ -181,13 +219,24 @@ fn check(f: &Fields) -> Result<()> {
     if f.contains_key("service") {
         return Err(ParseError::ServiceFile);
     }
-    for k in ["requirepeer", "sslcrl", "sslcrldir"] {
-        if f.get(k).is_some_and(|v| !v.is_empty()) {
-            return Err(ParseError::Unsupported(k));
+    for (k, v) in f {
+        let Some(key) = KNOWN.iter().copied().find(|known| *known == k.as_str()) else {
+            return Err(ParseError::UnknownKey(k.clone()));
+        };
+        let by_name = key == "hostaddr" && !v.is_empty() && f.contains_key("host");
+        let how = if by_name {
+            blank(key, v).filter(|how| *how == Blank::Whitespace)
+        } else {
+            blank(key, v)
+        };
+        if let Some(how) = how {
+            return Err(ParseError::Blank { key, how });
         }
     }
-    if let Some(k) = f.keys().find(|k| !KNOWN.contains(&k.as_str())) {
-        return Err(ParseError::UnknownKey(k.clone()));
+    for k in ["requirepeer", "sslcrl", "sslcrldir"] {
+        if f.contains_key(k) {
+            return Err(ParseError::Unsupported(k));
+        }
     }
     if let Some(ports) = f.get("port")
         && ports
@@ -274,39 +323,35 @@ fn uri(s: &str) -> Result<Fields> {
         None => ("", authority),
     };
     let mut out = Fields::new();
-    if !userinfo.is_empty() {
+    if authority.contains('@') {
         let (u, p) = match userinfo.split_once(':') {
             Some((u, p)) => (u, Some(p)),
             None => (userinfo, None),
         };
-        if !u.is_empty() {
-            out.insert("user".into(), decode(u)?);
-        }
+        out.insert("user".into(), decode(u)?);
         if let Some(p) = p {
             out.insert("password".into(), decode(p)?);
         }
     }
-    let (mut hosts, mut ports) = (vec![], vec![]);
-    if !hostlist.is_empty() {
+    if !authority.is_empty() {
+        let (mut hosts, mut ports) = (vec![], vec![]);
         for hp in hostlist.split(',') {
             let (h, p) = if let Some(r) = hp.strip_prefix('[') {
                 let (h, after) = r.split_once(']').ok_or(ParseError::UnterminatedBracket)?;
-                (
-                    h.to_string(),
-                    after.strip_prefix(':').unwrap_or("").to_string(),
-                )
+                (h.to_string(), after.strip_prefix(':'))
             } else {
                 match hp.rsplit_once(':') {
-                    Some((h, p)) => (decode(h)?, p.to_string()),
-                    None => (decode(hp)?, String::new()),
+                    Some((h, p)) => (decode(h)?, Some(p)),
+                    None => (decode(hp)?, None),
                 }
             };
             hosts.push(h);
             ports.push(p);
         }
         out.insert("host".into(), hosts.join(","));
-        if ports.iter().any(|p| !p.is_empty()) {
-            out.insert("port".into(), ports.join(","));
+        if ports.iter().any(Option::is_some) {
+            let written: Vec<&str> = ports.iter().map(|p| p.unwrap_or("5432")).collect();
+            out.insert("port".into(), written.join(","));
         }
     }
     if !path.is_empty() {
@@ -485,7 +530,7 @@ fn ado(s: &str) -> Result<Fields> {
 
 fn npgsql_sslmode(v: &str) -> Result<String> {
     let m = match v.to_ascii_lowercase().replace('-', "").as_str() {
-        "" => "",
+        blank if blank.trim().is_empty() => return Ok(v.to_string()),
         "disable" => "disable",
         "allow" => "allow",
         "prefer" => "prefer",
@@ -543,29 +588,40 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_host_is_unset_in_every_form_so_pghost_still_applies() {
+    fn a_host_is_unset_only_where_the_string_does_not_write_one() {
         for (text, port) in [
-            ("postgresql://u:p@:5433/db", Some("5433")),
-            ("postgresql://:5433/db", Some("5433")),
-            ("postgresql://u@/db", None),
             ("postgresql:///db", None),
-            ("postgresql://u:p@/db?port=5433", Some("5433")),
-            ("postgresql://u:p@:5433/db?host=", Some("5433")),
-            ("host='' port=5433 dbname=db", Some("5433")),
-            ("Host=;Port=5433;Database=db", Some("5433")),
-            ("Server=\"\";Database=db", None),
+            ("postgresql:///db?port=5433", Some("5433")),
+            ("port=5433 dbname=db", Some("5433")),
+            ("Port=5433;Database=db", Some("5433")),
         ] {
             let f = parse(text).unwrap();
             assert_eq!(f.get("host"), None, "{text}");
             assert_eq!(f.get("port").map(String::as_str), port, "{text}");
             assert_eq!(f["dbname"], "db", "{text}");
         }
-        let f = parse("postgresql://u@,h2:5433/db").unwrap();
-        assert_eq!((f["host"].as_str(), f["port"].as_str()), (",h2", ",5433"));
+        for text in [
+            "postgresql://u:p@:5433/db",
+            "postgresql://:5433/db",
+            "postgresql://u@/db",
+            "postgresql://u:p@/db?port=5433",
+            "postgresql://u:p@:5433/db?host=",
+            "postgresql://u@h1/db?host=",
+            "postgresql://u@,h2:5433/db",
+            "host='' port=5433 dbname=db",
+            "Host=;Port=5433;Database=db",
+            "Server=\"\";Database=db",
+        ] {
+            let empty_host = ParseError::Blank {
+                key: "host",
+                how: Blank::Empty,
+            };
+            assert_eq!(parse(text), Err(empty_host), "{text}");
+        }
         let f = parse("postgresql://u@:5433/db?host=h9").unwrap();
         assert_eq!((f["host"].as_str(), f["port"].as_str()), ("h9", "5433"));
-        let f = parse("postgresql://u@h1/db?host=").unwrap();
-        assert_eq!(f.get("host"), None);
+        let f = parse("postgresql://u@h1:5433,h2/db").unwrap();
+        assert_eq!(f["port"], "5433,5432");
     }
 
     #[test]
@@ -607,7 +663,13 @@ mod tests {
             let e = parse(&format!("host=h {k}=x")).unwrap_err();
             assert_eq!(e, ParseError::Unsupported(k));
             assert!(e.to_string().starts_with(k), "{e}");
-            assert!(parse(&format!("host=h {k}=")).is_ok());
+            assert_eq!(
+                parse(&format!("host=h {k}=")),
+                Err(ParseError::Blank {
+                    key: k,
+                    how: Blank::Empty
+                })
+            );
         }
     }
 
@@ -906,7 +968,11 @@ mod tests {
             "host=h sslmode=''",
             "postgresql://h/d?sslmode=",
         ] {
-            assert!(!parse(given).unwrap().contains_key("sslmode"), "{given}");
+            let empty_mode = ParseError::Blank {
+                key: "sslmode",
+                how: Blank::Empty,
+            };
+            assert_eq!(parse(given), Err(empty_mode), "{given}");
         }
         assert_eq!(
             parse("host=h connect_timeout=x connect_timeout=5").unwrap()["connect_timeout"],

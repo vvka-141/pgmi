@@ -35,3 +35,6 @@ steps:
     expect:
       exit: 0
       stderr: ["^connection: from PGHOST \\({host}:{port}/{db}\\)$"]
+      rust:
+        exit: 10
+        stderr: ['^pgmi: error: the host from -h is empty; write the host, or remove it so the next source applies$']
