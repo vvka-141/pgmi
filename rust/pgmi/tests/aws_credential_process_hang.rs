@@ -18,7 +18,38 @@ struct Hung {
     started: Instant,
 }
 
-fn deploy_with_a_hung_credential_process(name: &str, args: &[&str]) -> std::io::Result<Hung> {
+const ROLE: &str = "role_arn = arn:aws:iam::123456789012:role/x";
+
+/// AWS config files whose selected profile `hung` gets its credentials from
+/// the helper `{helper}`: itself, next to access keys the SDK ranks below
+/// it, and through one or two roles' `source_profile`.
+fn configs() -> Vec<(&'static str, String)> {
+    vec![
+        ("own", "[profile hung]\ncredential_process = {helper}\n".into()),
+        (
+            "beside-keys",
+            "[profile hung]\naws_access_key_id = AKIDSTATIC\naws_secret_access_key = x\ncredential_process = {helper}\n".into(),
+        ),
+        (
+            "source-profile",
+            format!("[profile base]\ncredential_process = {{helper}}\n[profile hung]\n{ROLE}\nsource_profile = base\n"),
+        ),
+        (
+            "two-roles",
+            format!("[profile base]\ncredential_process = {{helper}}\n[profile middle]\n{ROLE}\nsource_profile = base\n[profile hung]\n{ROLE}\nsource_profile = middle\n"),
+        ),
+        (
+            "own-source",
+            format!("[profile hung]\n{ROLE}\nsource_profile = hung\ncredential_process = {{helper}}\n"),
+        ),
+    ]
+}
+
+fn deploy_with_a_hung_credential_process(
+    name: &str,
+    config: &str,
+    args: &[&str],
+) -> std::io::Result<Hung> {
     let root = std::env::temp_dir().join(format!("pgmi-aws-hang-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     for dir in ["project", "pids"] {
@@ -30,10 +61,7 @@ fn deploy_with_a_hung_credential_process(name: &str, args: &[&str]) -> std::io::
     std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755))?;
     std::fs::write(
         root.join("config"),
-        format!(
-            "[profile hung]\ncredential_process = {}\n",
-            helper.display()
-        ),
+        config.replace("{helper}", &helper.display().to_string()),
     )?;
     let child = Command::new(env!("CARGO_BIN_EXE_pgmi"))
         .arg("deploy")
@@ -125,32 +153,58 @@ fn gone(pid: &str) -> bool {
 
 #[test]
 fn a_hung_credential_process_is_ended_after_its_limit_even_with_no_time_box() {
-    let mut run = deploy_with_a_hung_credential_process("limit", &["--timeout", "0"]).unwrap();
-    let (helper, sleep) = (run.pid("helper"), run.pid("sleep"));
-    let (code, stderr, took) = run.exit_within(Duration::from_secs(20)).unwrap();
-    assert_eq!(code, Some(11), "{stderr}");
-    assert!(
-        stderr.contains("credential_process did not answer within 2 s and was ended"),
-        "{stderr}"
-    );
-    assert!(took < Duration::from_secs(10), "took {took:?}: {stderr}");
-    assert!(
-        gone(&helper),
-        "the credential_process (pid {helper}) outlived pgmi"
-    );
-    assert!(gone(&sleep), "its child (pid {sleep}) outlived pgmi");
+    for (name, config) in configs() {
+        let mut run = deploy_with_a_hung_credential_process(
+            &format!("limit-{name}"),
+            &config,
+            &["--timeout", "0"],
+        )
+        .unwrap();
+        let (helper, sleep) = (run.pid("helper"), run.pid("sleep"));
+        let (code, stderr, took) = run.exit_within(Duration::from_secs(20)).unwrap();
+        assert_eq!(code, Some(11), "{name}: {stderr}");
+        assert!(
+            stderr.contains("credential_process did not answer within 2 s and was ended"),
+            "{name}: {stderr}"
+        );
+        assert!(
+            took < Duration::from_secs(10),
+            "{name}: took {took:?}: {stderr}"
+        );
+        assert!(
+            gone(&helper),
+            "{name}: the credential_process (pid {helper}) outlived pgmi"
+        );
+        assert!(
+            gone(&sleep),
+            "{name}: its child (pid {sleep}) outlived pgmi"
+        );
+    }
 }
 
 #[test]
 fn the_time_box_ends_a_hung_credential_process_with_everything_it_started() {
-    let mut run = deploy_with_a_hung_credential_process("timebox", &["--timeout", "1s"]).unwrap();
-    let (helper, sleep) = (run.pid("helper"), run.pid("sleep"));
-    let (code, stderr, took) = run.exit_within(Duration::from_secs(20)).unwrap();
-    assert!(code.is_some(), "pgmi did not exit: {stderr}");
-    assert!(took < Duration::from_secs(5), "took {took:?}: {stderr}");
-    assert!(
-        gone(&helper),
-        "the credential_process (pid {helper}) outlived pgmi"
-    );
-    assert!(gone(&sleep), "its child (pid {sleep}) outlived pgmi");
+    for (name, config) in configs() {
+        let mut run = deploy_with_a_hung_credential_process(
+            &format!("timebox-{name}"),
+            &config,
+            &["--timeout", "1s"],
+        )
+        .unwrap();
+        let (helper, sleep) = (run.pid("helper"), run.pid("sleep"));
+        let (code, stderr, took) = run.exit_within(Duration::from_secs(20)).unwrap();
+        assert!(code.is_some(), "{name}: pgmi did not exit: {stderr}");
+        assert!(
+            took < Duration::from_secs(5),
+            "{name}: took {took:?}: {stderr}"
+        );
+        assert!(
+            gone(&helper),
+            "{name}: the credential_process (pid {helper}) outlived pgmi"
+        );
+        assert!(
+            gone(&sleep),
+            "{name}: its child (pid {sleep}) outlived pgmi"
+        );
+    }
 }

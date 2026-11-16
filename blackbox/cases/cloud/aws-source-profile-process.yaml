@@ -1,0 +1,54 @@
+description: --aws with a profile whose role is assumed with credentials a source_profile's credential_process prints, through one role and two roles; the role's session name and external id reach STS. A source profile's access keys rank before its credential_process. The Rust binary runs the helper itself on these routes, with a time limit (PGMI-1067)
+servers: [fakes]
+home:
+  .aws/config: |
+    [profile base]
+    credential_process = /bin/sh -c "echo '{\"Version\":1,\"AccessKeyId\":\"AKIDBASE\",\"SecretAccessKey\":\"x\"}'"
+    [profile role]
+    role_arn = arn:aws:iam::123456789012:role/inner
+    source_profile = base
+    role_session_name = pgmi-session
+    external_id = ext-1067
+    [profile outer]
+    role_arn = arn:aws:iam::123456789012:role/outer
+    source_profile = role
+    [profile keys]
+    aws_access_key_id = AKIDKEYS
+    aws_secret_access_key = x
+    credential_process = /bin/sh -c "exit 9"
+    [profile overkeys]
+    role_arn = arn:aws:iam::123456789012:role/overkeys
+    source_profile = keys
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --aws, --aws-region, us-west-2, --connection, "host=127.0.0.1 port={recorder_port} user=sp_role dbname=postgres sslmode=require", -d, "{db}"]
+    env: {AWS_PROFILE: role, AWS_CONFIG_FILE: "{home}/.aws/config", AWS_EC2_METADATA_DISABLED: "true", AWS_ENDPOINT_URL_STS: "{fake_http}/sts"}
+    timeout: 60
+    expect:
+      exit: 11
+      files:
+        "{recorder_log}": ['"user": "sp_role", "password": "[^"]*X-Amz-Credential=ASIAFAKEROLE%2F']
+        "{fake_http_log}":
+          - "POST /sts.*Credential=AKIDBASE/.*RoleArn=arn%3Aaws%3Aiam%3A%3A123456789012%3Arole%2Finner"
+          - "POST /sts.*Credential=AKIDBASE/.*RoleSessionName=pgmi-session"
+          - "POST /sts.*Credential=AKIDBASE/.*ExternalId=ext-1067"
+  - pgmi: [deploy, "{project}", --aws, --aws-region, us-west-2, --connection, "host=127.0.0.1 port={recorder_port} user=sp_outer dbname=postgres sslmode=require", -d, "{db}"]
+    env: {AWS_PROFILE: outer, AWS_CONFIG_FILE: "{home}/.aws/config", AWS_EC2_METADATA_DISABLED: "true", AWS_ENDPOINT_URL_STS: "{fake_http}/sts"}
+    timeout: 60
+    expect:
+      exit: 11
+      files:
+        "{recorder_log}": ['"user": "sp_outer", "password": "[^"]*X-Amz-Credential=ASIAFAKEROLE%2F']
+        "{fake_http_log}":
+          - "POST /sts.*Credential=ASIAFAKEROLE/.*RoleArn=arn%3Aaws%3Aiam%3A%3A123456789012%3Arole%2Fouter"
+          - "POST /sts.*Credential=ASIAFAKEROLE/.*RoleSessionName=[A-Za-z0-9-]+"
+  - pgmi: [deploy, "{project}", --aws, --aws-region, us-west-2, --connection, "host=127.0.0.1 port={recorder_port} user=sp_overkeys dbname=postgres sslmode=require", -d, "{db}"]
+    env: {AWS_PROFILE: overkeys, AWS_CONFIG_FILE: "{home}/.aws/config", AWS_EC2_METADATA_DISABLED: "true", AWS_ENDPOINT_URL_STS: "{fake_http}/sts"}
+    timeout: 60
+    expect:
+      exit: 11
+      files:
+        "{recorder_log}": ['"user": "sp_overkeys", "password": "[^"]*X-Amz-Credential=ASIAFAKEROLE%2F']
+        "{fake_http_log}": ["POST /sts.*Credential=AKIDKEYS/.*RoleArn=arn%3Aaws%3Aiam%3A%3A123456789012%3Arole%2Foverkeys"]

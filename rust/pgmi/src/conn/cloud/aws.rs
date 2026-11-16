@@ -116,26 +116,42 @@ pub(crate) async fn signer(req: &Options, env: &Env) -> Result<Signer> {
     let region = region(req, env)?;
     let retries = retries(env)?;
     let http = SharedHttpClient::new(Reqwest(client()?));
-    let mut loader = aws_config::defaults(BehaviorVersion::latest())
-        .region(Region::new(region.clone()))
-        .http_client(http)
-        .retry_config(retries);
-    if let Some(command) = profile_process(env).await {
-        loader = loader.credentials_provider(
-            aws_config::meta::credentials::CredentialsProviderChain::first_try(
-                "Environment",
-                aws_config::environment::EnvironmentVariableCredentialsProvider::new(),
-            )
-            .or_else(
-                "CredentialProcess",
-                Process {
-                    command,
-                    patience: process_patience(env),
-                },
-            ),
-        );
-    }
-    let config = loader.load().await;
+    let loader = || {
+        aws_config::defaults(BehaviorVersion::latest())
+            .region(Region::new(region.clone()))
+            .http_client(http.clone())
+            .retry_config(retries.clone())
+    };
+    let config = match profile_process(env).await {
+        Some(chain) => {
+            let process = Process {
+                command: chain.command,
+                patience: process_patience(env),
+            };
+            let from_profile = if chain.roles.is_empty() {
+                SharedCredentialsProvider::new(process)
+            } else {
+                let sts = loader().no_credentials().load().await;
+                let mut provider = SharedCredentialsProvider::new(process);
+                for role in chain.roles.into_iter().rev() {
+                    provider =
+                        SharedCredentialsProvider::new(role.assumed_by(provider, &sts).await);
+                }
+                provider
+            };
+            loader()
+                .credentials_provider(
+                    aws_config::meta::credentials::CredentialsProviderChain::first_try(
+                        "Environment",
+                        aws_config::environment::EnvironmentVariableCredentialsProvider::new(),
+                    )
+                    .or_else("CredentialProcess", from_profile),
+                )
+                .load()
+                .await
+        }
+        None => loader().load().await,
+    };
     let provider = config.credentials_provider().ok_or_else(|| {
         Error::connection("failed to acquire AWS IAM token: no credentials provider")
     })?;
@@ -162,11 +178,49 @@ fn process_patience(_: &Env) -> Duration {
     PROCESS_PATIENCE
 }
 
-/// The selected profile's `credential_process`, when the SDK would run it
-/// for that profile itself: the profile names no role, web identity, SSO,
-/// login session or access key, which the SDK would use first. The SDK runs
-/// the command with neither a time limit nor a kill, so pgmi runs it.
-async fn profile_process(env: &Env) -> Option<String> {
+/// A `credential_process` the selected profile's credentials start from,
+/// and the roles to assume with them, the selected profile's last.
+struct ProcessChain {
+    command: String,
+    roles: Vec<Role>,
+}
+
+/// One profile's `role_arn` with what the SDK passes along when it assumes
+/// the role for a profile.
+struct Role {
+    arn: String,
+    external_id: Option<String>,
+    session_name: Option<String>,
+}
+
+impl Role {
+    async fn assumed_by(
+        self,
+        base: SharedCredentialsProvider,
+        sts: &aws_config::SdkConfig,
+    ) -> aws_config::sts::AssumeRoleProvider {
+        let session_name = self.session_name.unwrap_or_else(|| {
+            let since_epoch = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default();
+            format!("assume-role-from-profile-{}", since_epoch.as_millis())
+        });
+        let mut builder = aws_config::sts::AssumeRoleProvider::builder(self.arn)
+            .configure(sts)
+            .session_name(session_name);
+        if let Some(id) = self.external_id {
+            builder = builder.external_id(id);
+        }
+        builder.build_from_provider(base).await
+    }
+}
+
+/// The `credential_process` the SDK would run for the selected profile, as
+/// its profile chain finds it: the profile's own, or the one its roles'
+/// `source_profile`s end at. The SDK runs the command with neither a time
+/// limit nor a kill, so pgmi runs it, and assumes the roles on top. `None`
+/// leaves every other profile, and every mistake in one, to the SDK.
+async fn profile_process(env: &Env) -> Option<ProcessChain> {
     let names = [
         "AWS_CONFIG_FILE",
         "AWS_SHARED_CREDENTIALS_FILE",
@@ -188,20 +242,66 @@ async fn profile_process(env: &Env) -> Option<String> {
     )
     .await
     .ok()?;
-    let profile = profiles.get_profile(profiles.selected_profile())?;
-    let shadowed = [
-        "role_arn",
+    process_chain(profiles.selected_profile(), |name| {
+        let profile = profiles.get_profile(name)?;
+        Some(|key: &str| profile.get(key).map(str::to_string))
+    })
+}
+
+/// Walks the profiles as the SDK's `resolve_chain` does: `profile` gives a
+/// profile's values by key, or `None` when there is no such profile.
+fn process_chain<P: Fn(&str) -> Option<String>>(
+    selected: &str,
+    profile: impl Fn(&str) -> Option<P>,
+) -> Option<ProcessChain> {
+    const NOT_A_PROCESS: [&str; 8] = [
         "credential_source",
         "web_identity_token_file",
         "sso_session",
         "sso_start_url",
+        "sso_account_id",
+        "sso_region",
+        "sso_role_name",
         "login_session",
-        "aws_access_key_id",
     ];
-    if shadowed.iter().any(|k| profile.get(k).is_some()) {
+    let mut name = selected.to_string();
+    let mut visited: Vec<String> = Vec::new();
+    let mut roles = Vec::new();
+    let base = loop {
+        let value = profile(&name)?;
+        if visited.contains(&name) {
+            return None;
+        }
+        visited.push(name.clone());
+        let keys_rank_first = visited.len() > 1
+            && value("aws_access_key_id").is_some()
+            && value("aws_secret_access_key").is_some();
+        if keys_rank_first {
+            return None;
+        }
+        let role = value("role_arn").filter(|_| value("web_identity_token_file").is_none());
+        let Some(arn) = role else { break value };
+        if value("credential_source").is_some() {
+            return None;
+        }
+        let next = value("source_profile")?;
+        roles.push(Role {
+            arn,
+            external_id: value("external_id"),
+            session_name: value("role_session_name"),
+        });
+        if next == name {
+            break value;
+        }
+        name = next;
+    };
+    if NOT_A_PROCESS.iter().any(|key| base(key).is_some()) {
         return None;
     }
-    profile.get("credential_process").map(str::to_string)
+    Some(ProcessChain {
+        command: base("credential_process")?,
+        roles,
+    })
 }
 
 /// A profile's `credential_process`, run in its own process group, given
@@ -448,6 +548,151 @@ mod tests {
                 e.text()
             );
         }
+    }
+
+    fn chain_of(
+        selected: &str,
+        config: &[(&str, &[(&str, &str)])],
+    ) -> Option<(String, Vec<String>)> {
+        process_chain(selected, |name| {
+            let (_, keys) = config.iter().find(|(n, _)| *n == name)?;
+            Some(|key: &str| {
+                keys.iter()
+                    .find(|(k, _)| *k == key)
+                    .map(|(_, v)| (*v).to_string())
+            })
+        })
+        .map(|c| {
+            let roles = c
+                .roles
+                .iter()
+                .map(|r| {
+                    format!(
+                        "{} {} {}",
+                        r.arn,
+                        r.session_name.as_deref().unwrap_or("-"),
+                        r.external_id.as_deref().unwrap_or("-")
+                    )
+                })
+                .collect();
+            (c.command, roles)
+        })
+    }
+
+    #[test]
+    fn the_credential_process_a_profile_chain_ends_at_is_found_with_its_roles_selected_first() {
+        let process = ("credential_process", "helper");
+        let config: &[(&str, &[(&str, &str)])] = &[
+            ("own", &[process]),
+            (
+                "beside-keys",
+                &[
+                    ("aws_access_key_id", "k"),
+                    ("aws_secret_access_key", "s"),
+                    process,
+                ],
+            ),
+            ("one", &[("role_arn", "r1"), ("source_profile", "own")]),
+            (
+                "two",
+                &[
+                    ("role_arn", "r2"),
+                    ("source_profile", "one"),
+                    ("role_session_name", "name"),
+                    ("external_id", "id"),
+                ],
+            ),
+            (
+                "self",
+                &[("role_arn", "rs"), ("source_profile", "self"), process],
+            ),
+        ];
+        let found = |selected| chain_of(selected, config);
+        assert_eq!(found("own"), Some(("helper".into(), vec![])));
+        assert_eq!(found("beside-keys"), Some(("helper".into(), vec![])));
+        assert_eq!(found("one"), Some(("helper".into(), vec!["r1 - -".into()])));
+        assert_eq!(
+            found("two"),
+            Some(("helper".into(), vec!["r2 name id".into(), "r1 - -".into()]))
+        );
+        assert_eq!(
+            found("self"),
+            Some(("helper".into(), vec!["rs - -".into()]))
+        );
+    }
+
+    #[test]
+    fn a_profile_chain_the_sdk_resolves_another_way_or_refuses_is_left_to_the_sdk() {
+        let process = ("credential_process", "helper");
+        let role = ("role_arn", "r");
+        let config: &[(&str, &[(&str, &str)])] = &[
+            (
+                "keys",
+                &[("aws_access_key_id", "k"), ("aws_secret_access_key", "s")],
+            ),
+            (
+                "keys-and-process",
+                &[
+                    ("aws_access_key_id", "k"),
+                    ("aws_secret_access_key", "s"),
+                    process,
+                ],
+            ),
+            ("over-keys", &[role, ("source_profile", "keys-and-process")]),
+            (
+                "named-source",
+                &[role, ("credential_source", "Environment"), process],
+            ),
+            (
+                "both-sources",
+                &[
+                    role,
+                    ("source_profile", "process"),
+                    ("credential_source", "Environment"),
+                ],
+            ),
+            ("no-source", &[role, process]),
+            (
+                "web-identity",
+                &[role, ("web_identity_token_file", "/t"), process],
+            ),
+            (
+                "over-web-identity",
+                &[role, ("source_profile", "web-identity")],
+            ),
+            ("sso", &[("sso_session", "s"), process]),
+            ("sso-part", &[("sso_region", "eu"), process]),
+            ("login", &[("login_session", "s"), process]),
+            ("over-sso", &[role, ("source_profile", "sso")]),
+            ("missing-source", &[role, ("source_profile", "nowhere")]),
+            ("loop-a", &[role, ("source_profile", "loop-b")]),
+            ("loop-b", &[role, ("source_profile", "loop-a")]),
+            ("process", &[process]),
+            ("half-keys", &[("aws_access_key_id", "k"), process]),
+            ("over-half-keys", &[role, ("source_profile", "half-keys")]),
+        ];
+        for selected in [
+            "keys",
+            "over-keys",
+            "named-source",
+            "both-sources",
+            "no-source",
+            "web-identity",
+            "over-web-identity",
+            "sso",
+            "sso-part",
+            "login",
+            "over-sso",
+            "missing-source",
+            "loop-a",
+            "nowhere",
+        ] {
+            assert_eq!(chain_of(selected, config), None, "{selected}");
+        }
+        assert_eq!(
+            chain_of("over-half-keys", config),
+            Some(("helper".into(), vec!["r - -".into()]))
+        );
     }
 
     #[test]

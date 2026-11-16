@@ -896,12 +896,16 @@ naming the user and pointing at `--username`.
 (`host:port?Action=connect&DBUser=...&X-Amz-...`, valid 900 s), region from
 `--aws-region`, else `AWS_REGION`, else `AWS_DEFAULT_REGION`, else exit 10.
 A `credential_process` gets one minute, as in Go's SDK, also under
-`--timeout 0`; the Rust binary runs the selected profile's
-`credential_process` itself and ends it, with everything it started, at that
-limit or when the deploy stops (`the profile's credential_process did not
-answer within 60 s and was ended`, exit 11). One in a `source_profile` of a
-role profile is run by the AWS SDK, without that limit (PGMI-1049, case
-`cloud/aws-credential-process`, Rust tests `aws_credential_process_hang`).
+`--timeout 0`; the Rust binary runs the `credential_process` itself and ends
+it, with everything it started, at that limit or when the deploy stops (`the
+profile's credential_process did not answer within 60 s and was ended`, exit
+11). That holds for the selected profile's own `credential_process` and for
+one its roles' `source_profile`s end at, through any number of roles: pgmi
+finds it as the SDK's profile chain does, runs it, and assumes each role on
+top with the profile's `role_session_name` and `external_id` (PGMI-1049,
+PGMI-1067; cases `cloud/aws-credential-process`,
+`cloud/aws-source-profile-process`, Rust tests `aws_credential_process_hang`).
+Every other profile shape, and every mistake in one, is left to the SDK.
 `--google`: needs `--google-instance` (exit 10); connects through the Cloud SQL
 connector with IAM authentication, signed in with Application Default
 Credentials: `GOOGLE_APPLICATION_CREDENTIALS`, else gcloud's

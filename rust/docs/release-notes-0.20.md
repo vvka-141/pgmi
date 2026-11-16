@@ -206,9 +206,9 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
 - **A hung AWS `credential_process` no longer holds up sign-in.** pgmi
   runs the selected profile's `credential_process` itself and gives it one
   minute, as Go's SDK does, also under `--timeout 0`; then it is ended with
-  everything it started, and nothing of it outlives pgmi. The Databricks CLI
-  is ended the same way. A `credential_process` in a `source_profile` that a
-  role profile assumes from is still run by the AWS SDK.
+  everything it started, and nothing of it outlives pgmi. The same holds
+  for a `credential_process` in a `source_profile` that a role profile
+  assumes from. The Databricks CLI is ended the same way.
 - **A slow or stalled stderr never stalls a deploy.** pgmi writes stderr
   from a queue: `--timeout` and Ctrl-C work while nobody reads it. When more
   than 4 MiB wait, server notices are dropped and one line says how many;
