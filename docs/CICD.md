@@ -219,7 +219,7 @@ each one.
 | `PGTARGETSESSIONATTRS` | `target_session_attrs`, e.g. `read-write` with several hosts |
 | `PGREQUIREAUTH`, `PGCHANNELBINDING` | Refuse authentication methods, require SCRAM channel binding |
 | `PGSSLNEGOTIATION`, `PGSSLSNI`, `PGSSLCERTMODE` | TLS handshake details |
-| `PGMINPROTOCOLVERSION`, `PGMAXPROTOCOLVERSION` | Protocol version range (`3.2` and `latest` are refused, exit 10) |
+| `PGMINPROTOCOLVERSION`, `PGMAXPROTOCOLVERSION` | Protocol version range (a minimum of `3.2` or `latest` is refused, exit 10; as a maximum both are accepted, and the session speaks 3.0) |
 | `PGCLIENTENCODING` | The session's `client_encoding`; without it the deploy uses the database's encoding. `auto` exits 10 |
 
 **Read by the cloud sign-in**, only with `--azure`, `--aws`, `--google` or

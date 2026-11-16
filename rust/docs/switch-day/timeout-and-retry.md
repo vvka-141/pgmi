@@ -58,7 +58,8 @@ read-only server is what was asked for, and the error is final.
 ### Never retried
 
 - any other SQL error: syntax, constraint, permission, undefined object, a
-  `RAISE EXCEPTION` of the project's own;
+  `RAISE EXCEPTION` of the project's own, unless it carries one of the
+  SQLSTATEs above (`RAISE ... USING ERRCODE = '55P03'` is retried);
 - every failure inside a test (`CALL pgmi_test()`): exit 13, the test named
   in the failure record;
 - configuration errors (exit 10);

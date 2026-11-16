@@ -1,5 +1,5 @@
 pub(crate) mod commands;
-mod help_text;
+pub(crate) mod help_text;
 pub(crate) mod usage;
 
 use std::path::PathBuf;

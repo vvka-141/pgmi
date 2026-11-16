@@ -125,6 +125,12 @@ case in small: `hint` says what it may have left (an INVALID index to drop).
 | `psql` | N | The failure was after the first top-level `COMMIT`. N units committed: everything through that `COMMIT`, then each tail statement before the failing one. Redeploying runs them again, so they must be re-runnable |
 | absent | | `deploy.sql` never started. Nothing ran |
 
+The table reads the last attempt. pgmi may have run the deploy more than
+once (`attempts`); with `retry_after_commit: true` in `pgmi.yaml` an earlier
+attempt may have committed units although the last one shows 0 or
+`executionMode` is absent. Add up `attempts[].unitsCommitted` before
+concluding that nothing applied.
+
 Two fields change that answer. pgmi makes the database before `deploy.sql`
 runs, so a rollback does not undo it:
 

@@ -386,6 +386,13 @@ accept:
     rust: '(?m)^ "timeUsedMs": \d+,\n'
     rust_as: ''
   - row: Whole-deployment retry
+    case: cases/(commands/(bare|bare-not-interactive|help|deploy-help-exit-codes|deploy-help-text|short-help-and-sslmode-value|usage-errors)|errors/hints-kept|flags/bool-forms|terminal/no-terminal-queries)\.yaml
+    field: stdout
+    go: 'transactions, ordering, idempotency, retries are under your\ncontrol\. pgmi handles connection, parameters, and exit codes\.'
+    go_as: 'who retries'
+    rust: 'transactions, ordering and idempotency are under your control\.\npgmi handles connection, parameters and exit codes, and runs the whole deploy\nagain after a transient failure\.'
+    rust_as: 'who retries'
+  - row: Whole-deployment retry
     case: cases/serve/.*
     field: stdout
     rust: '"attempts": \[\{.*?\}\], '

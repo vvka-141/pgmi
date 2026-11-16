@@ -468,11 +468,17 @@ fn agent_texts_state_the_whole_deploy_retry() {
     ] {
         assert!(overview.contains(needed), "overview.md lacks: {needed}");
     }
+    let help = crate::cli::help_text::ROOT;
+    assert!(
+        !help.contains("retries") && help.contains("again after a transient failure"),
+        "the first screen of pgmi --help must say pgmi retries, not that retries are the user's: {help}"
+    );
     let skill = embedded("skills/pgmi-debug-deploy/SKILL.md");
     for needed in [
         "`outcomeUnknown`",
         "`attempts`",
         "unless `outcomeUnknown` is `true`",
+        "`retry_after_commit: true`",
     ] {
         assert!(skill.contains(needed), "pgmi-debug-deploy lacks: {needed}");
     }

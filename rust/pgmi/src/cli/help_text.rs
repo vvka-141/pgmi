@@ -1,9 +1,10 @@
-pub(super) const ROOT: &str = "PostgreSQL-native deployment driver.
+pub(crate) const ROOT: &str = "PostgreSQL-native deployment driver.
 
 pgmi loads your project files and CLI parameters into pg_temp tables, then
 runs deploy.sql against the target database. You write the deployment in SQL
-and PL/pgSQL — transactions, ordering, idempotency, retries are under your
-control. pgmi handles connection, parameters, and exit codes.
+and PL/pgSQL — transactions, ordering and idempotency are under your control.
+pgmi handles connection, parameters and exit codes, and runs the whole deploy
+again after a transient failure.
 
   pgmi init demo                Scaffold a starter project
   pgmi deploy ./demo -d mydb    Run deploy.sql against mydb

@@ -286,7 +286,7 @@ Parameters:
 
 Workflow:
   --overwrite            Drop and recreate the database
-  --force                Non-interactive 5s countdown (CI/CD)
+  --force                No typed confirmation: a 5s countdown on a terminal, none in CI
   --timeout DURATION     Time box of the whole run, retries included (default 3m; 0 = none)
   --compat VERSION       Refuse a binary that does not ship this session API version
   --json                 Emit structured JSON to stdout after deployment
