@@ -60,6 +60,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `serve`: a `params` key that is not an identifier (10); a `PASSWORD` literal masked in the text, `message` and `error` | ✓ `serve/deploy-param-key`, `serve/deploy-password-masked` |
 | `serve`: deploys in sequence after an open transaction or a failed tail block; overlapping deploys = 15 | ✓ `serve/deploys-in-sequence`, `serve/concurrent-deploys` |
 | `serve`: deploy `timeout` argument (16, not a duration = 10) | ✓ `serve/deploy-timeout` |
+| `serve` (Rust): a tool call that names another `sslrootcert` than the operator's (connection string or `pgmi.yaml`) is refused (10) before the operator's password is sent; a typed password keeps its own | ✓ `serve/operator-root-certificate` |
 | `init`: `{{PROJECT_NAME}}`, JSON-escaped in `.json` | ✓ `commands/init-project-name`; file modes 0644/0755 ✗ (the runner checks content only) |
 | `init`: next step shell-quotes the path | ✓ `commands/init-next-step-quoted` |
 | `pgmi` with no arguments; help instead of the banner under `CI` or `PGMI_NON_INTERACTIVE=1` | ✓ `commands/bare`, `commands/bare-not-interactive` |

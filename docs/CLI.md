@@ -835,13 +835,24 @@ comma-separated list of instance connection names
 exactly. A deploy whose `pgmi.yaml` names any other instance is refused with
 exit 10 before any sign-in.
 
-On an allowed server the operator's credentials go only with settings at
-least as strict as the operator's own: a tool call's `sslmode` and
-`channel_binding` are raised to the operator's (disable < allow < prefer <
-require < verify-ca < verify-full; disable < prefer < require), and its
-`require_auth` becomes the operator's when it set none. A `require_auth` that
-allows a method the operator's does not is refused, exit 10. A tool call that
-types its own password keeps its own settings. A tool call may not set
+On an allowed server the operator's credentials go only with the
+operator's own trust settings, or stricter ones. Four settings are enforced:
+
+- `sslmode` and `channel_binding` of a tool call are raised to the
+  operator's (disable < allow < prefer < require < verify-ca < verify-full;
+  disable < prefer < require).
+- `require_auth` becomes the operator's when the call set none; one that
+  allows a method the operator's does not is refused, exit 10.
+- `sslrootcert` must be the operator's own, because the root certificate
+  decides which server passes verification. A call whose connection string,
+  or whose project's `pgmi.yaml`, names another one (or `system`, or an
+  empty one) is refused with exit 10 before connecting: `sslrootcert "..."
+  is not the operator's own (...)`. Set it in the environment `pgmi serve`
+  runs in instead.
+
+Other TLS settings of a call (`sslnegotiation`, `sslsni`, the protocol
+version bounds, its own `sslcert` and `sslkey`) are taken as written. A tool
+call that types its own password keeps all of its own settings. A tool call may not set
 `hostaddr` or `passfile` in its connection string.
 
 ```json

@@ -79,7 +79,8 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   `PGMI_SERVE_ROOTS` and refuses a directory that holds a symbolic link, and
   a server that is not allowed gets no client certificate of the operator. The operator's password
   never goes with a weaker `sslmode`, `channel_binding` or `require_auth`
-  than the operator's own. See
+  than the operator's own, nor to a server verified with another
+  `sslrootcert` than the operator's (such a call is refused, exit 10). See
   [serve-allowed-hosts](switch-day/serve-allowed-hosts.md).
 - **`pgmi serve` cancels a running deploy when stdin closes.** Closing
   stdin is how an MCP client shuts the server down, so a deploy still

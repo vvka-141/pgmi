@@ -28,10 +28,12 @@ pub(crate) struct AllowedHost {
     port: Option<u16>,
 }
 
-/// The operator's own `sslmode`, `channel_binding` and `require_auth`.
+/// The operator's own `sslmode`, `sslrootcert`, `channel_binding` and
+/// `require_auth`.
 #[derive(Debug, Clone)]
 pub(crate) struct Floor {
     sslmode: SslMode,
+    sslrootcert: Option<String>,
     channel_binding: ChannelBinding,
     require_auth: Option<tap::Policy>,
 }
@@ -57,6 +59,7 @@ impl ServeHosts {
             hosts,
             floor: own.map(|s| Floor {
                 sslmode: s.sslmode(),
+                sslrootcert: s.sslrootcert.clone(),
                 channel_binding: s.channel_binding,
                 require_auth: s.require_auth.policy().ok().flatten().cloned(),
             }),
@@ -165,8 +168,20 @@ impl Floor {
     /// Raises `spec`'s `sslmode` and `channel_binding` to the operator's, and
     /// takes the operator's `require_auth` when the call set none; a call
     /// whose `require_auth` allows a method the operator's does not is
-    /// refused.
+    /// refused, and so is one whose `sslrootcert` is not the operator's:
+    /// the root certificate decides which server passes verification.
     fn raise(&self, spec: &mut Spec) -> Result<()> {
+        if spec.sslrootcert != self.sslrootcert {
+            let shown = |c: &Option<String>| {
+                c.as_ref()
+                    .map_or_else(|| "unset".to_string(), |c| format!("\"{c}\""))
+            };
+            return Err(Error::config(format!(
+                "sslrootcert {} is not the operator's own ({}), and pgmi serve would send the operator's credentials to a server it verifies with another root certificate; leave sslrootcert out, set it in the environment pgmi serve runs in, or pass a password in the connection string",
+                shown(&spec.sslrootcert),
+                shown(&self.sslrootcert)
+            )));
+        }
         if sslmode_rank(spec.sslmode()) < sslmode_rank(self.sslmode) {
             spec.requested_sslmode = Some(self.sslmode);
         }
@@ -523,5 +538,82 @@ mod tests {
             resolved("host=db user=u password=own dbname=d sslmode=disable", &[]);
         restrict_to_allowed(&mut spec, &flags, None, &allowed).unwrap();
         assert_eq!(spec.sslmode(), SslMode::Disable);
+    }
+
+    #[test]
+    fn a_tool_call_cannot_swap_the_root_certificate_the_operators_credentials_are_verified_with() {
+        let operator = [("PGSSLMODE", "verify-ca"), ("PGSSLROOTCERT", "/op/ca.crt")];
+        let (own, _) = resolved("host=db user=u dbname=d", &operator);
+        let allowed = ServeHosts::new(None, Some(&own)).unwrap();
+        let refused = |conn: &str, env: &[(&str, &str)], yaml: Option<&str>| {
+            let flags = resolve::Flags {
+                connection: (!conn.is_empty()).then(|| conn.into()),
+                ..resolve::Flags::default()
+            };
+            let yaml = yaml.map(|y| crate::config::yaml::Connection {
+                host: Some("db".into()),
+                database: Some("d".into()),
+                sslrootcert: Some(y.into()),
+                ..Default::default()
+            });
+            let mut spec = resolve::resolve(&flags, &Env::from_pairs(env), yaml.as_ref()).unwrap();
+            restrict_to_allowed(&mut spec, &flags, None, &allowed)
+                .err()
+                .map(|e| (e.exit_code(), e.text()))
+        };
+        for conn in [
+            "host=db user=u dbname=d sslrootcert=/mitm/ca.crt",
+            "host=db user=u dbname=d sslmode=verify-full sslrootcert=/mitm/ca.crt",
+            "postgresql://u@db/d?sslrootcert=%2Fmitm%2Fca.crt",
+            "postgresql://u@db/d?sslrootcert=system",
+            "postgresql://u@db/d?sslrootcert=",
+            "Host=db;Username=u;Database=d;Root Certificate=/mitm/ca.crt",
+        ] {
+            let (code, text) = refused(conn, &[], None).unwrap_or_else(|| panic!("{conn}"));
+            assert_eq!(code, 10, "{conn}");
+            assert!(
+                text.contains("is not the operator's own (\"/op/ca.crt\")"),
+                "{conn}: {text}"
+            );
+        }
+        let (_, text) = refused("", &[("PGUSER", "u")], Some("/mitm/ca.crt")).unwrap();
+        assert!(
+            text.starts_with("sslrootcert \"/mitm/ca.crt\" is not"),
+            "{text}"
+        );
+        let (_, text) = refused("host=db user=u dbname=d", &[], None).unwrap();
+        assert!(text.starts_with("sslrootcert unset is not"), "{text}");
+
+        assert_eq!(refused("host=db user=u dbname=d", &operator, None), None);
+        assert_eq!(
+            refused("host=db user=u dbname=d sslrootcert=/op/ca.crt", &[], None),
+            None
+        );
+        assert_eq!(
+            refused(
+                "host=db user=u password=own dbname=d sslrootcert=/mitm/ca.crt",
+                &operator,
+                None
+            ),
+            None
+        );
+        assert_eq!(
+            refused(
+                "host=elsewhere user=u dbname=d sslrootcert=/mitm/ca.crt",
+                &operator,
+                None
+            ),
+            None
+        );
+
+        let (plain, _) = resolved("host=db user=u dbname=d", &[]);
+        let allowed = ServeHosts::new(None, Some(&plain)).unwrap();
+        let (mut spec, flags) = resolved("host=db user=u dbname=d sslrootcert=/any/ca.crt", &[]);
+        let e = restrict_to_allowed(&mut spec, &flags, None, &allowed).unwrap_err();
+        assert!(
+            e.text().contains("is not the operator's own (unset)"),
+            "{}",
+            e.text()
+        );
     }
 }

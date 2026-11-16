@@ -1,0 +1,64 @@
+description: pgmi serve and the operator's root certificate (Rust, PGMI-1074) - the operator verifies its server with its own root certificate, which the TLS server here does not chain to, so a plain tool call is refused at TLS; a tool call that names another sslrootcert, in its connection string or through the project's pgmi.yaml, is refused with exit code 10 before connecting, so the operator's password never goes to a server the operator's settings refuse; a call that types its own password keeps its own sslrootcert, and one that repeats the operator's deploys
+servers: [tls]
+home:
+  .postgresql/root.crt: {content: "{wrong_ca_pem}", mode: "0644"}
+project:
+  files:
+    deploy.sql: CREATE TABLE IF NOT EXISTS reached (n int);
+    yamlp/deploy.sql: CREATE TABLE IF NOT EXISTS reached_yaml (n int);
+    yamlp/pgmi.yaml: |
+      connection:
+        host: localhost
+        port: {tls_port}
+        username: "{user}"
+        sslrootcert: "{ca}"
+steps:
+  - pgmi: [serve]
+    env: {PGHOST: localhost, PGPORT: "{tls_port}", PGUSER: "{user}", PGPASSWORD: "{password}", PGSSLMODE: verify-ca, PGSSLROOTCERT: "{wrong_ca}"}
+    stdin:
+      - '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}'
+      - '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"postgresql://{user}@localhost:{tls_port}/postgres","database":"{db}"}}}'
+      - {until: '"id":2,', timeout: 60}
+      - '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"postgresql://{user}@localhost:{tls_port}/postgres?sslrootcert={ca}","database":"{db}"}}}'
+      - {until: '"id":3,', timeout: 60}
+      - '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"postgresql://{user}@localhost:{tls_port}/postgres?sslmode=verify-full&sslrootcert={ca}","database":"{db}"}}}'
+      - {until: '"id":4,', timeout: 60}
+      - '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"postgresql://{user}:{password}@localhost:{tls_port}/postgres?sslrootcert={ca}","database":"{db}"}}}'
+      - {until: '"id":5,', timeout: 60}
+    timeout: 120
+    expect:
+      exit: 0
+      rust:
+        exit: 0
+        stdout:
+          - '(?m)^{"jsonrpc":"2.0","id":2,"result":{.*"exitCode":11.*"isError":true}}$'
+          - '(?m)^{"jsonrpc":"2.0","id":3,"result":{.*sslrootcert .* is not the operator.s own.*"exitCode":10.*"isError":true}}$'
+          - '(?m)^{"jsonrpc":"2.0","id":4,"result":{.*sslrootcert .* is not the operator.s own.*"exitCode":10.*"isError":true}}$'
+          - '(?m)^{"jsonrpc":"2.0","id":5,"result":{"content":\[{"type":"text","text":"deployed {db}: '
+        stderr: ['(?s)\A(?:(?!Executing deploy\.sql).)*Executing deploy\.sql(?:(?!Executing deploy\.sql).)*\Z']
+  - pgmi: [serve]
+    env: {PGMI_SERVE_HOSTS: "localhost:{tls_port}", PGUSER: "{user}", PGPASSWORD: "{password}", PGSSLMODE: verify-ca}
+    stdin:
+      - '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}'
+      - '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}/yamlp","database":"{db}"}}}'
+      - {until: '"id":2,', timeout: 60}
+    timeout: 90
+    expect:
+      exit: 0
+      rust:
+        exit: 0
+        stdout: ['(?m)^{"jsonrpc":"2.0","id":2,"result":{.*sslrootcert .* is not the operator.s own \(unset\).*"exitCode":10.*"isError":true}}$']
+        stderr_not: ['^Executing deploy\.sql$']
+  - pgmi: [serve]
+    env: {PGHOST: localhost, PGPORT: "{tls_port}", PGUSER: "{user}", PGPASSWORD: "{password}", PGSSLMODE: verify-ca, PGSSLROOTCERT: "{ca}"}
+    stdin:
+      - '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}'
+      - '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"postgresql://{user}@localhost:{tls_port}/postgres?sslrootcert={ca}","database":"{db}"}}}'
+      - {until: '"id":2,', timeout: 60}
+    timeout: 90
+    expect:
+      exit: 0
+      rust:
+        exit: 0
+        stdout:
+          - '(?m)^{"jsonrpc":"2.0","id":2,"result":{"content":\[{"type":"text","text":"deployed {db}: '
