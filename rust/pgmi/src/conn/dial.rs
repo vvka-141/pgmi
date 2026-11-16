@@ -565,7 +565,14 @@ impl Attempt<'_> {
             None => Err(DialFailure::ProbeTimeout),
             Some(Ok(true)) => Ok(session),
             Some(Ok(false)) => Err(DialFailure::NotTarget(self.want)),
-            Some(Err(e)) => Err(broken(e.to_string(), Class::Fatal, e)),
+            Some(Err(e)) => Err(match session.tap.refused() {
+                Some(refusal) => DialFailure::Broken {
+                    text: refusal.to_string(),
+                    class: Class::Fatal,
+                    origin: Origin::Io(std::io::Error::other(refusal.clone())),
+                },
+                None => broken(e.to_string(), Class::Fatal, e),
+            }),
         }
     }
 

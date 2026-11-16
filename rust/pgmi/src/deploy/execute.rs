@@ -10,7 +10,7 @@ use super::session::{self, Load};
 use super::{ContractVersion, Execution, Failure, Guard, Needs, Unknown, sql_error};
 use crate::VERSION;
 use crate::conn::dial::Session;
-use crate::conn::tap::TxStatus;
+use crate::conn::tap::{Answer, TxStatus};
 use crate::error::{Error, Result};
 use crate::output::Reporter;
 use crate::project::metadata::Meta;
@@ -38,6 +38,7 @@ async fn generate(
     pattern: Option<&str>,
     callback: Option<&str>,
 ) -> Result<String> {
+    session.tap.expect(Answer::OneRow);
     let rows = session
         .client
         .query_typed(
@@ -46,6 +47,7 @@ async fn generate(
         )
         .await
         .map_err(|e| sql_error("expand CALL pgmi_test()", e))?;
+    session.tap.expect(Answer::Short);
     generated(rows.first().map(|r| r.try_get::<_, Option<String>>(0)))
 }
 
@@ -175,6 +177,7 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
             units.len()
         ));
     }
+    session.tap.expect(Answer::Dropped);
     if verbose {
         guard
             .running(session, async {
@@ -237,6 +240,7 @@ pub(crate) async fn run(r: Input<'_>) -> Result<()> {
             execution.committed = i + 1;
         }
     }
+    session.tap.expect(Answer::Short);
     if execution.committed < units.len() {
         execution.failure = Some(Failure {
             unit: units.len(),

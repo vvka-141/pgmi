@@ -196,7 +196,8 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   connection with exit 11. pgmi 0.14 kept every message. After that, the
   session parameters a server reports (one entry per name, kept for the
   whole session) may hold at most 1 MiB; past that the connection ends with
-  exit 11.
+  exit 11. An answer to one of pgmi's own queries may hold at most 16 MiB;
+  the rows your deploy.sql returns are not limited.
 - **A hung Azure CLI no longer holds up sign-in.** `az` and `azd` each get
   10 s; a tool that has not answered is ended, with everything it started,
   and the credential chain goes on. Nothing of it outlives pgmi.

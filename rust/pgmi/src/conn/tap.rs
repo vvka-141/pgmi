@@ -7,7 +7,7 @@ use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll, ready};
 
@@ -34,6 +34,7 @@ pub enum Error {
     SslAnswer(u8),
     StartupFlood,
     ParameterFlood,
+    AnswerFlood,
 }
 
 impl fmt::Display for Error {
@@ -68,6 +69,11 @@ impl fmt::Display for Error {
                 f,
                 "the server reported more than {} MiB of session parameters (ParameterStatus, the latest value of each name); pgmi stops there",
                 PARAMETERS_MAX >> 20
+            ),
+            Error::AnswerFlood => write!(
+                f,
+                "the server sent more than {} MiB in answer to one of pgmi's own queries, which return a few short rows; pgmi stops there",
+                Answer::Short.max() >> 20
             ),
             Error::SslAnswer(b'E') => f.write_str(
                 "the server answered the TLS request with an error message ('E'), not S or N; pgmi does not read it, because the server is not authenticated yet",
@@ -115,6 +121,33 @@ const PARAMETER_OVERHEAD: usize = 64;
 /// PostgreSQL's own limit on one allocation (`MaxAllocSize`), so on a row.
 pub const DATA_FRAME_MAX: usize = 0x3fff_ffff;
 pub const SESSION_FRAME_MAX: usize = 64 * 1024 * 1024;
+/// What one message of an answer costs the driver beyond its bytes.
+const MESSAGE_OVERHEAD: usize = 128;
+
+/// What the next query's answer may hold, from the query to its
+/// `ReadyForQuery`. The driver keeps every row of an answer pgmi reads, so
+/// only an answer pgmi drops may be endless. Notices, notifications and
+/// session parameters are not part of an answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Answer {
+    /// One of pgmi's own queries: a few short rows.
+    Short,
+    /// One of pgmi's own queries whose single value may be as large as a
+    /// row can be (the SQL `CALL pgmi_test()` expands to).
+    OneRow,
+    /// deploy.sql's statements, whose rows pgmi never keeps.
+    Dropped,
+}
+
+impl Answer {
+    const fn max(self) -> usize {
+        match self {
+            Answer::Short => 16 << 20,
+            Answer::OneRow => DATA_FRAME_MAX + (1 << 20),
+            Answer::Dropped => usize::MAX,
+        }
+    }
+}
 
 /// Frames after sign-in: each one's announced length is checked against
 /// its type's limit before the driver sees the header (and reserves room
@@ -131,6 +164,7 @@ struct Frames {
     status: Option<Vec<u8>>,
     parameters: std::collections::HashMap<Box<[u8]>, usize>,
     parameter_bytes: usize,
+    answer_bytes: usize,
 }
 
 const COPY_FAIL: &str = "COPY FROM STDIN cannot run in deploy.sql: pgmi sends no COPY data; load the rows with INSERT, or COPY FROM a file on the server";
@@ -143,8 +177,9 @@ fn copy_fail() -> Vec<u8> {
 
 impl Frames {
     /// Compacts `bytes` to what the driver may see and returns its length,
-    /// and whether the server asked for COPY data.
-    fn pass(&mut self, bytes: &mut [u8]) -> Result<(usize, bool), Error> {
+    /// and whether the server asked for COPY data. `answer_max` bounds what
+    /// reaches the driver between two `ReadyForQuery` messages.
+    fn pass(&mut self, bytes: &mut [u8], answer_max: usize) -> Result<(usize, bool), Error> {
         let (mut r, mut w, mut copy_in) = (0, 0, false);
         while r < bytes.len() {
             if self.remaining == 0 {
@@ -172,6 +207,17 @@ impl Frames {
                     };
                     if body > max {
                         return Err(Error::SessionOversized { tag, len, max });
+                    }
+                    if tag == b'Z' {
+                        self.answer_bytes = 0;
+                    } else if !self.hidden && !matches!(tag, b'N' | b'A' | b'S') {
+                        self.answer_bytes = self
+                            .answer_bytes
+                            .saturating_add(body)
+                            .saturating_add(MESSAGE_OVERHEAD);
+                        if self.answer_bytes > answer_max {
+                            return Err(Error::AnswerFlood);
+                        }
                     }
                     if tag == b'S' {
                         if body > PARAMETERS_MAX {
@@ -262,6 +308,7 @@ pub struct Shared {
     asked_password: AtomicBool,
     login: OnceLock<Login>,
     refused: OnceLock<Error>,
+    answer_max: AtomicUsize,
 }
 
 impl Shared {
@@ -278,6 +325,7 @@ impl Shared {
             asked_password: AtomicBool::new(false),
             login: OnceLock::new(),
             refused: OnceLock::new(),
+            answer_max: AtomicUsize::new(Answer::Short.max()),
         })
     }
 
@@ -300,6 +348,13 @@ impl Shared {
     /// Why the tap closed the session after sign-in (a message over the
     /// size cap, an invalid length), when it did: the driver only reports
     /// a closed connection then.
+    /// Says what the answers from now on may hold. It stays until the next
+    /// call: after a statement of deploy.sql was interrupted, its rows may
+    /// still arrive.
+    pub(crate) fn expect(&self, answer: Answer) {
+        self.answer_max.store(answer.max(), Ordering::Release);
+    }
+
     pub(crate) fn refused(&self) -> Option<&Error> {
         self.refused.get()
     }
@@ -750,7 +805,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Tap<S> {
             let _ = self.shared.refused.set(e.clone());
             io::Error::other(e)
         };
-        let (kept, copy_in) = self.frames.pass(bytes).map_err(refuse)?;
+        let answer_max = self.shared.answer_max.load(Ordering::Acquire);
+        let (kept, copy_in) = self.frames.pass(bytes, answer_max).map_err(refuse)?;
         self.parser
             .feed(&bytes[..kept], &self.shared)
             .map_err(refuse)?;
@@ -1068,7 +1124,7 @@ mod startup_tests {
         }
         let mut f = Frames::default();
         for chunk in one.chunks_mut(7_919) {
-            f.pass(chunk).unwrap();
+            f.pass(chunk, usize::MAX).unwrap();
         }
         let mut many = Vec::new();
         for i in 0..20 {
@@ -1080,18 +1136,24 @@ mod startup_tests {
         let mut f = Frames::default();
         let refused = many
             .chunks_mut(7_919)
-            .try_for_each(|c| f.pass(c).map(|_| ()));
+            .try_for_each(|c| f.pass(c, usize::MAX).map(|_| ()));
         assert_eq!(refused, Err(Error::ParameterFlood));
         let mut tiny = Vec::new();
         for i in 0..20_000 {
             tiny.extend(frame(b'S', format!("{i}\0\0").as_bytes()));
         }
         let mut f = Frames::default();
-        assert_eq!(f.pass(&mut tiny).map(|_| ()), Err(Error::ParameterFlood));
+        assert_eq!(
+            f.pass(&mut tiny, usize::MAX).map(|_| ()),
+            Err(Error::ParameterFlood)
+        );
         let mut f = Frames::default();
         let mut huge = vec![b'S'];
         huge.extend_from_slice(&u32::try_from(PARAMETERS_MAX + 100).unwrap().to_be_bytes());
-        assert_eq!(f.pass(&mut huge).map(|_| ()), Err(Error::ParameterFlood));
+        assert_eq!(
+            f.pass(&mut huge, usize::MAX).map(|_| ()),
+            Err(Error::ParameterFlood)
+        );
     }
 
     #[tokio::test]
@@ -1177,6 +1239,73 @@ mod startup_tests {
     }
 
     #[test]
+    fn an_answer_is_counted_from_one_ready_for_query_to_the_next() {
+        let row = frame(b'D', &[0u8; 1000]);
+        let ready = frame(b'Z', b"I");
+        let max = 10 * (1000 + MESSAGE_OVERHEAD);
+        let mut f = Frames::default();
+        for _ in 0..3 {
+            for _ in 0..10 {
+                f.pass(&mut row.clone(), max).unwrap();
+            }
+            f.pass(&mut ready.clone(), max).unwrap();
+        }
+        for _ in 0..10 {
+            f.pass(&mut row.clone(), max).unwrap();
+        }
+        let (head, body) = row.split_at(3);
+        f.pass(&mut head.to_vec(), max).unwrap();
+        assert_eq!(
+            f.pass(&mut body.to_vec(), max).map(|_| ()),
+            Err(Error::AnswerFlood)
+        );
+    }
+
+    #[test]
+    fn empty_messages_count_and_notices_parameters_and_copy_data_do_not() {
+        let max = Answer::Short.max();
+        let mut f = Frames::default();
+        let mut empties = frame(b'I', &[]).repeat(max / MESSAGE_OVERHEAD);
+        f.pass(&mut empties, max).unwrap();
+        assert_eq!(
+            f.pass(&mut frame(b'C', b"SELECT 1\0"), max).map(|_| ()),
+            Err(Error::AnswerFlood)
+        );
+        let mut f = Frames::default();
+        for tag in *b"NAd" {
+            let mut flood = frame(tag, &vec![b'x'; 60_000]).repeat(2 * max / 60_000);
+            f.pass(&mut flood, max).unwrap();
+        }
+        let mut same_parameter = frame(b'S', b"application_name\0pgmi\0").repeat(max / 16);
+        f.pass(&mut same_parameter, max).unwrap();
+        f.pass(&mut frame(b'D', &[0u8; 1000]), max).unwrap();
+    }
+
+    #[test]
+    fn a_dropped_answer_has_no_limit_and_a_one_row_answer_holds_the_largest_row() {
+        let mut f = Frames::default();
+        let mut rows = frame(b'D', &vec![0u8; 60_000]).repeat(1000);
+        f.pass(&mut rows, Answer::Dropped.max()).unwrap();
+        let mut f = Frames::default();
+        let mut largest = [
+            &b"D"[..],
+            &u32::try_from(DATA_FRAME_MAX + 4).unwrap().to_be_bytes(),
+        ]
+        .concat();
+        f.pass(&mut largest, Answer::OneRow.max()).unwrap();
+        let mut f = Frames::default();
+        let mut largest = [
+            &b"D"[..],
+            &u32::try_from(DATA_FRAME_MAX + 4).unwrap().to_be_bytes(),
+        ]
+        .concat();
+        assert_eq!(
+            f.pass(&mut largest, Answer::Short.max()).map(|_| ()),
+            Err(Error::AnswerFlood)
+        );
+    }
+
+    #[test]
     fn copy_messages_never_reach_the_driver_and_copy_in_is_flagged() {
         let mut all = frame(b'H', &[0, 0, 0]);
         all.extend(frame(b'd', b"1\n"));
@@ -1189,8 +1318,8 @@ mod startup_tests {
         for cut in 0..all.len() {
             let mut f = Frames::default();
             let (mut a, mut b) = (all[..cut].to_vec(), all[cut..].to_vec());
-            let (ka, ia) = f.pass(&mut a).unwrap();
-            let (kb, ib) = f.pass(&mut b).unwrap();
+            let (ka, ia) = f.pass(&mut a, usize::MAX).unwrap();
+            let (kb, ib) = f.pass(&mut b, usize::MAX).unwrap();
             let mut seen = a[..ka].to_vec();
             seen.extend_from_slice(&b[..kb]);
             assert_eq!(seen, want, "cut at {cut}");
@@ -1204,8 +1333,8 @@ mod startup_tests {
         ok.extend(frame(b'N', &[1; 100]));
         for cut in 0..ok.len() {
             let mut f = Frames::default();
-            f.pass(&mut ok.clone()[..cut]).unwrap();
-            f.pass(&mut ok.clone()[cut..]).unwrap();
+            f.pass(&mut ok.clone()[..cut], usize::MAX).unwrap();
+            f.pass(&mut ok.clone()[cut..], usize::MAX).unwrap();
         }
         let mut f = Frames::default();
         let mut big_row = vec![b'D'];
@@ -1214,7 +1343,7 @@ mod startup_tests {
                 .unwrap()
                 .to_be_bytes(),
         );
-        f.pass(&mut big_row).unwrap();
+        f.pass(&mut big_row, usize::MAX).unwrap();
         let mut f = Frames::default();
         let mut big_notice = vec![b'N'];
         big_notice.extend_from_slice(
@@ -1222,7 +1351,7 @@ mod startup_tests {
                 .unwrap()
                 .to_be_bytes(),
         );
-        assert!(f.pass(&mut big_notice).is_err());
+        assert!(f.pass(&mut big_notice, usize::MAX).is_err());
     }
 
     #[tokio::test]
