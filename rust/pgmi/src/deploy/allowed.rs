@@ -11,6 +11,10 @@ use crate::conn::resolve::{
 use crate::conn::tap;
 use crate::error::{Error, Result};
 
+/// Without the operator's own settings there is nothing to hold a tool call
+/// to, while `PGMI_SERVE_HOSTS` would still hand out its credentials.
+pub(crate) const NO_RULES: &str = "pgmi serve does not start: the connection settings of its own environment do not resolve, and they are the rules a tool call is held to";
+
 /// The operator's allowed servers and its own connection settings.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ServeHosts {
@@ -55,14 +59,23 @@ impl ServeHosts {
                 port: Some(e.port),
             })
         }));
+        let floor = own
+            .map(|s| {
+                Ok::<_, Error>(Floor {
+                    sslmode: s.sslmode(),
+                    sslrootcert: s.sslrootcert.clone(),
+                    channel_binding: s.channel_binding,
+                    require_auth: s
+                        .require_auth
+                        .policy()
+                        .map_err(|e| Error::config(format!("{NO_RULES}: {e}")))?
+                        .cloned(),
+                })
+            })
+            .transpose()?;
         Ok(ServeHosts {
             hosts,
-            floor: own.map(|s| Floor {
-                sslmode: s.sslmode(),
-                sslrootcert: s.sslrootcert.clone(),
-                channel_binding: s.channel_binding,
-                require_auth: s.require_auth.policy().ok().flatten().cloned(),
-            }),
+            floor,
             instances: Vec::new(),
         })
     }
@@ -170,16 +183,24 @@ impl Floor {
     /// whose `require_auth` allows a method the operator's does not is
     /// refused, and so is one whose `sslrootcert` is not the operator's:
     /// the root certificate decides which server passes verification.
-    fn raise(&self, spec: &mut Spec) -> Result<()> {
+    /// `sent` says which credential goes: a typed password replaces the
+    /// operator's password, never its cloud sign-in.
+    fn raise(&self, spec: &mut Spec, sent: Sent) -> Result<()> {
         if spec.sslrootcert != self.sslrootcert {
             let shown = |c: &Option<String>| {
                 c.as_ref()
                     .map_or_else(|| "unset".to_string(), |c| format!("\"{c}\""))
             };
             return Err(Error::config(format!(
-                "sslrootcert {} is not the operator's own ({}), and pgmi serve would send the operator's credentials to a server it verifies with another root certificate; leave sslrootcert out, set it in the environment pgmi serve runs in, or pass a password in the connection string",
+                "sslrootcert {} is not the operator's own ({}), and pgmi serve would send {} to a server it verifies with another root certificate; leave sslrootcert out{}",
                 shown(&spec.sslrootcert),
-                shown(&self.sslrootcert)
+                shown(&self.sslrootcert),
+                sent.what(),
+                match sent {
+                    Sent::Password =>
+                        ", set it in the environment pgmi serve runs in, or pass a password in the connection string",
+                    Sent::CloudSignIn => " or set it in the environment pgmi serve runs in",
+                }
             )));
         }
         if sslmode_rank(spec.sslmode()) < sslmode_rank(self.sslmode) {
@@ -195,9 +216,14 @@ impl Floor {
             Ok(None) => spec.require_auth = RequireAuth::Only(floor.clone()),
             Ok(Some(own)) if !own.within(floor) => {
                 return Err(Error::config(format!(
-                    "require_auth \"{}\" allows a sign-in method the operator's own require_auth \"{}\" does not, and pgmi serve would send the operator's credentials; narrow it or pass a password in the connection string",
+                    "require_auth \"{}\" allows a sign-in method the operator's own require_auth \"{}\" does not, and pgmi serve would send {}; narrow it{}",
                     own.text(),
-                    floor.text()
+                    floor.text(),
+                    sent.what(),
+                    match sent {
+                        Sent::Password => " or pass a password in the connection string",
+                        Sent::CloudSignIn => "",
+                    }
                 )));
             }
             _ => {}
@@ -206,11 +232,29 @@ impl Floor {
     }
 }
 
+/// The operator's credential a connection to an allowed server carries.
+#[derive(Debug, Clone, Copy)]
+enum Sent {
+    Password,
+    CloudSignIn,
+}
+
+impl Sent {
+    fn what(self) -> &'static str {
+        match self {
+            Sent::Password => "the operator's credentials",
+            Sent::CloudSignIn => "the operator's cloud sign-in token",
+        }
+    }
+}
+
 /// For `pgmi serve`: the first server not on the operator's list, whose
 /// connection then gets none of the operator's credentials. A cloud
 /// sign-in to such a server is refused. On an allowed server the
 /// operator's credentials go only with settings at least as strict as the
-/// operator's own.
+/// operator's own. A password the call typed takes the place of the
+/// operator's password, so the call then keeps its own settings; it does not
+/// take the place of a cloud sign-in, whose token is what the server gets.
 pub(crate) fn restrict_to_allowed(
     spec: &mut Spec,
     flags: &resolve::Flags,
@@ -234,8 +278,13 @@ pub(crate) fn restrict_to_allowed(
         .find(|e| !allowed.allows(e))
         .map(|e| format!("{}:{}", e.name, e.port))
     else {
-        if !typed && let Some(floor) = &allowed.floor {
-            floor.raise(spec)?;
+        let sent = match (cloud, typed) {
+            (Some(_), _) => Some(Sent::CloudSignIn),
+            (None, false) => Some(Sent::Password),
+            (None, true) => None,
+        };
+        if let (Some(sent), Some(floor)) = (sent, &allowed.floor) {
+            floor.raise(spec, sent)?;
         }
         return Ok(None);
     };
@@ -323,6 +372,190 @@ mod tests {
 
     fn azure() -> (Provider, Options) {
         (Provider::Azure, Options::default())
+    }
+
+    fn sign_ins() -> [(Provider, Options); 4] {
+        [
+            (Provider::Aws, Options::default()),
+            azure(),
+            (Provider::Databricks, Options::default()),
+            google("proj:region:db"),
+        ]
+    }
+
+    fn operator_with_every_rule() -> ServeHosts {
+        let (own, _) = resolved(
+            "host=db user=u dbname=d",
+            &[
+                ("PGSSLMODE", "verify-ca"),
+                ("PGSSLROOTCERT", "/op/ca.crt"),
+                ("PGCHANNELBINDING", "require"),
+                ("PGREQUIREAUTH", "scram-sha-256"),
+            ],
+        );
+        ServeHosts::new(None, Some(&own))
+            .unwrap()
+            .with_instances(Some("proj:region:db"))
+    }
+
+    const TYPED: [&str; 4] = [
+        "host=db user=u password=typed dbname=d",
+        "postgresql://u:typed@db/d?",
+        "postgresql://u@db/d?password=typed&",
+        "Host=db;Username=u;Password=typed;Database=d;",
+    ];
+
+    fn with(typed: &str, keyword: &str, uri: &str, ado: &str) -> String {
+        if typed.starts_with("postgresql://") {
+            format!("{typed}{uri}")
+        } else if typed.starts_with("Host=") {
+            format!("{typed}{ado}")
+        } else {
+            format!("{typed} {keyword}")
+        }
+    }
+
+    #[test]
+    fn a_typed_password_does_not_swap_the_root_certificate_a_cloud_token_is_verified_with() {
+        let allowed = operator_with_every_rule();
+        for cloud in sign_ins() {
+            for typed in TYPED {
+                for conn in [
+                    with(
+                        typed,
+                        "sslrootcert=/mitm/ca.crt",
+                        "sslrootcert=%2Fmitm%2Fca.crt",
+                        "Root Certificate=/mitm/ca.crt",
+                    ),
+                    with(
+                        typed,
+                        "sslrootcert=system",
+                        "sslrootcert=system",
+                        "Root Certificate=system",
+                    ),
+                ] {
+                    let (mut spec, flags) = resolved(&conn, &[]);
+                    let e = restrict_to_allowed(&mut spec, &flags, Some(&cloud), &allowed)
+                        .expect_err(&format!("{:?} {conn}", cloud.0));
+                    assert_eq!(e.exit_code(), 10, "{:?} {conn}", cloud.0);
+                    assert!(
+                        e.text()
+                            .contains("is not the operator's own (\"/op/ca.crt\")")
+                            && e.text().contains("cloud sign-in")
+                            && !e.text().contains("pass a password"),
+                        "{:?} {conn}: {}",
+                        cloud.0,
+                        e.text()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_typed_password_does_not_lower_sslmode_or_channel_binding_under_a_cloud_sign_in() {
+        let allowed = operator_with_every_rule();
+        for cloud in sign_ins() {
+            for typed in TYPED {
+                let conn = with(
+                    typed,
+                    "sslmode=disable channel_binding=disable sslrootcert=/op/ca.crt",
+                    "sslmode=disable&channel_binding=disable&sslrootcert=%2Fop%2Fca.crt",
+                    "SSL Mode=Disable;Channel Binding=disable;Root Certificate=/op/ca.crt",
+                );
+                let (mut spec, flags) = resolved(&conn, &[]);
+                assert_eq!(
+                    restrict_to_allowed(&mut spec, &flags, Some(&cloud), &allowed).unwrap(),
+                    None,
+                    "{:?} {conn}",
+                    cloud.0
+                );
+                assert_eq!(spec.sslmode(), SslMode::VerifyCa, "{:?} {conn}", cloud.0);
+                assert_eq!(
+                    spec.channel_binding,
+                    ChannelBinding::Require,
+                    "{:?} {conn}",
+                    cloud.0
+                );
+                assert_eq!(
+                    spec.require_auth.policy().unwrap().map(tap::Policy::text),
+                    Some("scram-sha-256"),
+                    "{:?} {conn}",
+                    cloud.0
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_typed_password_does_not_widen_require_auth_under_a_cloud_sign_in() {
+        let allowed = operator_with_every_rule();
+        for cloud in sign_ins() {
+            for typed in TYPED {
+                let conn = with(
+                    typed,
+                    "require_auth=password sslrootcert=/op/ca.crt",
+                    "require_auth=password&sslrootcert=%2Fop%2Fca.crt",
+                    "require_auth=password;Root Certificate=/op/ca.crt",
+                );
+                let (mut spec, flags) = resolved(&conn, &[]);
+                let e = restrict_to_allowed(&mut spec, &flags, Some(&cloud), &allowed)
+                    .expect_err(&format!("{:?} {conn}", cloud.0));
+                assert_eq!(e.exit_code(), 10, "{:?} {conn}", cloud.0);
+                assert!(
+                    e.text().contains("require_auth \"password\"")
+                        && e.text().contains("cloud sign-in")
+                        && !e.text().contains("pass a password"),
+                    "{:?} {conn}: {}",
+                    cloud.0,
+                    e.text()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_typed_password_keeps_its_own_settings_only_without_a_cloud_sign_in() {
+        let allowed = operator_with_every_rule();
+        for typed in TYPED {
+            let conn = with(
+                typed,
+                "sslmode=disable sslrootcert=/mine/ca.crt require_auth=password",
+                "sslmode=disable&sslrootcert=%2Fmine%2Fca.crt&require_auth=password",
+                "SSL Mode=Disable;Root Certificate=/mine/ca.crt;require_auth=password",
+            );
+            let (mut spec, flags) = resolved(&conn, &[("PGPASSWORD", "operator-pw")]);
+            assert_eq!(
+                restrict_to_allowed(&mut spec, &flags, None, &allowed).unwrap(),
+                None,
+                "{conn}"
+            );
+            assert_eq!(spec.sslmode(), SslMode::Disable, "{conn}");
+            assert_eq!(spec.password.as_ref().map(Secret::expose), Some("typed"));
+            assert!(spec.token.is_none());
+        }
+    }
+
+    #[test]
+    fn an_empty_typed_password_is_sent_as_written_and_never_replaced_by_the_operators() {
+        let allowed = operator_with_every_rule();
+        for conn in [
+            "host=db user=u password='' dbname=d sslrootcert=/mine/ca.crt",
+            "postgresql://u:@db/d?sslrootcert=%2Fmine%2Fca.crt",
+            "postgresql://u@db/d?password=&sslrootcert=%2Fmine%2Fca.crt",
+            "Host=db;Username=u;Password=;Database=d;Root Certificate=/mine/ca.crt",
+            "host=evil.example user=u password='' dbname=d",
+        ] {
+            let (mut spec, flags) = resolved(conn, &[("PGPASSWORD", "operator-pw")]);
+            match restrict_to_allowed(&mut spec, &flags, None, &allowed) {
+                Err(e) => assert_eq!(e.exit_code(), 10, "{conn}"),
+                Ok(_) => assert_ne!(
+                    spec.password.as_ref().map(Secret::expose),
+                    Some("operator-pw"),
+                    "{conn}"
+                ),
+            }
+        }
     }
 
     fn google(instance: &str) -> (Provider, Options) {

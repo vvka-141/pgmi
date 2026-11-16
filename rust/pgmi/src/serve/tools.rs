@@ -574,9 +574,14 @@ pub(crate) fn operator_hosts(env: &Env) -> Result<ServeHosts, Error> {
         database: Some("postgres".into()),
         ..Flags::default()
     };
-    let own = crate::conn::resolve::resolve(&any_database, env, None).ok();
+    let own = crate::conn::resolve::resolve(&any_database, env, None)
+        .map_err(Error::from)
+        .map_err(|e| {
+            let text = format!("{}: {}", crate::deploy::NO_RULES, e.text());
+            e.reworded(Kind::Config, text)
+        })?;
     Ok(
-        ServeHosts::new(env.non_empty("PGMI_SERVE_HOSTS")?, own.as_ref())?
+        ServeHosts::new(env.non_empty("PGMI_SERVE_HOSTS")?, Some(&own))?
             .with_instances(env.non_empty("PGMI_SERVE_CLOUDSQL_INSTANCES")?),
     )
 }
@@ -751,6 +756,34 @@ async fn run_deploy(ctx: Context, token: CancellationToken) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn serve_does_not_start_without_the_operators_rules() {
+        for (name, value) in [
+            ("PGCLIENTENCODING", "auto"),
+            ("PGSSLMODE", "bogus"),
+            ("PGPORT", "x"),
+            ("PGSERVICE", "mydb"),
+            ("PGCHANNELBINDING", "bogus"),
+            ("PGREQUIREAUTH", "bogus"),
+            ("PGSSLNEGOTIATION", "bogus"),
+            ("PGMINPROTOCOLVERSION", "9"),
+            ("PGCONNECT_TIMEOUT", "x"),
+            ("PGMI_CONNECTION_STRING", "garbage://x"),
+            ("DATABASE_URL", "postgresql://h/d?sslmode=bogus"),
+        ] {
+            let env = Env::from_pairs(&[(name, value), ("PGMI_SERVE_HOSTS", "localhost")]);
+            let e = operator_hosts(&env).expect_err(name);
+            assert_eq!(e.exit_code(), 10, "{name}");
+            assert!(
+                e.text().starts_with(
+                    "pgmi serve does not start: the connection settings of its own environment do not resolve"
+                ),
+                "{name}: {}",
+                e.text()
+            );
+        }
+    }
 
     #[test]
     fn the_operators_own_server_is_allowed_without_pgdatabase() {

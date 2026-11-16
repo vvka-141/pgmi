@@ -1,0 +1,33 @@
+description: pgmi serve and an operator environment that does not resolve (PGMI-1097) - Go's serve has no trust rules and starts; Rust holds every tool call to the operator's own sslmode, sslrootcert, channel_binding and require_auth, so when its own environment does not resolve to connection settings (a client_encoding of auto, an sslmode or require_auth that is no such value) it does not start, exit 10, rather than hand the PGMI_SERVE_HOSTS servers its credentials with no rules
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [serve]
+    env: {PGCLIENTENCODING: auto, PGMI_SERVE_HOSTS: localhost, PGPASSWORD: "{password}"}
+    stdin: []
+    expect:
+      exit: 0
+      rust:
+        exit: 10
+        stderr: ['pgmi serve does not start: the connection settings of its own environment do not resolve.*client_encoding=auto']
+  - pgmi: [serve]
+    env: {PGSSLMODE: bogus, PGMI_SERVE_HOSTS: localhost, PGPASSWORD: "{password}"}
+    stdin: []
+    expect:
+      exit: 0
+      rust:
+        exit: 10
+        stderr: ['pgmi serve does not start: the connection settings of its own environment do not resolve']
+  - pgmi: [serve]
+    env: {PGREQUIREAUTH: bogus, PGMI_SERVE_HOSTS: localhost, PGPASSWORD: "{password}"}
+    stdin: []
+    expect:
+      exit: 0
+      rust:
+        exit: 10
+        stderr: ['pgmi serve does not start: the connection settings of its own environment do not resolve']
+  - pgmi: [serve]
+    env: {PGMI_SERVE_HOSTS: localhost, PGPASSWORD: "{password}"}
+    stdin: []
+    expect: {exit: 0}

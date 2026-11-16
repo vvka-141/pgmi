@@ -177,7 +177,8 @@ reported in a second, not after the whole time box.
 | a cloud sign-in or a connect retry that gives up, after an earlier attempt connected | the token endpoint is down, a restart takes longer |
 
 Never retried: any other SQL error (syntax, constraint, permission, a
-`RAISE EXCEPTION` of the project's own), every failure inside a test,
+`RAISE EXCEPTION` of the project's own unless it carries one of the SQLSTATEs
+above, as `RAISE ... USING ERRCODE = '55P03'` does), every failure inside a test,
 configuration errors (exit 10), a refused sign-in, another deploy holding the
 lock (exit 15), a session an administrator ended with `pg_terminate_backend`
 while the server kept running, and anything after Ctrl-C or SIGTERM.
@@ -412,7 +413,7 @@ As libpq does, pgmi ignores a password file that group or others can read
 # Deploy (creates the database if new, deploys incrementally if it exists)
 pgmi deploy ./myproject -d myapp
 
-# Recreate database for local development (shows 5-second countdown)
+# Recreate database for local development (a 5-second countdown on a terminal, none without one)
 pgmi deploy ./myproject -d myapp_dev --overwrite --force
 
 # Full connection string from the environment (never put the password on argv)
@@ -839,8 +840,8 @@ comma-separated list of instance connection names
 exactly. A deploy whose `pgmi.yaml` names any other instance is refused with
 exit 10 before any sign-in.
 
-On an allowed server the operator's credentials go only with the
-operator's own trust settings, or stricter ones. Four settings are enforced:
+On an allowed server the operator's credentials go only under the
+operator's own trust settings. Four settings are enforced:
 
 - `sslmode` and `channel_binding` of a tool call are raised to the
   operator's (disable < allow < prefer < require < verify-ca < verify-full;
@@ -855,9 +856,22 @@ operator's own trust settings, or stricter ones. Four settings are enforced:
   runs in instead.
 
 Other TLS settings of a call (`sslnegotiation`, `sslsni`, the protocol
-version bounds, its own `sslcert` and `sslkey`) are taken as written. A tool
-call that types its own password keeps all of its own settings. A tool call may not set
-`hostaddr` or `passfile` in its connection string.
+version bounds, its own `sslcert` and `sslkey`) are taken as written: they
+are not among the operator's rules, and a call that leaves them out gets
+pgmi's defaults.
+
+A tool call that types its own password is not using the operator's
+password, so it keeps all of its own settings. A cloud sign-in is the
+exception: with `auth_method` in the project's `pgmi.yaml` the token is what
+the server gets, whatever password the call types, so the four rules apply
+to that call too.
+
+The rules are the operator's own settings, so `pgmi serve` does not start
+(exit 10) when its environment does not resolve to connection settings, for
+example an `sslmode` or `require_auth` that is no such value, or
+`PGCLIENTENCODING=auto`. The message names the setting.
+
+A tool call may not set `hostaddr` or `passfile` in its connection string.
 
 ```json
 {"mcpServers": {"pgmi": {"command": "pgmi", "args": ["serve"],
