@@ -171,9 +171,11 @@ The password needs to travel only when the admin role is created or rotated:
 once the role exists, a deploy without `database_admin_password` keeps its
 password. So a pipeline's routine deploys need no admin secret at all.
 
-The deploy sets the password with `CREATE ROLE ... PASSWORD`, which is DDL: under
-`log_statement = ddl` or `all` the server log records the plaintext. To keep
-the plaintext off the server entirely, pass a SCRAM verifier instead
+pgmi sends every parameter to the server as a bind value. A server that logs
+bind values (`log_statement = all`, or duration logging, unless
+`log_parameter_max_length = 0`) writes the plaintext to its log; under
+`log_statement = ddl` it does not. To keep the plaintext off the server
+entirely, pass a SCRAM verifier instead
 (`SCRAM-SHA-256$4096:<salt>$<StoredKey>:<ServerKey>`): PostgreSQL stores it as
 given, and the admin signs in with the plaintext it was made from. Any SCRAM
 tool computes one; or set the password once with `psql`'s `\password` on a
@@ -552,7 +554,9 @@ A deploy that gives `database_admin_password` sets the admin role's password
 to it; one that leaves it out keeps the role's password. Rotating is a deploy
 with the new value, for example from a key vault through
 `PGMI_PARAM_DATABASE_ADMIN_PASSWORD`. On `env=dev` a redeploy no longer resets
-the password to `postgres`.
+the password to `postgres`. A blank value (empty, or only whitespace) is
+refused in every environment: it is what a secret store that returned nothing
+sends, and it never changes the password.
 
 ## Environments
 

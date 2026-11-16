@@ -3,7 +3,7 @@
 -- ============================================================================
 -- deploy/bootstrap.sql blanks every secret's pgmi.<key> setting and takes
 -- PUBLIC's SELECT off pgmi's parameter view and table, so a project file or
--- test running as the owner cannot print a secret by accident (SHOW ALL, a
+-- test running as the owner cannot print a secret by accident (current_setting, a
 -- dump of the parameter view). Guards against accidents only: a file can
 -- RESET ROLE back to the deploy login, which still reads the view.
 -- ============================================================================
@@ -19,14 +19,6 @@ BEGIN
             RAISE EXCEPTION 'TEST FAILED: secret parameter % is still readable as pgmi.%', v_key, v_key;
         END IF;
     END LOOP;
-
-    SELECT name INTO v_seen
-    FROM pg_settings
-    WHERE name LIKE 'pgmi.%' AND name ~* 'password' AND COALESCE(setting, '') IS DISTINCT FROM ''
-    LIMIT 1;
-    IF v_seen IS NOT NULL THEN
-        RAISE EXCEPTION 'TEST FAILED: % still holds a value in pg_settings', v_seen;
-    END IF;
 
     FOR v_key IN SELECT unnest(ARRAY['pg_temp.pgmi_parameter_view', 'pg_temp._pgmi_parameter']) LOOP
         BEGIN

@@ -82,7 +82,7 @@ fn refuses_bad_parameters() {
         case(
             "prod with blank password",
             &[("env", "prod"), ("database_admin_password", " ")],
-            "Missing required parameters: database_admin_password",
+            "Parameter database_admin_password is blank",
         ),
         case(
             "relabel naming another label",
@@ -722,5 +722,104 @@ fn accepts_a_scram_verifier() {
         "the admin signed in with a wrong password"
     );
     drop(db);
+    drop_roles();
+}
+
+/// A blank `database_admin_password` is refused, whatever the environment and
+/// however it arrives: the admin role keeps the password it had. A redeploy
+/// that leaves the parameter out keeps it too, `env=dev` included, and the
+/// spelling the caller used is blank once bootstrap has run.
+#[test]
+fn a_blank_admin_password_never_changes_the_role() {
+    const DB: &str = "pgmi_rs_a_blank_password";
+    const PASSWORD: &str = "Kept-Password-1068!";
+    const SPELLING_PROBE: &str = "DO $$
+BEGIN
+    IF COALESCE(current_setting('pgmi.database__admin_password', true), '') IS DISTINCT FROM '' THEN
+        RAISE EXCEPTION 'the spelling the caller used still holds the admin password';
+    END IF;
+END $$;
+";
+    let _serial = adv::serial();
+    let Some(pg) = pg() else { return };
+    let project = scaffold(&[(
+        "spelling_probe.sql",
+        &adv::probe(
+            "ffffffff-1068-4000-8000-000000000001",
+            "true",
+            "900/000",
+            SPELLING_PROBE,
+        ),
+    )]);
+    let drop_roles = || {
+        let admin = pg.admin();
+        let _ = admin.batch(&format!("DROP DATABASE IF EXISTS {DB} WITH (FORCE)"));
+        for r in ["_admin", "_api", "_kernel", "_owner"] {
+            let _ = admin.batch(&format!("DROP ROLE IF EXISTS {DB}{r}"));
+        }
+    };
+    let admin = format!("{DB}_admin");
+    let blanks: [(&str, Box<dyn Fn(common::Deploy) -> common::Deploy>); 6] = [
+        (
+            "an empty --param",
+            Box::new(|d| d.arg("--param").arg("database_admin_password=")),
+        ),
+        (
+            "a --param of spaces",
+            Box::new(|d| d.arg("--param").arg("database_admin_password=   ")),
+        ),
+        (
+            "an empty params-file value",
+            Box::new(|d| d.param("database_admin_password", "")),
+        ),
+        (
+            "an empty quoted params-file value",
+            Box::new(|d| d.param("database_admin_password", "''")),
+        ),
+        (
+            "a params-file value of spaces and a tab",
+            Box::new(|d| d.param("database_admin_password", "'  \t '")),
+        ),
+        (
+            "an empty value under another spelling",
+            Box::new(|d| d.arg("--param").arg("DATABASE__ADMIN_PASSWORD=")),
+        ),
+    ];
+
+    for env in ["dev", "test"] {
+        drop_roles();
+        let db = pg.database(DB);
+        let keeps = |when: &str| {
+            common::Client::try_connect(&db, &admin, PASSWORD)
+                .unwrap_or_else(|e| panic!("env={env}, {when}: the admin lost its password: {e}"));
+            for wrong in ["", "   ", "postgres"] {
+                assert!(
+                    common::Client::try_connect(&db, &admin, wrong).is_err(),
+                    "env={env}, {when}: the admin signed in with {wrong:?}"
+                );
+            }
+        };
+        for (name, blank) in &blanks {
+            let out = blank(pg.deploy(&project, &db).arg("--json").param("env", env)).run();
+            let text = refused_with(&out, "database_admin_password is blank");
+            assert_eq!(sqlstate(&out), "22023", "env={env}, {name}: {text}");
+        }
+        deployed(
+            &pg,
+            &project,
+            &db,
+            false,
+            &[("env", env), ("DATABASE__ADMIN_PASSWORD", PASSWORD)],
+        );
+        keeps("after the first deploy");
+        for (name, blank) in &blanks {
+            let out = blank(pg.deploy(&project, &db).arg("--json").param("env", env)).run();
+            refused_with(&out, "database_admin_password is blank");
+            keeps(name);
+        }
+        deployed(&pg, &project, &db, false, &[("env", env)]);
+        keeps("after a redeploy without the parameter");
+        drop(db);
+    }
     drop_roles();
 }

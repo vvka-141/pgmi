@@ -102,7 +102,10 @@ FULL OUTER JOIN (
     FROM pg_temp.pgmi_parameter_view
 ) given ON given.normalized_key = d.key;
 
--- Private to this file: everything after it reads pg_temp.deployment_setting.
+-- The value this file settled on, NULL when none was given and none
+-- defaulted. Later files read pg_temp.deployment_setting; deploy/bootstrap.sql
+-- reads a secret here, because pgmi itself sets pgmi.<key> to whatever the
+-- caller passed.
 CREATE FUNCTION pg_temp.parameter_value(p_key text)
 RETURNS text LANGUAGE sql STABLE AS $$
     SELECT value FROM pg_temp.deployment_parameter WHERE key = p_key
@@ -123,6 +126,25 @@ BEGIN
     IF v_redundant IS NOT NULL THEN
         RAISE EXCEPTION 'Unknown parameters: %. These are not declared in pg_temp.parameter_declaration() (deploy/parameters.sql)', v_redundant
             USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+END $$;
+
+-- A blank secret is one the caller's secret store did not return. Counted as
+-- not given, it would keep or default a password the caller meant to set;
+-- passed on, it would clear the role's password.
+DO $$
+DECLARE
+    v_blank text;
+BEGIN
+    SELECT string_agg(d.key, ', ' ORDER BY d.key) INTO v_blank
+    FROM pg_temp.parameter_declaration() d
+    JOIN pg_temp.pgmi_parameter_view given ON pg_temp.parameter_key(given.key) = d.key
+    WHERE d.is_secret AND given.value !~ '[^[:space:]]';
+
+    IF v_blank IS NOT NULL THEN
+        RAISE EXCEPTION 'Parameter % is blank', v_blank
+            USING ERRCODE = 'invalid_parameter_value',
+                  HINT = 'Pass a value, or leave the parameter out: an admin role that exists then keeps its password.';
     END IF;
 END $$;
 

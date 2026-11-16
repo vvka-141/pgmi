@@ -104,6 +104,13 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   allow-listed, before it changes anything. On Databricks Lakebase it sets
   `provider_role_pattern` and `provider_schemas` itself. Both template
   READMEs say what each host needs.
+- **The advanced template needs the admin password only once.**
+  `database_admin_password` is required when the admin role does not exist
+  yet; left out afterwards, the role keeps its password, also with `env=dev`.
+  A SCRAM verifier is accepted in its place. A blank value (empty or only
+  whitespace) is refused in every environment and never changes the
+  password. See the template README, "Parameters".
+
 - **The advanced template's deploy.sql reads top to bottom.** Five banners
   (PREFLIGHT, BOOTSTRAP, DEPLOY, VERIFY, TAIL) and the file loop in plain
   sight; the setup lives in `deploy/` files it runs by name, with the lists a

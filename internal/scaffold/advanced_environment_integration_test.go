@@ -70,7 +70,7 @@ func TestAdvancedTemplate_RefusesBadParameters(t *testing.T) {
 		{name: "prod without password", params: map[string]string{"env": "prod"},
 			want: "Missing required parameters: database_admin_password. Set PGMI_PARAM_DATABASE_ADMIN_PASSWORD", notWant: "--param <key>"},
 		{name: "prod with blank password", params: map[string]string{"env": "prod", "database_admin_password": " "},
-			want: "Missing required parameters: database_admin_password"},
+			want: "Parameter database_admin_password is blank"},
 		{name: "relabel naming another label", params: map[string]string{"env": "prod", "relabel_environment": "test", "database_admin_password": pw},
 			want: "relabel_environment=test does not name the label env=prod"},
 		{name: "relabel on a new database", params: map[string]string{"env": "prod", "relabel_environment": "prod", "database_admin_password": pw},
@@ -557,5 +557,90 @@ func TestAdvancedTemplate_AcceptsAScramVerifier(t *testing.T) {
 	}
 	if err := signIn(t, "wrong"); err == nil {
 		t.Fatal("the admin signed in with a wrong password")
+	}
+}
+
+// A blank database_admin_password is refused, whatever the environment and
+// however it is spelt: the admin role keeps the password it had. A redeploy
+// that leaves the parameter out keeps it too, env=dev included, and the
+// spelling the caller used is blank once bootstrap has run.
+func TestAdvancedTemplate_ABlankAdminPasswordNeverChangesTheRole(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+	const spellingProbe = `/*
+<pgmi-meta id="ffffffff-1068-4000-8000-000000000001" idempotent="true">
+  <sortKeys><key>900/000</key></sortKeys>
+</pgmi-meta>
+*/
+DO $$
+BEGIN
+    IF COALESCE(current_setting('pgmi.database__admin_password', true), '') IS DISTINCT FROM '' THEN
+        RAISE EXCEPTION 'the spelling the caller used still holds the admin password';
+    END IF;
+END $$;
+`
+	projectPath := scaffoldAdvanced(t, map[string]string{"spelling_probe.sql": spellingProbe})
+	const db = "pgmi_advanced_blank_password"
+	const password = "Kept-Password-1068!"
+	server := testhelpers.GetTestPool(t, connString, "postgres")
+	dropRoles := func() {
+		testhelpers.CleanupTestDB(t, connString, db)
+		for _, r := range []string{"_admin", "_api", "_kernel", "_owner"} {
+			_, _ = server.Exec(context.Background(), "DROP ROLE IF EXISTS "+db+r)
+		}
+	}
+	dropRoles()
+	defer dropRoles()
+
+	signIn := func(password string) error {
+		cfg, err := pgx.ParseConfig(connString)
+		if err != nil {
+			t.Fatalf("parse the connection string: %v", err)
+		}
+		cfg.User, cfg.Password, cfg.Database = db+"_admin", password, db
+		conn, err := pgx.ConnectConfig(context.Background(), cfg)
+		if err != nil {
+			return err
+		}
+		return conn.Close(context.Background())
+	}
+	keeps := func(t *testing.T) {
+		t.Helper()
+		if err := signIn(password); err != nil {
+			t.Fatalf("the admin must still sign in with the password it had: %v", err)
+		}
+		for _, wrong := range []string{"", "   ", "postgres"} {
+			if err := signIn(wrong); err == nil {
+				t.Fatalf("the admin signed in with %q", wrong)
+			}
+		}
+	}
+
+	for _, env := range []string{"dev", "test"} {
+		t.Run(env, func(t *testing.T) {
+			dropRoles()
+			for _, blank := range []string{"", "   ", "\t\n"} {
+				err := deployAdvanced(t, connString, db, projectPath, true, map[string]string{"env": env, "database_admin_password": blank})
+				if err == nil || !strings.Contains(err.Error(), "database_admin_password is blank") {
+					t.Fatalf("a first deploy with the blank password %q must be refused, got: %v", blank, err)
+				}
+			}
+			if err := deployAdvanced(t, connString, db, projectPath, true, map[string]string{"env": env, "DATABASE__ADMIN_PASSWORD": password}); err != nil {
+				t.Fatalf("first deploy: %v", err)
+			}
+			keeps(t)
+			for _, key := range []string{"database_admin_password", "DATABASE__ADMIN_PASSWORD"} {
+				for _, blank := range []string{"", "   ", "\t\n"} {
+					err := deployAdvanced(t, connString, db, projectPath, false, map[string]string{"env": env, key: blank})
+					if err == nil || !strings.Contains(err.Error(), "database_admin_password is blank") {
+						t.Fatalf("a redeploy with %s=%q must be refused, got: %v", key, blank, err)
+					}
+					keeps(t)
+				}
+			}
+			if err := deployAdvanced(t, connString, db, projectPath, false, map[string]string{"env": env}); err != nil {
+				t.Fatalf("a redeploy without the admin password: %v", err)
+			}
+			keeps(t)
+		})
 	}
 }

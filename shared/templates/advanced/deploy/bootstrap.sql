@@ -152,7 +152,7 @@ END $$;
 DO $$
 DECLARE
     v_admin_role     TEXT := pg_temp.deployment_setting('database_admin_role');
-    v_admin_password TEXT := pg_temp.deployment_setting('database_admin_password', false);
+    v_admin_password TEXT := pg_temp.parameter_value('database_admin_password');
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_admin_role) THEN
         EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L CONNECTION LIMIT 10', v_admin_role, v_admin_password);
@@ -172,7 +172,7 @@ END $$;
 -- No file needs a secret after this point, so each one leaves the session's
 -- settings, the template's parameter table and PUBLIC's reach of pgmi's own
 -- parameter view and table: a file or test running as the owner cannot print
--- one by accident (SHOW ALL, a dump of the view). This guards against
+-- one by accident (current_setting, a dump of the view). This guards against
 -- accidents, not a hostile file, which can RESET ROLE to this login.
 DO $$
 DECLARE
