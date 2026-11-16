@@ -124,6 +124,13 @@ release is a plain workflow, `.github/workflows/release-rust.yml`:
 4. `package`: `cargo about generate` (cargo-about 0.9.3, `about.toml`,
    `about.hbs`) writes `THIRD-PARTY-LICENSES` for every crate of the
    release targets and fails on a licence it cannot read (PGMI-1003);
+   `rust/release/licenses.sh` then appends what the toolchain links in and
+   cargo-about cannot see: the standard library's notices (the pinned
+   toolchain's `COPYRIGHT-library.html`, as text) and musl's own `COPYRIGHT`
+   (`rust/release/notices/musl-<version>-COPYRIGHT`; CI checks the version
+   against the toolchain's `libc.a`, so a toolchain bump that changes musl
+   fails until the file is replaced), and fails when either is missing
+   (PGMI-1092);
    `rust/release/package.sh` refuses to run without it and writes
    `pgmi_<version>_<os>_<arch>` archives (tar.gz, zip for Windows) with the
    Go release's names and layout plus that file, reproducibly (fixed mtimes

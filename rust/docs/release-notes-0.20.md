@@ -63,7 +63,8 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   original text.
 - **Third-party licence notices ship with pgmi.** Every archive holds
   `THIRD-PARTY-LICENSES`, and the `.deb` installs it in
-  `/usr/share/doc/pgmi/`.
+  `/usr/share/doc/pgmi/`. It covers every crate, the Rust standard library
+  and musl libc, which the Linux binaries link statically.
 - **`--json` always ends with a record.** Every exit writes one, also an
   unreadable project `.env` (exit 10) and a runtime that cannot start (exit
   1). When the record cannot be written, a deploy that succeeded exits 1.

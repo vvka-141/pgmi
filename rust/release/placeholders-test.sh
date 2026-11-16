@@ -33,6 +33,15 @@ cp "$FIXTURE" "$2"
 FAKE
 chmod +x "$work/fakebin/cargo"
 cp "$here/licenses.sh" "$work/rust/release/"
+mkdir -p "$work/rust/release/notices" "$work/sysroot/share/doc/rust"
+printf 'musl as a whole is licensed under the following standard MIT license:\nCopyright (c) 2005-2020 Rich Felker, et al.\n' > "$work/rust/release/notices/musl-9.9.9-COPYRIGHT"
+std="$work/sysroot/share/doc/rust/COPYRIGHT-library.html"
+printf '<h1>Copyright notices for The Rust Standard Library</h1>\n<p>Copyright: The Rust Project Developers &#60;a&#62; &#34;q&#34; &amp; &#39;s&#39;</p>\n' > "$std"
+cat > "$work/fakebin/rustc" <<FAKE
+#!/usr/bin/env bash
+case "\$1" in --print) echo "$work/sysroot" ;; *) echo "rustc 9.8.7 (fake)" ;; esac
+FAKE
+chmod +x "$work/fakebin/rustc"
 generate() {
   local want="$1" crate="$2" line="$3"
   printf 'MIT License\n\nUsed by:\n  %s 1.0.0\n\n%s\n\nPermission is hereby granted\n' "$crate" "$line" > "$work/fixture"
@@ -49,4 +58,23 @@ generate 1 some-crate 'Copyright (c) <year> <copyright holders>'
 generate 1 p12-keystore 'Copyright (c) <year> <owner>'
 generate 1 some-crate 'Copyright <year> <owner>'
 generate 0 some-crate 'Copyright (c) 2019 Jane Doe'
+toolchain() {
+  local what="$1"; shift
+  for needed in "$@"; do
+    grep -qxF -- "$needed" "$work/generated" || { echo "placeholders-test: licenses.sh output lacks the $what line: $needed" >&2; fail=1; }
+  done
+}
+toolchain "standard library" 'The Rust standard library and its dependencies (rustc 9.8.7)' 'Copyright notices for The Rust Standard Library' "Copyright: The Rust Project Developers <a> \"q\" & 's'"
+toolchain "musl" 'musl libc 9.9.9' 'Copyright (c) 2005-2020 Rich Felker, et al.'
+missing() {
+  local what="$1" file="$2" got=0
+  mv "$file" "$file.away"
+  FIXTURE="$work/fixture" PATH="$work/fakebin:$PATH" "$work/rust/release/licenses.sh" "$work/generated" >/dev/null 2>"$work/err" || got=$?
+  mv "$file.away" "$file"
+  if [[ "$got" != 1 ]] || ! grep -q "is missing" "$work/err"; then
+    echo "placeholders-test: licenses.sh exit $got without $what, want 1 naming the missing file" >&2; fail=1
+  fi
+}
+missing "the standard library's notices" "$std"
+missing "musl's notice" "$work/rust/release/notices/musl-9.9.9-COPYRIGHT"
 exit "$fail"
