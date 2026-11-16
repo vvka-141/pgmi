@@ -453,3 +453,26 @@ accept:
     case: "variant/pgmi\\.yaml: .*'port': '\\d+'.*'database'.*"
     field: db
     go: '<no database>'
+  - row: 'project `.env` setting any key but `PGMI_PARAM_*`, the connection (`PGMI_CONNECTION_STRING`, `DATABASE_URL`, `PGHOST`, `PGHOSTADDR`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, `PGPASSFILE`, `PGSSLMODE`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`, `PGSSLPASSWORD`, `PGSSLNEGOTIATION`, `PGSSLSNI`, `PGSSLCERTMODE`, `PGMINPROTOCOLVERSION`, `PGMAXPROTOCOLVERSION`, `PGAPPNAME`, `PGCONNECT_TIMEOUT`, `PGOPTIONS`, `PGTARGETSESSIONATTRS`, `PGCHANNELBINDING`, `PGREQUIREAUTH`, `PGCLIENTENCODING`, `PGTZ`), the AWS region, keys and retry settings (`AWS_REGION`, `AWS_DEFAULT_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_MAX_ATTEMPTS`, `AWS_RETRY_MODE`) and pgmi''s own `PGMI_MAX_FILE_SIZE`, `PGMI_NO_BANNER` and `NO_COLOR`, any case. An allow list since PGMI-1045: the earlier deny list missed keys that make a helper run project code (`BASH_ENV`, `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`, `PYTHONPATH`, `NODE_OPTIONS`, `PATH`)'
+    case: cases/config/dotenv-(app-keys|refused-keys)\.yaml
+    field: db
+    rust: <no database>
+  - row: 'project `.env` setting any key but `PGMI_PARAM_*`, the connection (`PGMI_CONNECTION_STRING`, `DATABASE_URL`, `PGHOST`, `PGHOSTADDR`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, `PGPASSFILE`, `PGSSLMODE`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`, `PGSSLPASSWORD`, `PGSSLNEGOTIATION`, `PGSSLSNI`, `PGSSLCERTMODE`, `PGMINPROTOCOLVERSION`, `PGMAXPROTOCOLVERSION`, `PGAPPNAME`, `PGCONNECT_TIMEOUT`, `PGOPTIONS`, `PGTARGETSESSIONATTRS`, `PGCHANNELBINDING`, `PGREQUIREAUTH`, `PGCLIENTENCODING`, `PGTZ`), the AWS region, keys and retry settings (`AWS_REGION`, `AWS_DEFAULT_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_MAX_ATTEMPTS`, `AWS_RETRY_MODE`) and pgmi''s own `PGMI_MAX_FILE_SIZE`, `PGMI_NO_BANNER` and `NO_COLOR`, any case. An allow list since PGMI-1045: the earlier deny list missed keys that make a helper run project code (`BASH_ENV`, `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`, `PYTHONPATH`, `NODE_OPTIONS`, `PATH`)'
+    case: cases/config/dotenv-service\.yaml
+    step: steps[1]
+    field: stderr
+    rust: sets PGSERVICE, which a project \.env may not set
+  - row: 'A project `.env` that does not parse (a line that is not `KEY=VALUE`, a comment or blank; a NUL byte)'
+    case: cases/(errors/next-step-hints|formats/dotenv-nul)\.yaml
+    field: db
+    rust: <no database>
+  - row: 'A project `.env` that does not parse (a line that is not `KEY=VALUE`, a comment or blank; a NUL byte)'
+    case: cases/errors/next-step-hints\.yaml
+    step: steps[5]
+    field: stderr
+    rust: could not be parsed at line 1; without its values
+  - row: 'A project `.env` that does not parse (a line that is not `KEY=VALUE`, a comment or blank; a NUL byte)'
+    case: cases/errors/next-step-hints\.yaml
+    step: steps[7]
+    field: stderr
+    rust: Database "\{db\}" does not exist; creating
