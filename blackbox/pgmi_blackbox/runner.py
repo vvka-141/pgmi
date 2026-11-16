@@ -153,9 +153,9 @@ def play(case: Case, ws: Workspace, observe: Callable[[str, Step, "Outcome | Non
             if step.background:
                 pending.append((label, step, run))
                 continue
-            failures += observe(label, step, _finish(label, step, run))
+            failures += observe(label, step, _finish(label, step, run, ws))
         for label, step, run in pending:
-            failures += observe(label, step, _finish(label, step, run))
+            failures += observe(label, step, _finish(label, step, run, ws))
         return failures
     finally:
         if proxy:
@@ -169,7 +169,14 @@ def _drop(ws: Workspace) -> None:
         with extra.connect() as c:
             c.execute(f'DROP DATABASE IF EXISTS "{ws.database}" WITH (FORCE)')
     with ws.server.connect() as c:
-        c.execute(f'DROP DATABASE IF EXISTS "{ws.database}" WITH (FORCE)')
+        for attempt in range(3):
+            try:
+                c.execute(f'DROP DATABASE IF EXISTS "{ws.database}" WITH (FORCE)')
+                break
+            except psycopg.errors.ObjectInUse:
+                if attempt == 2:
+                    raise
+                time.sleep(5)
         roles = c.execute(
             "SELECT rolname FROM pg_roles WHERE starts_with(rolname, %s) ORDER BY rolname DESC",
             (ws.database + "_",),
@@ -354,10 +361,28 @@ def _feed(stdin, chunks: list, output: list[str]) -> None:
             pass
 
 
-def _finish(label: str, step: Step, run: Running) -> Outcome:
+def _sessions(ws: Workspace) -> str:
+    """What the case's database sessions were doing, for a step that hung (PGMI-1104)."""
+    try:
+        with ws.server.connect() as c:
+            rows = c.execute(
+                "SELECT a.pid, a.state, a.wait_event_type, a.wait_event, now() - a.query_start AS running,"
+                " left(a.query, 200) AS query,"
+                " (SELECT string_agg(l.locktype || ':' || l.mode || CASE WHEN l.granted THEN '' ELSE ' (waiting)' END, ', ')"
+                "    FROM pg_locks l WHERE l.pid = a.pid) AS locks"
+                " FROM pg_stat_activity a WHERE a.datname = %s ORDER BY a.backend_start",
+                (ws.database,),
+            ).fetchall()
+    except Exception as e:  # noqa: BLE001 - the report must not hide the timeout it explains
+        return f"(not read: {e})"
+    return "\n".join(str(r) for r in rows) or "(none)"
+
+
+def _finish(label: str, step: Step, run: Running, ws: Workspace) -> Outcome:
     try:
         run.proc.wait(timeout=step.timeout)
     except subprocess.TimeoutExpired:
+        sessions = _sessions(ws)
         run.proc.kill()
         run.proc.wait()
         for t in run.threads:
@@ -368,7 +393,8 @@ def _finish(label: str, step: Step, run: Running) -> Outcome:
         raise AssertionError(
             f"{label}: still running after {step.timeout}s: {' '.join(run.argv)}\n"
             f"--- stdout (last 3000 chars) ---\n{''.join(run.stdout)[-3000:]}\n"
-            f"--- stderr ---\n{''.join(t for _, t in run.stderr)}"
+            f"--- stderr ---\n{''.join(t for _, t in run.stderr)}\n"
+            f"--- sessions on {ws.database} before the kill ---\n{sessions}"
         ) from None
     for t in run.threads:
         t.join(10)
