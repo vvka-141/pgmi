@@ -96,7 +96,7 @@ pub(crate) async fn load_params(client: &Client, params: &BTreeMap<String, Strin
         client,
         "WITH p AS (SELECT r->>0 AS k, r->>1 AS v FROM pg_catalog.jsonb_array_elements($1::text::jsonb) r), \
          i AS (INSERT INTO pg_temp._pgmi_parameter (key, value) SELECT k, v FROM p) \
-         SELECT pg_catalog.set_config('pgmi.' || k, v, false) FROM p",
+         SELECT pg_catalog.count(pg_catalog.set_config('pgmi.' || k, v, false)) FROM p",
         json!(rows),
     )
     .await

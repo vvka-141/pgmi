@@ -73,6 +73,40 @@ fn a_test_plan_larger_than_a_short_answer_is_not_refused() {
     assert_eq!(ran, 1);
 }
 
+/// The parameters go to the server in one of pgmi's own queries. Its answer
+/// must stay short however large they are, so the limit on pgmi's own
+/// queries never refuses a deploy for the size of its parameters.
+#[test]
+fn parameters_larger_than_a_short_answer_are_loaded() {
+    let Some(pg) = pg() else { return };
+    let db = pg.database("pgmi_rs_large_params");
+    let project = Project::empty();
+    project.write(
+        "deploy.sql",
+        "CREATE TABLE seen AS\n\
+         SELECT count(*) AS n, sum(length(value)) AS bytes,\n\
+                length(current_setting('pgmi.k_0299')) AS last\n\
+         FROM pg_temp.pgmi_parameter_view WHERE key LIKE 'k\\_%';\n",
+    );
+    let elsewhere = Project::empty();
+    let value = "v".repeat(60_000);
+    let lines: Vec<String> = (0..300).map(|i| format!("k_{i:04}={value}")).collect();
+    elsewhere.write("big.env", &(lines.join("\n") + "\n"));
+    let file = elsewhere.file("big.env");
+    let out = pg
+        .deploy(&project, &db)
+        .arg("--params-file")
+        .arg(&file.display().to_string())
+        .env("PGMI_MAX_FILE_SIZE", "67108864")
+        .run();
+    assert_eq!(out.code, 0, "{}", tail(&out.stderr));
+    let seen = db
+        .client()
+        .query("SELECT n, bytes::bigint, last FROM seen", &[]);
+    let (n, bytes, last): (i64, i64, i32) = (seen[0].get(0), seen[0].get(1), seen[0].get(2));
+    assert_eq!((n, bytes, last), (300, 18_000_000, 60_000));
+}
+
 fn tail(text: &str) -> &str {
     let from = text.len().saturating_sub(2000);
     text.get(from..).unwrap_or(text)
