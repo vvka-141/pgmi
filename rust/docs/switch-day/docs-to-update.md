@@ -21,6 +21,13 @@ Line numbers are from main on 2026-11-11; re-check them on the day.
   QUICKSTART.md, `docs/LAKEBASE.md` (the staged `--databricks` section,
   `lakebase-databricks.md`, says `prefer` is refused: drop that sentence).
 
+- An empty connection setting stops the deploy, exit 10 (PGMI-1105):
+  CICD.md:297-298 ("A secret or variable that is not defined arrives empty")
+  speaks only of parameters, add the connection variables; CONNECTIONS.md
+  and the CLI.md environment table, say an empty `PG*` variable, flag or
+  string key is refused, not read as unset. Text: `RELEASES.md` v0.20.0,
+  Upgrading.
+
 - `pgmi serve` keeps the operator's credentials for the servers it allows
   (PGMI-915): document `PGMI_SERVE_HOSTS` in CLI.md (the `serve` section and
   the env table) with the text staged in `switch-day/serve-allowed-hosts.md`.

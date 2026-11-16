@@ -45,6 +45,15 @@ A test failure or any other SQL error is never retried. Once a unit of deploy.sq
 
 - **Install.** 0.20 ships as the GitHub release archives (and `.deb` files on the release page), through Homebrew, and through `install.sh` and `install.ps1`. `go install` no longer installs current pgmi. Check a download with `gh attestation verify <file> --repo vvka-141/pgmi --signer-workflow vvka-141/pgmi/.github/workflows/release-rust.yml --source-ref refs/heads/main`.
 - **The Go library is gone.** pgmi 0.20 is a Rust program with no library crate. Go programs that embedded `pkg/pgmi` pin the `go-legacy` tag, or call `pgmi deploy --json` and read the record.
+- **An empty connection setting stops the deploy (exit 10).** Check your CI for this first. In CI, a secret or variable that is not defined arrives as an empty string. With 0.14, `PGHOST: ${{ secrets.DB_HOST }}` with the secret missing was read as "not set": pgmi went on with the next source or the built-in default (localhost, port 5432, `sslmode=prefer`) and could deploy to a server you did not name. With 0.20 the same pipeline stops before connecting:
+
+  ```
+  pgmi: error: the host from PGHOST is empty; write the host, or remove it so the next source applies
+  ```
+
+  The rule is the same for every connection setting, written empty or as white space only: host, port, user, database, `sslmode`, the certificate paths and the rest. It holds wherever the setting is written: a connection string in any form (`host=''`, `?sslmode=`, `Port=;`), `-h ''` and the other connection flags, `PGHOST=` and the other `PG*` variables, `DATABASE_URL`, `PGMI_CONNECTION_STRING`, and a `pgmi.yaml` value written as an empty string (`host: ""`). A password may still be empty; that means no password.
+
+  What to do: the message names the setting and where it was written. If the value should be there, fix the secret or variable it comes from. If you want the default, remove the line or unset the variable; do not leave it empty. A variable that exists only for some environments needs to be left out of the others, not set to `''`.
 - **Newly refused before connecting (exit 10).** Check your CI for these:
   - a client private key that group or others can read (`chmod 600` it);
   - a project `.env` or `.pgmiignore` that exists but cannot be read;
@@ -83,6 +92,7 @@ A test failure or any other SQL error is never retried. Once a unit of deploy.sq
 
 - Google sign-in uses google-cloud-auth's own HTTP clients, which follow redirects and read a reply without pgmi's size cap. The token endpoints come from your own Google configuration.
 - The Windows arm64 binary is tested with `--version`, and with a deploy only when the test runner has PostgreSQL.
+- A `pgmi.yaml` connection key with no value (`host:`, `port:`, `sslmode:`) is read as not set and still falls back to the default, as in 0.14. Write the value or remove the key.
 
 ## v0.14.1 — 2026-11-09
 

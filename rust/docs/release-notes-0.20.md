@@ -98,17 +98,9 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
 - **`pgmi serve` limits.** A request line may hold at most 16 MiB, at most 32
   tool calls run at once, and a client that leaves 1024 answers unread is
   disconnected.
-- **An empty connection setting is refused.** A host, port, user, database,
-  `sslmode` or any other connection setting written empty or as white space
-  only stops the deploy with exit 10 before connecting, and the message
-  names the setting and where it was written. This covers connection strings
-  in all three forms (`host=''`, `?sslmode=`, `Port=;`), `-h ''` and the
-  other connection flags, `PGHOST=` and the other `PG*` variables,
-  `DATABASE_URL`, `PGMI_CONNECTION_STRING` and `pgmi.yaml`. Go read an empty
-  value as unset and went on with the next source or the default (localhost,
-  5432, `prefer`), so an unset CI variable could send a deploy to another
-  server. To use the default, remove the setting or unset the variable. A
-  password may still be empty.
+- **An empty connection setting stops the deploy (PGMI-1105).** Written in
+  `RELEASES.md`, section `v0.20.0`, under Upgrading, with the CI case (a
+  missing secret arrives as an empty variable). Edit it there, not here.
 - **Ambiguous `<pgmi-meta>` is refused.** A file with two `<pgmi-meta>`
   blocks, also two in one comment, or an attribute written twice (two
   `id`s) stops the deploy with exit 10 before connecting. Go took the
