@@ -171,11 +171,17 @@ retried.
 ### Commits through another connection
 
 pgmi sees only its own session. A write that commits through a side
-connection, such as `dblink_exec`, a `postgres_fdw` table or a background
-worker, is outside the deploy's transaction: the failed attempt leaves it
-committed, and pgmi neither sees that commit nor counts it. A retry then runs
-it again. A deploy.sql that writes through such a channel must be safe to run
-twice, or turn retry off (below).
+connection, such as `dblink_exec` (or `dblink` with a statement that
+writes) or a background worker such as `pg_background`, is outside the
+deploy's transaction: the failed attempt leaves it committed, and pgmi
+neither sees that commit nor counts it. A retry then runs it again. A
+deploy.sql that writes through such a channel must be safe to run twice, or
+turn retry off (below).
+
+A `postgres_fdw` foreign table is not such a channel: its remote transaction
+commits or rolls back together with the deploy's, so a failed attempt leaves
+nothing behind. Other foreign data wrappers may differ; check the one you
+use.
 
 ## Turning it off
 

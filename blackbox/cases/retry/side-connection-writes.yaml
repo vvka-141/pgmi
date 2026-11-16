@@ -1,0 +1,31 @@
+description: what a failed deploy leaves behind when deploy.sql writes through another connection, which is why the retry page says such a deploy must be safe to run twice. A dblink_exec write commits on its own and stays; a postgres_fdw write belongs to the deploy's transaction and is rolled back with it (PGMI-1047, PGMI-1069)
+project:
+  files:
+    deploy.sql: |
+      BEGIN;
+      CREATE EXTENSION dblink;
+      CREATE EXTENSION postgres_fdw;
+      SELECT dblink_exec(
+          format('dbname=%L port=%s', current_database(), current_setting('port')),
+          'CREATE TABLE side_dblink (id int); CREATE TABLE side_fdw (id int); INSERT INTO side_dblink VALUES (1)');
+      DO $$
+      BEGIN
+          EXECUTE format('CREATE SERVER side FOREIGN DATA WRAPPER postgres_fdw OPTIONS (dbname %L, port %L)',
+                         current_database(), current_setting('port'));
+      END $$;
+      CREATE USER MAPPING FOR CURRENT_USER SERVER side;
+      CREATE FOREIGN TABLE f_side (id int) SERVER side OPTIONS (table_name 'side_fdw');
+      INSERT INTO f_side VALUES (1);
+      SELECT 1/0;
+      COMMIT;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    timeout: 60
+    expect:
+      exit: 13
+      stderr: ["division by zero"]
+      sql:
+        - query: SELECT (SELECT count(*) FROM side_dblink), (SELECT count(*) FROM side_fdw)
+          rows: [[1, 0]]
+        - query: SELECT count(*) FROM pg_foreign_table
+          rows: [[0]]

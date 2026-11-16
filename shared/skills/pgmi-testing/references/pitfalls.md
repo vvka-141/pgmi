@@ -78,8 +78,9 @@ Check which roles and settings this project's policies use before writing one.
 ## Effects outside the transaction
 
 The rollback covers this database's transaction only. Work sent elsewhere,
-through `dblink`, a foreign table or a file written by the server, stays done.
-Keep it out of tests.
+through `dblink`, a background worker or a file written by the server, stays
+done. Keep it out of tests. A `postgres_fdw` foreign table is the exception:
+its write rolls back with the test; other foreign data wrappers may not.
 
 ## The test sees the deploy, not the database
 

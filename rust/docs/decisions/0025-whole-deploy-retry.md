@@ -27,9 +27,12 @@ COMMIT is atomic; when the reply to a COMMIT is lost, the next attempt finds
 the work done, as any redeploy would. The docs say: "a retry runs the deploy
 again, exactly like a redeploy". PostgreSQL does not undo sequence advances
 or effects outside the database (the existing note stays). A commit made
-through another connection (`dblink`, `postgres_fdw`) is outside the deploy's
-transaction and invisible to pgmi, so a retry runs it again; this is a known
-limit, documented, not detected (owner 2026-11-15, PGMI-1047).
+through another connection (`dblink`, a background worker such as
+`pg_background`) is outside the deploy's transaction and invisible to pgmi,
+so a retry runs it again; this is a known limit, documented, not detected
+(owner 2026-11-15, PGMI-1047). A `postgres_fdw` write is not one: it rolls
+back with the deploy's transaction (measured on PostgreSQL 18, PGMI-1069,
+case `retry/side-connection-writes`).
 
 `--overwrite` drops and recreates once, before the first attempt; a retry
 runs against the recreated database and never drops it again or asks again.
