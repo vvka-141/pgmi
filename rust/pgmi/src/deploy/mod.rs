@@ -329,11 +329,11 @@ pub(crate) struct Failure {
     unit: usize,
     blame: blame::Blame,
     unknown: Option<Unknown>,
-    /// The unit built an index concurrently: it may be left INVALID.
-    concurrent: bool,
+    concurrent: Option<script::Concurrent>,
 }
 
 pub(crate) const INVALID_INDEX: &str = "an INVALID index may be left behind; find it with SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid, and drop it before deploying again";
+pub(crate) const PENDING_DETACH: &str = "the partition may be left with its detach pending; finish it with ALTER TABLE ... DETACH PARTITION ... FINALIZE before deploying again";
 
 /// Why a failed unit may have committed although it failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -351,6 +351,14 @@ pub(crate) enum Unknown {
 }
 
 impl Failure {
+    /// What to check after a failed or stopped unit that ran CONCURRENTLY.
+    pub(crate) fn left_behind(&self) -> Option<&'static str> {
+        self.concurrent.map(|c| match c {
+            script::Concurrent::Index => INVALID_INDEX,
+            script::Concurrent::Detach => PENDING_DETACH,
+        })
+    }
+
     fn why_unknown(&self, units: usize) -> Option<String> {
         self.unknown.map(|u| match u {
             Unknown::NoAnswer => format!(
@@ -1380,8 +1388,8 @@ fn finish(ctx: &Context, run: &Run, result: &Result<()>, reporter: &Reporter) ->
             .unwrap_or_default();
         let invalid = st
             .failure()
-            .filter(|f| f.concurrent)
-            .map(|_| format!("\n{INVALID_INDEX}"))
+            .and_then(Failure::left_behind)
+            .map(|hint| format!("\n{hint}"))
             .unwrap_or_default();
         let text = format!(
             "pgmi: error: {}{note}{}{invalid}{first}",
@@ -1507,6 +1515,12 @@ fn not_retried(execution: Option<&Execution>, after_commit: bool) -> Option<Stri
     let x = execution?;
     if let Some(why) = x.failure.as_ref().and_then(|f| f.why_unknown(x.units)) {
         return Some(why);
+    }
+    if let Some(f) = x.failure.as_ref().filter(|f| f.concurrent.is_some()) {
+        return Some(format!(
+            "unit {} of {} ran CONCURRENTLY, which commits before it ends and may have left its work half done",
+            f.unit, x.units
+        ));
     }
     (x.committed > 0 && !after_commit).then(|| {
         format!(
@@ -1741,7 +1755,7 @@ mod tests {
             unit,
             blame,
             unknown: None,
-            concurrent: false,
+            concurrent: None,
         })
     }
 
@@ -1868,7 +1882,7 @@ mod tests {
                     unit: 2,
                     blame: blame::Blame::default(),
                     unknown: Some(Unknown::NoAnswer),
-                    concurrent: false,
+                    concurrent: None,
                 }),
             )
         };
@@ -1888,7 +1902,7 @@ mod tests {
                 unit: 1,
                 blame: blame::Blame::default(),
                 unknown: Some(Unknown::CommitsInside),
-                concurrent: false,
+                concurrent: None,
             }),
         );
         for after_commit in [false, true] {
@@ -1916,6 +1930,31 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_unit_that_ran_concurrently_is_never_retried() {
+        for kind in [script::Concurrent::Index, script::Concurrent::Detach] {
+            for (committed, unit) in [(0, 1), (2, 3)] {
+                let x = executed(
+                    committed,
+                    Some(Failure {
+                        unit,
+                        blame: blame::Blame::default(),
+                        unknown: None,
+                        concurrent: Some(kind),
+                    }),
+                );
+                for after_commit in [false, true] {
+                    assert_eq!(
+                        not_retried(x.as_ref(), after_commit),
+                        Some(format!(
+                            "unit {unit} of 3 ran CONCURRENTLY, which commits before it ends and may have left its work half done"
+                        ))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn a_unit_whose_reply_never_came_is_not_reported_as_rolled_back() {
         let lost = Err(Error::new(
             Kind::Timeout,
@@ -1930,7 +1969,7 @@ mod tests {
                     unit: 1,
                     blame: blame::Blame::default(),
                     unknown: Some(Unknown::NoAnswer),
-                    concurrent: false,
+                    concurrent: None,
                 }),
             }),
             ..loaded("app")
@@ -1946,7 +1985,7 @@ mod tests {
                     unit: 2,
                     blame: blame::Blame::default(),
                     unknown: Some(Unknown::NoAnswer),
-                    concurrent: false,
+                    concurrent: None,
                 }),
             ),
             ..loaded("app")

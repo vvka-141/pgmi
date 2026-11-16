@@ -181,6 +181,21 @@ from the server, so whether it committed is unknown` and exit 13. A
 connection lost before deploy.sql runs (connect, lock, session load) is
 still retried.
 
+## Changed by PGMI-1072 (2026-11-16): a failed CONCURRENTLY unit is never retried
+
+`CREATE INDEX CONCURRENTLY` commits its catalog entry before it builds. A
+build that failed with a retried error (a lock timeout, a deadlock) left an
+INVALID index; the retry ran `CREATE INDEX CONCURRENTLY IF NOT EXISTS`
+again, which skipped it, and the deploy exited 0 where Go exits 13. A
+failed unit that ran `CREATE [UNIQUE] INDEX CONCURRENTLY`,
+`REINDEX ... CONCURRENTLY`, `DROP INDEX CONCURRENTLY` or
+`ALTER TABLE ... DETACH PARTITION ... CONCURRENTLY` now ends the run,
+whatever `retry_after_commit` says, with `not retried: unit U of T ran
+CONCURRENTLY, which commits before it ends and may have left its work half
+done` and exit 13. pgmi does not ask the server whether anything was left:
+the rule is by statement kind, so a build refused before its first commit is
+not retried either.
+
 ## Changed by PGMI-919
 
 An attempt records the backend pid that took the deploy lock. When a later

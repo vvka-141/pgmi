@@ -164,6 +164,18 @@ unit failed, whatever pgmi made of the SQL text:
 pgmi: attempt 1 failed (55P03 lock not available); not retried: unit 1 of 1 ran a COMMIT on the server before it failed
 ```
 
+And when the failed unit ran `CREATE INDEX CONCURRENTLY`,
+`REINDEX ... CONCURRENTLY`, `DROP INDEX CONCURRENTLY` or
+`ALTER TABLE ... DETACH PARTITION ... CONCURRENTLY`. These commit before
+they end: a failed build leaves an INVALID index, which
+`CREATE INDEX CONCURRENTLY IF NOT EXISTS` would skip on a rerun and report
+success. So pgmi never runs one again, not even with `retry_after_commit`:
+
+```
+pgmi: attempt 1 failed (55P03 lock not available); not retried: unit 3 of 3 ran CONCURRENTLY, which commits before it ends and may have left its work half done
+an INVALID index may be left behind; find it with SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid, and drop it before deploying again
+```
+
 Check the database, then deploy again. A connection lost before deploy.sql
 starts (while connecting, taking the lock or loading the session) is still
 retried.

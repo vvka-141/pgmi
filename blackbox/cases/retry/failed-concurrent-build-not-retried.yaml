@@ -1,0 +1,59 @@
+description: Rust only (contract "Whole-deployment retry", PGMI-1072). A CREATE INDEX CONCURRENTLY that fails with an error that is otherwise retried (here a lock timeout while another session writes the table) has already committed its INVALID index, so the deploy is never retried, with or without retry_after_commit - exit 13, the reason and the INVALID-index hint named; a retry would have let IF NOT EXISTS skip the INVALID index and exit 0. The same for a concurrent build that is the whole deploy.sql, for DROP INDEX CONCURRENTLY and for DETACH PARTITION CONCURRENTLY
+impl: rust
+proxy:
+  - {query: "INDEX CONCURRENTLY IF NOT EXISTS lone_x", do: {error: "55P03", severity: ERROR}, times: 1}
+  - {query: "DROP INDEX CONCURRENTLY", do: {error: "40P01", severity: ERROR}, times: 1}
+  - {query: "DETACH PARTITION", do: {error: "55P03", severity: ERROR}, times: 1}
+project:
+  files:
+    pgmi.yaml: "retry_after_commit: true\n"
+    deploy.sql: |
+      SELECT pg_sleep(1);
+      COMMIT;
+      SET lock_timeout = '500ms';
+      CREATE INDEX CONCURRENTLY IF NOT EXISTS cic_x ON cic (x);
+    lone/deploy.sql: |
+      CREATE INDEX CONCURRENTLY IF NOT EXISTS lone_x ON cic (x);
+    drop/deploy.sql: |
+      DROP INDEX CONCURRENTLY IF EXISTS cic_x;
+    detach/deploy.sql: |
+      ALTER TABLE parted DETACH PARTITION parted_1 CONCURRENTLY;
+steps:
+  - sql: CREATE DATABASE "{db}"
+    database: maintenance
+  - sql: CREATE TABLE cic (x int); CREATE TABLE parted (x int) PARTITION BY LIST (x); CREATE TABLE parted_1 PARTITION OF parted FOR VALUES IN (1);
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    background: true
+    timeout: 30
+    expect:
+      exit: 13
+      stderr:
+        - "^pgmi: attempt 1 failed \\(55P03 lock not available\\); not retried: unit 3 of 3 ran CONCURRENTLY, which commits before it ends and may have left its work half done$"
+        - "^an INVALID index may be left behind; find it with SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid, and drop it before deploying again$"
+      stderr_not: ["retrying in", "already exists, skipping"]
+      sql:
+        - query: SELECT indisvalid FROM pg_index WHERE indexrelid = 'public.cic_x'::regclass
+          rows: [[false]]
+  - sql: BEGIN; INSERT INTO cic VALUES (1); SELECT pg_sleep(3); COMMIT;
+  - pgmi: [deploy, "{project}/lone", --connection, "{proxy_conn}", -d, "{db}"]
+    timeout: 30
+    expect:
+      exit: 13
+      stderr: ["^pgmi: attempt 1 failed \\(55P03 lock not available\\); not retried: unit 1 of 1 ran CONCURRENTLY, which commits before it ends and may have left its work half done$"]
+      stderr_not: ["retrying in"]
+      sql:
+        - query: SELECT count(*) FROM pg_class WHERE relname = 'lone_x'
+          rows: [[0]]
+  - pgmi: [deploy, "{project}/drop", --connection, "{proxy_conn}", -d, "{db}"]
+    timeout: 30
+    expect:
+      exit: 13
+      stderr: ["^pgmi: attempt 1 failed \\(40P01 deadlock detected\\); not retried: unit 1 of 1 ran CONCURRENTLY", "^an INVALID index may be left behind"]
+      stderr_not: ["retrying in"]
+  - pgmi: [deploy, "{project}/detach", --connection, "{proxy_conn}", -d, "{db}", --json]
+    timeout: 30
+    expect:
+      exit: 13
+      stderr: ["not retried: unit 1 of 1 ran CONCURRENTLY", "^the partition may be left with its detach pending; finish it with ALTER TABLE \\.\\.\\. DETACH PARTITION \\.\\.\\. FINALIZE before deploying again$"]
+      stderr_not: ["retrying in", "INVALID index"]
+      json: {sqlstate: "55P03", hint: "the partition may be left with its detach pending; finish it with ALTER TABLE ... DETACH PARTITION ... FINALIZE before deploying again"}

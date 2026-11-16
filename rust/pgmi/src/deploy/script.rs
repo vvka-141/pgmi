@@ -93,24 +93,40 @@ pub(crate) fn prepares(unit: &str) -> bool {
         .any(|w| w.len() >= 2 && eq(w[0], "PREPARE") && eq(w[1], "TRANSACTION"))
 }
 
-/// True when the unit builds an index concurrently, which a failure or a
-/// stop leaves behind INVALID.
-pub(crate) fn builds_concurrently(unit: &str) -> bool {
+/// What a unit run CONCURRENTLY leaves behind when it fails or is stopped:
+/// the statement commits before it ends, so it never rolls back whole.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Concurrent {
+    Index,
+    Detach,
+}
+
+pub(crate) fn concurrent(unit: &str) -> Option<Concurrent> {
     let bytes = unit.as_bytes();
     statements(unit)
         .into_iter()
         .map(|(s, e)| words(&bytes[s..e], &lexer::tokens(&bytes[s..e])))
-        .any(|w| match w.first() {
-            Some(first) if eq(first, "CREATE") => {
+        .find_map(|w| {
+            let has = |word: &str| w.iter().any(|x| eq(x, word));
+            let first = w.first()?;
+            if eq(first, "CREATE") {
                 let rest = if w.get(1).is_some_and(|u| eq(u, "UNIQUE")) {
                     &w[2..]
                 } else {
                     &w[1..]
                 };
-                rest.len() >= 2 && eq(rest[0], "INDEX") && eq(rest[1], "CONCURRENTLY")
+                (rest.len() >= 2 && eq(rest[0], "INDEX") && eq(rest[1], "CONCURRENTLY"))
+                    .then_some(Concurrent::Index)
+            } else if eq(first, "REINDEX") {
+                has("CONCURRENTLY").then_some(Concurrent::Index)
+            } else if eq(first, "DROP") {
+                (w.len() >= 3 && eq(w[1], "INDEX") && eq(w[2], "CONCURRENTLY"))
+                    .then_some(Concurrent::Index)
+            } else if eq(first, "ALTER") {
+                (has("DETACH") && has("CONCURRENTLY")).then_some(Concurrent::Detach)
+            } else {
+                None
             }
-            Some(first) if eq(first, "REINDEX") => w.iter().any(|x| eq(x, "CONCURRENTLY")),
-            _ => false,
         })
 }
 
@@ -407,23 +423,40 @@ mod tests {
     }
 
     #[test]
-    fn an_index_built_concurrently_is_recognised_in_any_spelling() {
+    fn a_statement_run_concurrently_is_recognised_in_any_spelling() {
         for unit in [
             "CREATE INDEX CONCURRENTLY i ON t (x);",
             "/* why */ create unique index concurrently i on t (x)",
             "-- note\nCREATE INDEX CONCURRENTLY IF NOT EXISTS i ON t (x);",
             "REINDEX TABLE CONCURRENTLY t;",
             "reindex (verbose) index concurrently i;",
+            "REINDEX (CONCURRENTLY) TABLE t;",
+            "DROP INDEX CONCURRENTLY i;",
+            "drop index concurrently if exists s.i cascade;",
+            "SET lock_timeout = '1s'; CREATE INDEX CONCURRENTLY i ON t (x);",
         ] {
-            assert!(builds_concurrently(unit), "{unit}");
+            assert_eq!(concurrent(unit), Some(Concurrent::Index), "{unit}");
+        }
+        for unit in [
+            "ALTER TABLE p DETACH PARTITION p_1 CONCURRENTLY;",
+            "alter table if exists only s.p detach partition s.p_1 concurrently",
+        ] {
+            assert_eq!(concurrent(unit), Some(Concurrent::Detach), "{unit}");
         }
         for unit in [
             "CREATE INDEX i ON t (x);",
             "CREATE INDEX concurrently_named ON t (x);",
             "SELECT 'CREATE INDEX CONCURRENTLY';",
             "REINDEX TABLE t;",
+            "DROP INDEX i;",
+            "DROP TABLE concurrently;",
+            "ALTER TABLE p DETACH PARTITION p_1;",
+            "ALTER TABLE p DETACH PARTITION p_1 FINALIZE;",
+            "ALTER TABLE concurrently ADD COLUMN x int;",
+            "REFRESH MATERIALIZED VIEW CONCURRENTLY m;",
+            "DO $$ BEGIN EXECUTE 'DROP INDEX CONCURRENTLY i'; END $$;",
         ] {
-            assert!(!builds_concurrently(unit), "{unit}");
+            assert_eq!(concurrent(unit), None, "{unit}");
         }
     }
 

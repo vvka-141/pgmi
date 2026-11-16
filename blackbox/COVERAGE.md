@@ -350,5 +350,6 @@ bad-weather cases above give Rust's retry under `expect.rust`.
 | a wait that would pass the deadline is not started; the last error's exit code | ✓ `retry/wait-cut-at-the-deadline` |
 | SIGINT during a wait: exit 130 at once | ✓ `retry/signal-during-a-wait` |
 | a failing test is never retried | ✓ `retry/failing-test-not-retried` |
+| a failed unit that ran CONCURRENTLY (index build, REINDEX, DROP INDEX, DETACH PARTITION) is never retried, with or without `retry_after_commit` | ✓ `retry/failed-concurrent-build-not-retried` |
 | `retry: false` in `pgmi.yaml` | ✓ `retry/retry-false` |
 | `--timeout 0`: 5 attempts | ✓ `retry/no-time-box-five-attempts` |

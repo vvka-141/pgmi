@@ -176,7 +176,11 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   committed is unknown, so pgmi says so and exits 13. Nor is a failed
   deploy.sql that is one `CALL`, or one `DO` block that says `COMMIT` or
   `CALL`: it may have committed inside itself. Nor is one in which the
-  server reported a `COMMIT` before the failure. A write committed through
+  server reported a `COMMIT` before the failure. Nor is a failed
+  `CREATE INDEX CONCURRENTLY`, `REINDEX ... CONCURRENTLY`,
+  `DROP INDEX CONCURRENTLY` or `DETACH PARTITION ... CONCURRENTLY`: it
+  commits before it ends, and a rerun with `IF NOT EXISTS` would skip the
+  INVALID index it left and report success. A write committed through
   another connection (`dblink`, a background worker) is invisible to pgmi
   and runs again on a retry, so such a deploy must be safe to rerun or set
   `retry: false`. A `postgres_fdw` write is not one: it rolls back with the

@@ -802,15 +802,19 @@ attempt after an earlier one failed says `time box of <d> used up after N
 attempts; last error: ...`, a wait is never started past the deadline, and a
 signal during a wait is exit 130 at once.
 
-A `CREATE [UNIQUE] INDEX CONCURRENTLY` or `REINDEX ... CONCURRENTLY` that a
+A `CREATE [UNIQUE] INDEX CONCURRENTLY`, `REINDEX ... CONCURRENTLY` or
+`DROP INDEX CONCURRENTLY` that a
 `--timeout`, a signal or its own error stops leaves an INVALID index, which
 a later `IF NOT EXISTS` skips. The Rust binary adds `an INVALID index may be
 left behind; find it with SELECT indexrelid::regclass FROM pg_index WHERE
 NOT indisvalid, and drop it before deploying again` after the error and
 puts it in the `--json` `hint` when the server sent none; Go says nothing
-(PGMI-998).
+(PGMI-998). For `ALTER TABLE ... DETACH PARTITION ... CONCURRENTLY` the line
+is `the partition may be left with its detach pending; finish it with ALTER
+TABLE ... DETACH PARTITION ... FINALIZE before deploying again` (PGMI-1072).
+Such a unit is never retried (see "Whole-deployment retry").
 
-Cases: `retry/deadline-during-an-attempt`, `retry/wait-cut-at-the-deadline`, `retry/signal-during-a-wait`, `config/pgmi-yaml-timeout-too-long`, `exit-codes/16-timeout`, `errors/timeout-while-connecting`, `exit-codes/130-interrupted`, `exit-codes/130-sigterm`, `flags/timeout-forms`, `cancel/timeout-cancels`, `cancel/timeout-over-tls`, `cancel/sigint-twice`, `env/pgconnect-timeout`, `cancel/ctrl-c-json-exit-code`, `cancel/timeout-leaves-invalid-concurrent-index`, `cancel/stopped-record`, `bad-weather/frozen-server-timeout`, `bad-weather/signal-while-connecting`, `bad-weather/signal-during-connect-backoff`, `bad-weather/signal-during-session-setup`, `bad-weather/signal-in-tail`, `bad-weather/signal-at-lock-release`, `bad-weather/lock-wait-timeout`.
+Cases: `retry/deadline-during-an-attempt`, `retry/wait-cut-at-the-deadline`, `retry/signal-during-a-wait`, `config/pgmi-yaml-timeout-too-long`, `exit-codes/16-timeout`, `errors/timeout-while-connecting`, `exit-codes/130-interrupted`, `exit-codes/130-sigterm`, `flags/timeout-forms`, `cancel/timeout-cancels`, `cancel/timeout-over-tls`, `cancel/sigint-twice`, `env/pgconnect-timeout`, `cancel/ctrl-c-json-exit-code`, `cancel/timeout-leaves-invalid-concurrent-index`, `retry/failed-concurrent-build-not-retried`, `cancel/stopped-record`, `bad-weather/frozen-server-timeout`, `bad-weather/signal-while-connecting`, `bad-weather/signal-during-connect-backoff`, `bad-weather/signal-during-session-setup`, `bad-weather/signal-in-tail`, `bad-weather/signal-at-lock-release`, `bad-weather/lock-wait-timeout`.
 
 ### Checksums
 
@@ -1478,7 +1482,13 @@ a COMMIT before the failure: `not retried: unit U of T ran a COMMIT on the
 server before it failed`, PGMI-1021; and a failed unit that ran PREPARE TRANSACTION, whose
 work waits holding its locks: `not retried: unit U of T ran PREPARE
 TRANSACTION, which may have left a prepared transaction`, the summary
-pointing to `pg_prepared_xacts`, PGMI-991); 57P01 only when the server
+pointing to `pg_prepared_xacts`, PGMI-991; and a failed unit that ran
+`CREATE [UNIQUE] INDEX CONCURRENTLY`, `REINDEX ... CONCURRENTLY`,
+`DROP INDEX CONCURRENTLY` or `ALTER TABLE ... DETACH PARTITION ...
+CONCURRENTLY`, which commits before it ends, so a rerun with `IF NOT EXISTS`
+would skip the INVALID index and report success: `not retried: unit U of T
+ran CONCURRENTLY, which commits before it ends and may have left its work
+half done`, PGMI-1072); 57P01 only when the server
 restarted (pgmi opens a fresh session at once and compares
 `pg_postmaster_start_time()`; the same start time means an administrator
 ended the session, which is final, keeps the 57P01 and its exit code and

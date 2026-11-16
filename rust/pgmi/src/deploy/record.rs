@@ -279,9 +279,7 @@ impl DeployRecord {
         }
         let clean = |t: &str| redact(&redact_sql_passwords(t), secrets);
         self.error = Some(clean(&e.text()));
-        let invalid = failure
-            .filter(|f| f.concurrent)
-            .map(|_| super::INVALID_INDEX.to_string());
+        let invalid = failure.and_then(Failure::left_behind).map(str::to_string);
         self.hint.clone_from(&invalid);
         let Some(d) = e.sql_diagnostics() else {
             return;
