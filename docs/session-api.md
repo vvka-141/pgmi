@@ -965,7 +965,7 @@ pgmi is not a migration framework. It's an **execution fabric**.
 |---------------------------|------|
 | Decides execution order | Your SQL queries and filters the plan |
 | Controls transactions | Your SQL controls transactions |
-| Provides retry logic | Your SQL provides retry logic (EXCEPTION blocks) |
+| Retries statements by its own rules | Your SQL decides what is retried inside a transaction (EXCEPTION blocks); pgmi only runs the whole deploy again after a transient failure ([time box and retries](CLI.md#time-box-and-retries)) |
 | Has migration history table | You implement tracking however you want |
 | Black box | Transparent — session state is queryable |
 

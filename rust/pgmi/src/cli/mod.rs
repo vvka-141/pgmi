@@ -227,7 +227,7 @@ pub(crate) struct DeployArgs {
     pub(crate) overwrite: bool,
     #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool, help = "Never block on an interactive prompt (for CI/CD; no-op when nothing would prompt)\nWith --overwrite: replaces the approval prompt with a 5-second countdown (Ctrl-C aborts)\nOnly affects confirmation dialogs, not deployment behavior")]
     pub(crate) force: bool,
-    #[arg(long, value_parser = timeout_flag, help = "Catastrophic failure protection timeout (default 3m)\nPrevents indefinite hangs from network issues or deadlocks\nUse 0 to disable the limit\nFor query-level timeouts, use SET statement_timeout in SQL\nExamples: 30s, 5m, 1h30m, 0 (default 3m0s)")]
+    #[arg(long, value_parser = timeout_flag, help = "Time box of the whole run (default 3m): sign-in, connecting, every attempt and the waits between them\nA transient failure (lost connection, server restart, deadlock, serialization failure, lock timeout) runs the deploy again from the start inside it\nNever retried: a failing test, any other SQL error, a failure after a commit (unless pgmi.yaml retry_after_commit: true), a unit whose outcome is unknown\npgmi.yaml retry: false turns retrying off; 0 sets no time box (then at most 5 attempts)\nFor query-level timeouts, use SET statement_timeout in SQL\nExamples: 30s, 5m, 1h30m, 0 (default 3m0s)")]
     pub(crate) timeout: Option<Duration>,
     #[arg(
         long,

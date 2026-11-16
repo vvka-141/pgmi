@@ -30,10 +30,12 @@ the SQL side:
 - **No tool-imposed execution order.** The
   [plan is a derived, queryable view](../METADATA.md#execution-order-sort-keys);
   your deploy.sql decides what to run and in which order.
-- **No retry logic or error taxonomy.** Errors are PostgreSQL's own, with the
-  failing file named ([limits](../TRADEOFFS.md#a-runtime-error-names-the-file-not-the-line))
-  and [numbered exit codes](../CLI.md); retry policy belongs to the layer
-  that owns the transaction.
+- **No statement-level retry or error taxonomy.** Errors are PostgreSQL's
+  own, with the failing file named ([limits](../TRADEOFFS.md#a-runtime-error-names-the-file-not-the-line))
+  and [numbered exit codes](../CLI.md); retry policy inside a transaction
+  belongs to the layer that owns it. pgmi's one retry is at its own layer:
+  after a transient failure it runs the whole deploy again, exactly like a
+  redeploy ([time box and retries](../CLI.md#time-box-and-retries)).
 - **No implicit idempotency.** `CREATE OR REPLACE`, `IF NOT EXISTS`, and
   checksum-tracking patterns are yours to apply — pgmi will faithfully re-run
   whatever you give it.

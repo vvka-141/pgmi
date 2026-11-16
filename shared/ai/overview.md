@@ -6,7 +6,7 @@
 
 pgmi loads the project's files and parameters into session-scoped temporary tables and views, then runs the project's `deploy.sql`. Three things follow:
 
-1. **The project's SQL runs the deploy.** `deploy.sql` queries the session views and decides what runs, in what order, and inside which transaction. Execution order, retries and idempotency belong in that SQL, never in a CLI flag. pgmi is not a migration framework.
+1. **The project's SQL runs the deploy.** `deploy.sql` queries the session views and decides what runs, in what order, and inside which transaction. Execution order, idempotency and any retry inside a transaction belong in that SQL, never in a CLI flag. pgmi itself runs the whole deploy again, from the start, when it fails for a transient reason (see "Retries" below). pgmi is not a migration framework.
 2. **A test tree can gate the commit.** `CALL pgmi_test()` runs the `__test__/` directories against the changed, uncommitted database; each test rolls back to its directory's fixture state. Called before `COMMIT`, a failing test aborts that transaction; anything an earlier `COMMIT` applied stays.
 3. **You get tools and project skills.** `pgmi ai contract` prints this binary's session API and `pgmi serve` offers pgmi's commands over MCP. The basic and advanced templates write an `AGENTS.md` and skills into the project. pgmi runs what you ask; it plans nothing on its own.
 
@@ -156,6 +156,25 @@ IF v_env <> 'prod' THEN
 END IF;
 ```
 
+## Retries
+
+pgmi retries a deploy as a whole, never a statement. When an attempt fails
+for a transient reason (a lost connection before deploy.sql runs, a server
+restart, too many connections, a deadlock, a serialization failure, a lock
+timeout), pgmi opens a new session and runs the deploy again from its first
+line, inside `--timeout` (default 3m), and prints
+`pgmi: attempt N failed (...); retrying in ...` on stderr. So a deploy.sql
+must be safe to run again, as for any redeploy.
+
+Never retried: a failing test, any other SQL error, a failure after a unit
+committed (unless `pgmi.yaml` sets `retry_after_commit: true`), and a unit
+whose outcome pgmi cannot know: one whose reply was lost, one `CALL` or
+committing `DO` block, or a statement run `CONCURRENTLY`. `retry: false` in
+`pgmi.yaml` turns retrying off; `--timeout 0` allows at most 5 attempts.
+`--json` lists every attempt in `attempts`. A retry loop around `pgmi deploy`
+in a pipeline is not needed. Retrying a single statement inside a
+transaction is still deploy.sql's own business.
+
 ## Key Differentiators
 
 Ten distinctive capabilities are grounded in the implementation and guides.
@@ -268,7 +287,7 @@ Parameters:
 Workflow:
   --overwrite            Drop and recreate the database
   --force                Non-interactive 5s countdown (CI/CD)
-  --timeout DURATION     Catastrophic failure timeout (default 3m)
+  --timeout DURATION     Time box of the whole run, retries included (default 3m; 0 = none)
   --compat VERSION       Refuse a binary that does not ship this session API version
   --json                 Emit structured JSON to stdout after deployment
 ```

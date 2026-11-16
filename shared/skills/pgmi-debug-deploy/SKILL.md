@@ -28,7 +28,8 @@ need them. The fields that matter on failure:
 | `failedFileCandidates` | Present when several SQL files hold that same text: a copy is loaded too, and any of them may be the one that ran |
 | `script`, `line`, `column`, `sourceLine` | Where, when PostgreSQL gave a position |
 | `where`, `detail`, `hint` | PostgreSQL's own context fields |
-| `executionMode`, `unitsCommitted` | Whether anything was committed (below) |
+| `executionMode`, `unitsCommitted`, `outcomeUnknown` | Whether anything was committed (below) |
+| `attempts` | Each run of the deploy, in order: pgmi runs the whole deploy again after a transient failure (lost connection, deadlock, lock timeout). A failed attempt carries its own `sqlstate` and `message`; the top-level fields describe the last one |
 | `notices` | The deploy's last NOTICE, WARNING and test lines, the ones just before the failure |
 
 Where the location comes from:
@@ -112,9 +113,15 @@ the handler, or re-raise with a bare `RAISE;`.
 
 ## Did anything apply?
 
+First read `outcomeUnknown`. When it is `true`, a unit was sent and may have
+committed although it failed (its reply was lost, or it commits inside
+itself): do not conclude from the table that nothing applied. Check the
+database, then redeploy. A failed statement run `CONCURRENTLY` is the same
+case in small: `hint` says what it may have left (an INVALID index to drop).
+
 | `executionMode` | `unitsCommitted` | Database |
 |---|---|---|
-| `atomic` | 0 | Unchanged. The failure was before the first top-level `COMMIT` and everything rolled back |
+| `atomic` | 0 | Unchanged, unless `outcomeUnknown` is `true`. The failure was before the first top-level `COMMIT` and everything rolled back |
 | `psql` | N | The failure was after the first top-level `COMMIT`. N units committed: everything through that `COMMIT`, then each tail statement before the failing one. Redeploying runs them again, so they must be re-runnable |
 | absent | | `deploy.sql` never started. Nothing ran |
 

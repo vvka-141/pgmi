@@ -186,7 +186,7 @@ pgmi provides:
 pgmi does NOT decide:
 - Transaction boundaries (you write `BEGIN`/`COMMIT`)
 - Which files run (you query and filter `pgmi_plan_view` or `pgmi_source_view`)
-- Retry logic (you use `EXCEPTION` blocks)
+- Retry logic inside a transaction (you use `EXCEPTION` blocks). pgmi only runs the whole deploy again, from its first line, after a transient failure such as a lost connection or a deadlock ([time box and retries](CLI.md#time-box-and-retries))
 - Idempotency (you write `IF NOT EXISTS`, `ON CONFLICT`)
 
 ### Your SQL remains portable

@@ -187,7 +187,11 @@ autocommit tail), a failure is final unless `pgmi.yaml` sets
 `retry_after_commit: true`. A connection lost while a unit of deploy.sql runs
 is never retried, not even then: whether it committed is unknown, so pgmi
 says so and exits 13. Nor is a failed unit that is one `CALL`, or one `DO`
-block that says `COMMIT`: it may have committed inside itself. Check the
+block that says `COMMIT`: it may have committed inside itself. Nor is a
+failed `CREATE INDEX CONCURRENTLY`, `REINDEX ... CONCURRENTLY`,
+`DROP INDEX CONCURRENTLY` or `DETACH PARTITION ... CONCURRENTLY`: it commits
+before it ends, and a rerun with `IF NOT EXISTS` would skip the INVALID index
+it left and report success. Check the
 database, then deploy again. A connection lost before deploy.sql starts is
 still retried.
 

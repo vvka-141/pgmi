@@ -446,6 +446,57 @@ fn example_matches_basic_template() {
     }
 }
 
+/// pgmi retries a whole deploy after a transient failure. What an agent
+/// reads first must say so: an agent told "pgmi never retries" wraps the
+/// deploy in its own loop, or reads a retried run as a plain failure.
+#[test]
+fn agent_texts_state_the_whole_deploy_retry() {
+    let overview = embedded("ai/overview.md");
+    for stale in [
+        "retries and idempotency belong in that SQL",
+        "Catastrophic failure timeout",
+    ] {
+        assert!(!overview.contains(stale), "overview.md still says: {stale}");
+    }
+    for needed in [
+        "## Retries",
+        "runs the deploy again from its first",
+        "retry_after_commit: true",
+        "`retry: false`",
+        "Never retried: a failing test",
+        "`CONCURRENTLY`",
+    ] {
+        assert!(overview.contains(needed), "overview.md lacks: {needed}");
+    }
+    let skill = embedded("skills/pgmi-debug-deploy/SKILL.md");
+    for needed in [
+        "`outcomeUnknown`",
+        "`attempts`",
+        "unless `outcomeUnknown` is `true`",
+    ] {
+        assert!(skill.contains(needed), "pgmi-debug-deploy lacks: {needed}");
+    }
+    for (page, stale) in [
+        (
+            "docs/session-api.md",
+            "Your SQL provides retry logic (EXCEPTION blocks) |",
+        ),
+        (
+            "docs/WHY-PGMI.md",
+            "- Retry logic (you use `EXCEPTION` blocks)\n",
+        ),
+        (
+            "docs/design/why-execution-fabric.md",
+            "**No retry logic or error taxonomy.**",
+        ),
+    ] {
+        assert!(
+            !repo_file(page).contains(stale),
+            "{page} still says: {stale}"
+        );
+    }
+}
+
 #[test]
 fn overview_names_the_scaffolded_skills() {
     let body = embedded("ai/overview.md");
