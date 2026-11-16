@@ -652,14 +652,14 @@ pub(crate) fn default_crl(spec: &Spec) -> Option<PathBuf> {
         .and_then(|f| existing(f.dir.join("root.crl")))
 }
 
-/// Whether libpq would read a revocation list for this connection: only
-/// when it verifies against a root certificate file. With the system trust
-/// store it reads none.
+/// Whether a revocation list belongs to this connection's promise: a
+/// verifying mode, unless the root is `sslrootcert=system`, where libpq
+/// reads no list at all.
 pub(crate) fn reads_revocation_lists(spec: &Spec) -> bool {
     matches!(
         effective_mode(spec),
         SslMode::VerifyCa | SslMode::VerifyFull
-    ) && root_path(spec).is_some_and(|root| root != "system")
+    ) && spec.sslrootcert.as_deref() != Some("system")
 }
 
 pub(crate) fn effective_mode(spec: &Spec) -> SslMode {

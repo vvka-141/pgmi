@@ -591,8 +591,9 @@ const UNSUPPORTED_ENV: [(&str, &str); 3] = [
 
 /// One WARNING line per libpq variable pgmi does not support that is set,
 /// for `spec`. A revocation list libpq would read (`PGSSLCRL`,
-/// `PGSSLCRLDIR`, or `root.crl` beside `root.crt`) is refused: there the
-/// sslmode promises a check pgmi cannot make.
+/// `PGSSLCRLDIR`, or `root.crl` beside `root.crt`) is refused under a
+/// verifying sslmode, which promises a check pgmi cannot make; not with
+/// `sslrootcert=system`, where libpq reads no list.
 pub(crate) fn unsupported(env: &Env, spec: &Spec) -> Result<Vec<String>> {
     let (written, effective) = (spec.sslmode(), crate::conn::tls::effective_mode(spec));
     let revocable =

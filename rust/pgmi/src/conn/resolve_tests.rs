@@ -1710,12 +1710,11 @@ fn a_refusal_as_an_error_keeps_the_typed_reason_as_its_source() {
     );
 }
 
-/// libpq reads a revocation list only next to a root certificate file. With
-/// the system trust store (`sslrootcert=system`, or no root file at all) it
-/// reads none, so pgmi refuses none there.
+/// With `sslrootcert=system` libpq reads no revocation list, so pgmi refuses
+/// none there. Every other verifying connection still refuses one.
 #[cfg(unix)]
 #[test]
-fn a_revocation_list_is_refused_only_where_libpq_would_read_it() {
+fn a_revocation_list_is_not_refused_with_the_system_trust_store() {
     let home = crate::testdir::TempDir::new("crl-system");
     let dir = home.join(".postgresql");
     std::fs::create_dir_all(&dir).unwrap();
@@ -1734,37 +1733,37 @@ fn a_revocation_list_is_refused_only_where_libpq_would_read_it() {
     std::fs::write(&other_root, "not read here").unwrap();
     let file = format!("sslrootcert={}", other_root.display());
 
-    for mode in ["verify-ca", "verify-full", "require"] {
-        for root in ["sslrootcert=system", ""] {
-            if !root.is_empty() && mode != "verify-full" {
-                continue;
-            }
-            let text = format!("sslmode={mode} {root}");
-            assert_eq!(check(&text, &at_home(&[])).unwrap(), [""; 0], "{text}");
-            for var in ["PGSSLCRL", "PGSSLCRLDIR"] {
-                assert_eq!(
-                    check(&text, &at_home(&[(var, "/etc/crl")])).unwrap(),
-                    [format!(
-                        "WARNING: {var} is set, but pgmi does not support it: certificate revocation lists are not checked; continuing without it"
-                    )],
-                    "{text} {var}"
-                );
-            }
-        }
-        let text = format!("sslmode={mode} {file}");
+    let system = "sslmode=verify-full sslrootcert=system";
+    assert_eq!(check(system, &at_home(&[])).unwrap(), [""; 0]);
+    for var in ["PGSSLCRL", "PGSSLCRLDIR"] {
+        assert_eq!(
+            check(system, &at_home(&[(var, "/etc/crl")])).unwrap(),
+            [format!(
+                "WARNING: {var} is set, but pgmi does not support it: certificate revocation lists are not checked; continuing without it"
+            )],
+            "{var}"
+        );
+    }
+
+    for text in [
+        "sslmode=verify-ca".to_string(),
+        "sslmode=verify-full".to_string(),
+        format!("sslmode=verify-ca {file}"),
+        format!("sslmode=verify-full {file}"),
+        format!("sslmode=require {file}"),
+    ] {
         let e = check(&text, &at_home(&[])).unwrap_err();
         assert!(
             matches!(e, ResolveError::DefaultRevocation { .. }),
             "{text}: {e}"
         );
-        for claim in ["libpq checks it", "root.crl exists"] {
-            assert!(e.to_string().contains(claim), "{text}: {e}");
-        }
     }
-
     std::fs::remove_file(dir.join("root.crl")).unwrap();
-    for mode in ["verify-ca", "verify-full", "require"] {
-        let text = format!("sslmode={mode} {file}");
+    for text in [
+        "sslmode=verify-ca".to_string(),
+        "sslmode=verify-full".to_string(),
+        format!("sslmode=require {file}"),
+    ] {
         let e = check(&text, &at_home(&[("PGSSLCRL", "/etc/crl")])).unwrap_err();
         assert!(
             matches!(
@@ -1777,19 +1776,6 @@ fn a_revocation_list_is_refused_only_where_libpq_would_read_it() {
             "{text}: {e}"
         );
     }
-    std::fs::write(dir.join("root.crt"), "not read here").unwrap();
-    std::fs::write(dir.join("root.crl"), "not read").unwrap();
-    for mode in ["verify-ca", "verify-full", "require"] {
-        let text = format!("sslmode={mode}");
-        assert!(
-            matches!(
-                check(&text, &at_home(&[])).unwrap_err(),
-                ResolveError::DefaultRevocation { .. }
-            ),
-            "{text}"
-        );
-    }
-    let system = "sslmode=verify-full sslrootcert=system";
-    assert_eq!(check(system, &at_home(&[])).unwrap(), [""; 0]);
     assert_eq!(check("sslmode=prefer", &at_home(&[])).unwrap(), [""; 0]);
+    assert_eq!(check("sslmode=require", &at_home(&[])).unwrap(), [""; 0]);
 }

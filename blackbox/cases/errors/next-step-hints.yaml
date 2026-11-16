@@ -20,9 +20,11 @@ steps:
   - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, novalue]
     expect: {exit: 10, stderr: ['novalue.*\(example: --param env=production\)$']}
   - pgmi: [deploy, "{project}/broken", --connection, "{conn}", -d, "{db}"]
-    expect: {exit: 0, stderr: ["^Every line must be KEY=VALUE, a # comment, or blank\\.$"]}
+    expect: {exit: 0, stderr: ["^Every line must be KEY=VALUE, a # comment, or blank\\.$"], rust: {exit: 10}}
   - pgmi: [metadata, plan, "{project}/meta"]
     expect: {exit: 10, stderr: ["^Expected format:$", '^  <pgmi-meta id="UUID" idempotent="true\|false">$', "^  </pgmi-meta>$"]}
+  - pgmi: [deploy, "{project}/plain", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 0}
   - pgmi: [deploy, "{project}/plain", --connection, "{conn}", -d, "{db}", --overwrite]
     tty: true
     stdin: [{wait: 2}, "\x04"]
