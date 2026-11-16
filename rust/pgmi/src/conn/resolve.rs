@@ -295,6 +295,11 @@ pub(crate) enum ResolveError {
     },
     NoDatabase,
     Port(String),
+    /// A host, port or `hostaddr` written as white space only, and where.
+    Blank {
+        key: &'static str,
+        origin: &'static str,
+    },
     FlagPort(i64),
     PortCount {
         ports: usize,
@@ -374,6 +379,7 @@ impl fmt::Display for ResolveError {
                 "database name is required\nProvide via:\n  1. --database/-d flag: pgmi deploy . -d mydb\n  2. Connection string: pgmi deploy . --connection \"postgresql://user@host/mydb\"\n  3. pgmi.yaml: connection.database: mydb\n  4. Environment variable: export PGDATABASE=mydb, or a database in PGMI_CONNECTION_STRING / DATABASE_URL",
             ),
             ResolveError::Port(p) => write!(f, "invalid port \"{p}\""),
+            ResolveError::Blank { key, origin } => f.write_str(&blank(key, origin)),
             ResolveError::FlagPort(p) => write!(
                 f,
                 "invalid --port flag: invalid port {p}: must be between 1 and 65535"
@@ -439,6 +445,12 @@ impl From<Error> for ResolveError {
     fn from(e: Error) -> Self {
         ResolveError::Env(e)
     }
+}
+
+fn blank(key: &str, origin: &str) -> String {
+    format!(
+        "the {key} from {origin} is only whitespace; write the {key}, or leave it empty so the next source applies"
+    )
 }
 
 fn verifying(mode: SslMode, with_root: bool) -> String {
@@ -765,6 +777,7 @@ fn finish(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>, given: Given)
         string_db,
     } = given;
     let sslmode_source = SslModeSource::of(flags, &fields, source, env, yaml)?;
+    let written = Written::of(&fields, source, env)?;
     merge(&mut fields, flags, env, yaml, source)?;
     let f = &mut fields;
     let Databases {
@@ -772,7 +785,7 @@ fn finish(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>, given: Given)
         maintenance: maintenance_db,
         replaced: replaced_db,
     } = databases(flags, string_db.as_deref(), source, env, yaml)?;
-    let hosts = take_hosts(f)?;
+    let hosts = take_hosts(f, &written)?;
     let tls = TlsSettings::take(f)?;
     check_protocol(f)?;
     let channel_binding = keyword(f, "channel_binding", ChannelBinding::Prefer)?;
@@ -941,8 +954,51 @@ fn databases(
     })
 }
 
-fn take_hosts(f: &mut Fields) -> Result<Hosts> {
-    let hostaddr = f.remove("hostaddr").filter(|a| !a.trim().is_empty());
+/// Where the host and the port were written, for the message that refuses
+/// one that is white space only.
+struct Written {
+    host: &'static str,
+    port: &'static str,
+    string: &'static str,
+}
+
+impl Written {
+    fn of(given: &Fields, source: Source, env: &Env) -> Result<Self> {
+        let from = |key: &str, flag: &'static str, variable: &'static str| -> Result<_> {
+            Ok(if !given.contains_key(key) {
+                match env.non_empty(variable)? {
+                    Some(_) => variable,
+                    None => Source::Yaml.label(),
+                }
+            } else if source.is_string() {
+                source.label()
+            } else {
+                flag
+            })
+        };
+        Ok(Written {
+            host: from("host", "-h", "PGHOST")?,
+            port: from("port", "-p", "PGPORT")?,
+            string: source.label(),
+        })
+    }
+}
+
+/// A list entry that is white space only names no server, and trimmed to
+/// empty it would read as the default one: localhost, port 5432.
+fn refuse_blank(text: Option<&String>, key: &'static str, origin: &'static str) -> Result<()> {
+    let blank = |e: &str| !e.is_empty() && e.trim().is_empty();
+    if text.is_some_and(|t| t.split(',').any(blank)) {
+        return Err(ResolveError::Blank { key, origin });
+    }
+    Ok(())
+}
+
+fn take_hosts(f: &mut Fields, written: &Written) -> Result<Hosts> {
+    refuse_blank(f.get("host"), "host", written.host)?;
+    refuse_blank(f.get("port"), "port", written.port)?;
+    refuse_blank(f.get("hostaddr"), "hostaddr", written.string)?;
+    let hostaddr = f.remove("hostaddr").filter(|a| !a.is_empty());
     let host_text = f.remove("host").or_else(|| hostaddr.clone());
     hosts(
         host_text.as_deref().unwrap_or("localhost"),

@@ -1,0 +1,132 @@
+description: a host that is only white space names no server, and is refused before connecting (exit 10) from every source - a keyword, URI or ADO.NET connection string, -h, PGHOST, PGMI_CONNECTION_STRING, DATABASE_URL and pgmi.yaml - as are a white-space port and hostaddr; trimmed to empty it would read as localhost or port 5432, a server the operator did not name, and the deploy would exit 0 there (PGMI-1094). Go refuses each form too, in its own words; Rust names the setting and where it was written
+project:
+  files:
+    deploy.sql: CREATE TABLE reached (n int);
+    yamlp/deploy.sql: CREATE TABLE reached (n int);
+    setup/deploy.sql: SELECT 1;
+    yamlp/pgmi.yaml: |
+      connection:
+        host: " "
+        port: {port}
+        username: "{user}"
+        database: "{db}"
+steps:
+  - pgmi: [deploy, "{project}/setup", --connection, "{conn}", -d, "{db}"]
+    expect: {exit: 0}
+  - pgmi: ["deploy", "{project}", "--connection", "host=' ' port={port} user={user} password={password} dbname=postgres", "-d", "{db}"]
+    env: {"PGHOST": "127.0.0.2", "PGSSLMODE": "disable"}
+    timeout: 30
+    expect:
+      exit: 10
+      stdout_not: ['^ok ']
+      rust:
+        stderr: ['^pgmi: error: the host from --connection is only whitespace; write the host, or leave it empty so the next source applies$']
+  - pgmi: ["deploy", "{project}", "--connection", "host='\t' port={port} user={user} password={password} dbname=postgres", "-d", "{db}"]
+    env: {"PGHOST": "127.0.0.2", "PGSSLMODE": "disable"}
+    timeout: 30
+    expect:
+      exit: 10
+      stdout_not: ['^ok ']
+      rust:
+        stderr: ['^pgmi: error: the host from --connection is only whitespace; write the host, or leave it empty so the next source applies$']
+  - pgmi: ["deploy", "{project}", "--connection", "postgresql://{user}:{password}@%20:{port}/postgres", "-d", "{db}"]
+    env: {"PGHOST": "127.0.0.2", "PGSSLMODE": "disable"}
+    timeout: 30
+    expect:
+      exit: 10
+      stdout_not: ['^ok ']
+      rust:
+        stderr: ['^pgmi: error: the host from --connection is only whitespace; write the host, or leave it empty so the next source applies$']
+  - pgmi: ["deploy", "{project}", "--connection", "postgresql://{user}:{password}@:{port}/postgres?host=%20", "-d", "{db}"]
+    env: {"PGHOST": "127.0.0.2", "PGSSLMODE": "disable"}
+    timeout: 30
+    expect:
+      exit: 10
+      stdout_not: ['^ok ']
+      rust:
+        stderr: ['^pgmi: error: the host from --connection is only whitespace; write the host, or leave it empty so the next source applies$']
+  - pgmi: ["deploy", "{project}", "--connection", "Host=' ';Port={port};Username={user};Password={password};Database=postgres", "-d", "{db}"]
+    env: {"PGHOST": "127.0.0.2", "PGSSLMODE": "disable"}
+    timeout: 30
+    expect:
+      exit: 10
+      stdout_not: ['^ok ']
+      rust:
+        stderr: ['^pgmi: error: the host from --connection is only whitespace; write the host, or leave it empty so the next source applies$']
+  - pgmi: ["deploy", "{project}", "-h", " ", "-p", "{port}", "-U", "{user}", "-d", "{db}"]
+    env: {"PGPASSWORD": "{password}", "PGSSLMODE": "disable"}
+    timeout: 30
+    expect:
+      exit: 10
+      stdout_not: ['^ok ']
+      rust:
+        stderr: ['^pgmi: error: the host from -h is only whitespace; write the host, or leave it empty so the next source applies$']
+  - pgmi: ["deploy", "{project}", "-d", "{db}"]
+    env: {"PGHOST": " ", "PGPORT": "{port}", "PGUSER": "{user}", "PGPASSWORD": "{password}", "PGSSLMODE": "disable"}
+    timeout: 30
+    expect:
+      exit: 10
+      stdout_not: ['^ok ']
+      rust:
+        stderr: ['^pgmi: error: the host from PGHOST is only whitespace; write the host, or leave it empty so the next source applies$']
+  - pgmi: ["deploy", "{project}", "--connection", "port={port} user={user} password={password} dbname=postgres", "-d", "{db}"]
+    env: {"PGHOST": " ", "PGSSLMODE": "disable"}
+    timeout: 30
+    expect:
+      exit: 10
+      stdout_not: ['^ok ']
+      rust:
+        stderr: ['^pgmi: error: the host from PGHOST is only whitespace; write the host, or leave it empty so the next source applies$']
+  - pgmi: ["deploy", "{project}", "-d", "{db}"]
+    env: {"PGMI_CONNECTION_STRING": "host=' ' port={port} user={user} password={password} dbname=postgres", "PGSSLMODE": "disable"}
+    timeout: 30
+    expect:
+      exit: 10
+      stdout_not: ['^ok ']
+      rust:
+        stderr: ['^pgmi: error: the host from PGMI_CONNECTION_STRING is only whitespace; write the host, or leave it empty so the next source applies$']
+  - pgmi: ["deploy", "{project}", "-d", "{db}"]
+    env: {"DATABASE_URL": "postgresql://{user}:{password}@%20:{port}/postgres", "PGSSLMODE": "disable"}
+    timeout: 30
+    expect:
+      exit: 10
+      stdout_not: ['^ok ']
+      rust:
+        stderr: ['^pgmi: error: the host from DATABASE_URL is only whitespace; write the host, or leave it empty so the next source applies$']
+  - pgmi: ["deploy", "{project}", "--connection", "host={host} port=' ' user={user} password={password} dbname=postgres", "-d", "{db}"]
+    env: {"PGSSLMODE": "disable"}
+    timeout: 30
+    expect:
+      exit: 10
+      stdout_not: ['^ok ']
+      rust:
+        stderr: ['^pgmi: error: the port from --connection is only whitespace; write the port, or leave it empty so the next source applies$']
+  - pgmi: ["deploy", "{project}", "-d", "{db}"]
+    env: {"PGHOST": "{host}", "PGPORT": " ", "PGUSER": "{user}", "PGPASSWORD": "{password}", "PGSSLMODE": "disable"}
+    timeout: 30
+    expect:
+      exit: 10
+      stdout_not: ['^ok ']
+      rust:
+        stderr: ['^pgmi: error: the port from PGPORT is only whitespace; write the port, or leave it empty so the next source applies$']
+  - pgmi: ["deploy", "{project}", "--connection", "hostaddr=' ' port={port} user={user} password={password} dbname=postgres", "-d", "{db}"]
+    env: {"PGSSLMODE": "disable"}
+    timeout: 30
+    expect:
+      exit: 10
+      stdout_not: ['^ok ']
+      rust:
+        stderr: ['^pgmi: error: the hostaddr from --connection is only whitespace; write the hostaddr, or leave it empty so the next source applies$']
+  - pgmi: ["deploy", "{project}/yamlp"]
+    env: {"PGPASSWORD": "{password}", "PGSSLMODE": "disable"}
+    timeout: 30
+    expect:
+      exit: 10
+      stdout_not: ['^ok ']
+      rust:
+        stderr: ['^pgmi: error: the host from pgmi\.yaml is only whitespace; write the host, or leave it empty so the next source applies$']
+  - sql: SELECT 1
+    expect:
+      sql:
+        - query: SELECT to_regclass('reached') IS NULL
+          rows: [[true]]
