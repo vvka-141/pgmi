@@ -1,0 +1,26 @@
+description: a connection string whose host is empty leaves the host unset, in every form, so PGHOST applies as it does in psql for a URI - the deploy goes to PGHOST's server and never silently to localhost (PGMI-1073). Here PGHOST names a host that does not exist, so each form is exit 11 naming that host; with PGHOST naming the server the same strings deploy
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@:{port}/postgres", -d, "{db}"]
+    env: {PGHOST: from-pghost.invalid, PGSSLMODE: disable}
+    timeout: 30
+    expect:
+      exit: 11
+      stderr: ["from-pghost\\.invalid"]
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@:{port}/postgres?host=", -d, "{db}"]
+    env: {PGHOST: from-pghost.invalid, PGSSLMODE: disable}
+    timeout: 30
+    expect: {exit: 11, stderr: ["from-pghost\\.invalid"]}
+  - pgmi: [deploy, "{project}", --connection, "host='' port={port} user={user} password={password} dbname=postgres", -d, "{db}"]
+    env: {PGHOST: from-pghost.invalid, PGSSLMODE: disable}
+    timeout: 30
+    expect: {exit: 11, stderr: ["from-pghost\\.invalid"]}
+  - pgmi: [deploy, "{project}", --connection, "Host=;Port={port};Username={user};Password={password};Database=postgres", -d, "{db}"]
+    env: {PGHOST: from-pghost.invalid, PGSSLMODE: disable}
+    timeout: 30
+    expect: {exit: 11, stderr: ["from-pghost\\.invalid"]}
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@:{port}/postgres", -d, "{db}"]
+    env: {PGHOST: "{host}", PGSSLMODE: disable}
+    expect: {exit: 0}

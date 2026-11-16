@@ -443,7 +443,7 @@ query only `%XX` is decoded (`+` stays a plus), keys are read in any case,
 `connect_timeout`, and a repeated key takes its last value, as libpq (Go takes the first; row "Repeated URI query key"). As in Go: an
 empty connection flag (`-h ''`, `-U ''`, `-d ''`, `--sslcert ''`, `--sslkey ''`,
 `--sslrootcert ''`) is unset, so the next source applies and is announced; an
-empty `sslmode` in any form of string is unset; ADO.NET text after a closing
+empty `sslmode` in any form of string is unset, and so is an empty host (`postgresql://u@:5433/db`, `?host=`, `host=''`, `Host=;`), so `PGHOST` applies and the deploy never goes to localhost instead (PGMI-1073, case `connection/empty-host-uses-pghost`); ADO.NET text after a closing
 quote is dropped up to the next `;`; a keyword/value `connect_timeout` that is
 not a number is refused even when the key comes again with a number (any other
 repeated keyword takes its last value) (case `connection/empty-and-trailing-values`). `-d` (or `PGDATABASE`, or

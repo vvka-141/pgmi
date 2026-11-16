@@ -169,8 +169,10 @@ fn fields(t: &str) -> Result<Fields> {
         keyword(t)?
     };
     check(&fields)?;
-    if fields.get("sslmode").is_some_and(String::is_empty) {
-        fields.remove("sslmode");
+    for key in ["sslmode", "host"] {
+        if fields.get(key).is_some_and(String::is_empty) {
+            fields.remove(key);
+        }
     }
     Ok(fields)
 }
@@ -538,6 +540,32 @@ mod tests {
             parse("host=h bogus=1"),
             Err(ParseError::UnknownKey(_))
         ));
+    }
+
+    #[test]
+    fn an_empty_host_is_unset_in_every_form_so_pghost_still_applies() {
+        for (text, port) in [
+            ("postgresql://u:p@:5433/db", Some("5433")),
+            ("postgresql://:5433/db", Some("5433")),
+            ("postgresql://u@/db", None),
+            ("postgresql:///db", None),
+            ("postgresql://u:p@/db?port=5433", Some("5433")),
+            ("postgresql://u:p@:5433/db?host=", Some("5433")),
+            ("host='' port=5433 dbname=db", Some("5433")),
+            ("Host=;Port=5433;Database=db", Some("5433")),
+            ("Server=\"\";Database=db", None),
+        ] {
+            let f = parse(text).unwrap();
+            assert_eq!(f.get("host"), None, "{text}");
+            assert_eq!(f.get("port").map(String::as_str), port, "{text}");
+            assert_eq!(f["dbname"], "db", "{text}");
+        }
+        let f = parse("postgresql://u@,h2:5433/db").unwrap();
+        assert_eq!((f["host"].as_str(), f["port"].as_str()), (",h2", ",5433"));
+        let f = parse("postgresql://u@:5433/db?host=h9").unwrap();
+        assert_eq!((f["host"].as_str(), f["port"].as_str()), ("h9", "5433"));
+        let f = parse("postgresql://u@h1/db?host=").unwrap();
+        assert_eq!(f.get("host"), None);
     }
 
     #[test]
