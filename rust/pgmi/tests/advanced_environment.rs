@@ -725,6 +725,81 @@ fn accepts_a_scram_verifier() {
     drop_roles();
 }
 
+/// A database deployed as dev may hold the dev default password. Relabelling
+/// it to test or prod without `database_admin_password` is refused before
+/// any change; with one, the dev default no longer signs in.
+#[test]
+fn a_relabel_from_dev_needs_the_admin_password() {
+    const DB: &str = "pgmi_rs_a_relabel_from_dev";
+    const REAL: &str = "Relabel-Real-1076!";
+    let _serial = adv::serial();
+    let Some(pg) = pg() else { return };
+    let project = scaffold(&[]);
+    let drop_roles = || {
+        let admin = pg.admin();
+        let _ = admin.batch(&format!("DROP DATABASE IF EXISTS {DB} WITH (FORCE)"));
+        for r in ["_admin", "_api", "_kernel", "_owner"] {
+            let _ = admin.batch(&format!("DROP ROLE IF EXISTS {DB}{r}"));
+        }
+    };
+    drop_roles();
+    let db = pg.database(DB);
+    let admin = format!("{DB}_admin");
+    let label = || -> String {
+        db.client()
+            .one("SELECT label FROM internal.environment", &[])
+    };
+
+    deployed(&pg, &project, &db, true, &[("env", "dev")]);
+    common::Client::try_connect(&db, &admin, "postgres")
+        .expect("a new dev database gives the admin the dev default password");
+
+    for target in ["test", "prod"] {
+        refused_with(
+            &deploy(
+                &pg,
+                &project,
+                &db,
+                false,
+                &[("env", target), ("relabel_environment", target)],
+            ),
+            "may still have the dev default password",
+        );
+        assert_eq!(
+            label(),
+            "dev",
+            "a refused relabel to {target} changed the label"
+        );
+    }
+    common::Client::try_connect(&db, &admin, "postgres")
+        .expect("a refused relabel must leave the admin role as it was");
+
+    deployed(
+        &pg,
+        &project,
+        &db,
+        false,
+        &[
+            ("env", "prod"),
+            ("relabel_environment", "prod"),
+            ("database_admin_password", REAL),
+        ],
+    );
+    assert_eq!(label(), "prod");
+    assert!(
+        common::Client::try_connect(&db, &admin, "postgres").is_err(),
+        "the dev default password still signs in to a database relabelled prod"
+    );
+    common::Client::try_connect(&db, &admin, REAL)
+        .expect("the admin must sign in with the password the relabel gave");
+
+    deployed(&pg, &project, &db, false, &[("env", "prod")]);
+    common::Client::try_connect(&db, &admin, REAL)
+        .expect("a redeploy as prod without the parameter keeps the password");
+    drop(db);
+    drop_roles();
+}
+
 /// A blank `database_admin_password` is refused, whatever the environment and
 /// however it arrives: the admin role keeps the password it had. A redeploy
 /// that leaves the parameter out keeps it too, `env=dev` included, and the

@@ -67,7 +67,7 @@ LANGUAGE sql STABLE AS $declaration$
          'Deployment environment: dev, test or prod. Required, no default. The first deploy labels the database with it (internal.environment) and every redeploy must name the same label. Only env=dev deploys files under a dev/ folder',
          false),
         ('relabel_environment', '', NULL, NULL,
-         'Change the database''s environment label to this value, which must equal env. Refused when the database is new or already carries that label, so it cannot stay switched on. Relabelling to dev does not default passwords. Defaults to empty (no relabel)',
+         'Change the database''s environment label to this value, which must equal env. Refused when the database is new or already carries that label, so it cannot stay switched on. Relabelling to dev does not default passwords; relabelling away from dev needs database_admin_password. Defaults to empty (no relabel)',
          false),
         ('upgrade', 'false', '^(true|false)$', 'upgrade must be true or false',
          'true: refuse the deploy unless the database already carries the label env names, so a pipeline never builds a fresh database by mistake. Cannot be combined with relabel_environment. Defaults to false',
@@ -282,6 +282,16 @@ BEGIN
     ELSIF v_label IS DISTINCT FROM v_env AND v_relabel = '' THEN
         RAISE EXCEPTION 'env=% does not match database %''s environment label (%)', v_env, current_database(), v_label
             USING HINT = format('Deploy with env=%s. To change the label on purpose, pass the new one as both env and relabel_environment.', v_label);
+    END IF;
+
+    -- A dev database's admin role may hold the dev default password, and a
+    -- deploy without the parameter keeps the role's password.
+    IF v_label IN ('dev', '(none)') AND v_env <> 'dev'
+       AND pg_temp.parameter_value('database_admin_password') IS NULL THEN
+        RAISE EXCEPTION 'relabel_environment=%: database % was labelled %, so its admin role % may still have the dev default password, and no database_admin_password was given',
+            v_relabel, current_database(), v_label, pg_temp.parameter_value('database_admin_role')
+            USING ERRCODE = 'invalid_parameter_value',
+                  HINT = 'Set PGMI_PARAM_DATABASE_ADMIN_PASSWORD (a CI secret) or use --params-file -; never --param for a secret.';
     END IF;
 END $$;
 

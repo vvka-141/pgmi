@@ -570,7 +570,9 @@ default.
   deploy warns. It is refused when the database is new or already carries that
   label, so a leftover `relabel_environment` in a params file fails the next
   deploy instead of staying switched on. Relabelling to `dev` does not default
-  the passwords: pass them.
+  the passwords: pass them. Relabelling away from `dev` needs
+  `database_admin_password`: the admin role may still have the dev default
+  password, so the deploy is refused without one.
 - **`upgrade=true`** is for pipelines that only ever upgrade: the deploy is
   refused unless the database already carries the label `env` names, so a typo
   in the database name never builds a fresh one. It cannot be combined with

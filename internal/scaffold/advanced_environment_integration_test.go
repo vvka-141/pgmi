@@ -560,6 +560,83 @@ func TestAdvancedTemplate_AcceptsAScramVerifier(t *testing.T) {
 	}
 }
 
+// A database deployed as dev may hold the dev default password. Relabelling
+// it to test or prod without database_admin_password is refused before any
+// change; with one, the dev default no longer signs in.
+func TestAdvancedTemplate_ARelabelFromDevNeedsTheAdminPassword(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+	projectPath := scaffoldAdvanced(t, nil)
+	const db = "pgmi_advanced_relabel_from_dev"
+	const real = "Relabel-Real-1076!"
+	server := testhelpers.GetTestPool(t, connString, "postgres")
+	dropRoles := func() {
+		testhelpers.CleanupTestDB(t, connString, db)
+		for _, r := range []string{"_admin", "_api", "_kernel", "_owner"} {
+			_, _ = server.Exec(context.Background(), "DROP ROLE IF EXISTS "+db+r)
+		}
+	}
+	dropRoles()
+	defer dropRoles()
+
+	signIn := func(t *testing.T, password string) error {
+		t.Helper()
+		cfg, err := pgx.ParseConfig(connString)
+		if err != nil {
+			t.Fatalf("parse the connection string: %v", err)
+		}
+		cfg.User, cfg.Password, cfg.Database = db+"_admin", password, db
+		conn, err := pgx.ConnectConfig(context.Background(), cfg)
+		if err != nil {
+			return err
+		}
+		return conn.Close(context.Background())
+	}
+	label := func(t *testing.T) (l string) {
+		t.Helper()
+		if err := testhelpers.GetTestPool(t, connString, db).QueryRow(context.Background(), `SELECT label FROM internal.environment`).Scan(&l); err != nil {
+			t.Fatalf("read the label: %v", err)
+		}
+		return
+	}
+
+	if err := deployAdvanced(t, connString, db, projectPath, true, map[string]string{"env": "dev"}); err != nil {
+		t.Fatalf("dev deploy: %v", err)
+	}
+	if err := signIn(t, "postgres"); err != nil {
+		t.Fatalf("a new dev database gives the admin the dev default password: %v", err)
+	}
+	for _, target := range []string{"test", "prod"} {
+		err := deployAdvanced(t, connString, db, projectPath, false, map[string]string{"env": target, "relabel_environment": target})
+		if err == nil || !strings.Contains(err.Error(), "may still have the dev default password") {
+			t.Fatalf("a relabel from dev to %s without the admin password must be refused, got: %v", target, err)
+		}
+		if l := label(t); l != "dev" {
+			t.Fatalf("a refused relabel to %s changed the label to %q", target, l)
+		}
+	}
+	if err := signIn(t, "postgres"); err != nil {
+		t.Fatalf("a refused relabel must leave the admin role as it was: %v", err)
+	}
+	if err := deployAdvanced(t, connString, db, projectPath, false, map[string]string{"env": "prod", "relabel_environment": "prod", "database_admin_password": real}); err != nil {
+		t.Fatalf("relabel to prod with a password: %v", err)
+	}
+	if l := label(t); l != "prod" {
+		t.Fatalf("label = %q, want prod", l)
+	}
+	if err := signIn(t, "postgres"); err == nil {
+		t.Fatal("the dev default password still signs in to a database relabelled prod")
+	}
+	if err := signIn(t, real); err != nil {
+		t.Fatalf("the admin must sign in with the password the relabel gave: %v", err)
+	}
+	if err := deployAdvanced(t, connString, db, projectPath, false, map[string]string{"env": "prod"}); err != nil {
+		t.Fatalf("redeploy as prod: %v", err)
+	}
+	if err := signIn(t, real); err != nil {
+		t.Fatalf("a redeploy as prod without the parameter keeps the password: %v", err)
+	}
+}
+
 // A blank database_admin_password is refused, whatever the environment and
 // however it is spelt: the admin role keeps the password it had. A redeploy
 // that leaves the parameter out keeps it too, env=dev included, and the
