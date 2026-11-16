@@ -1,4 +1,4 @@
-description: libpq checks ~/.postgresql/root.crl by default under verify-ca and verify-full. pgmi cannot check revocation lists, so the Rust binary refuses such a file when the connection verifies (verify-ca, verify-full, require with a root certificate) with exit 10, naming the file, instead of skipping it quietly; libpq reads it only when verifying, so prefer connects. Go ignores the file (PGMI-1053)
+description: libpq checks ~/.postgresql/root.crl by default under verify-ca and verify-full. pgmi cannot check revocation lists, so the Rust binary refuses such a file when the connection verifies (verify-ca, verify-full, require with a root certificate) with exit 10, naming the file, instead of skipping it quietly; libpq reads it only when verifying against a root certificate file, so prefer connects, and with sslrootcert=system neither the file nor PGSSLCRL is refused, and the connection goes on to the certificate check (PGMI-1065). Go ignores the file (PGMI-1053)
 servers: [tls]
 home:
   .postgresql/root.crt: "{ca_pem}"
@@ -21,3 +21,10 @@ steps:
       rust:
         exit: 10
         stderr: ['root\.crl exists, and libpq checks it under sslmode=require with a root certificate \(which verifies like verify-ca\)']
+  - pgmi: [deploy, "{project}", --connection, "postgresql://{user}:{password}@127.0.0.1:{tls_port}/postgres?sslmode=verify-full&sslrootcert=system", -d, "{db}"]
+    env: {PGSSLCRL: /etc/no-such.crl}
+    expect:
+      exit: 11
+      stderr_not: ['root\.crl', "cannot check certificate revocation lists"]
+      rust:
+        stderr: ["WARNING: PGSSLCRL is set, but pgmi does not support it: certificate revocation lists are not checked; continuing without it"]

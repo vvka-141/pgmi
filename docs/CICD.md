@@ -250,7 +250,7 @@ works:
 | `PGSERVICE` | Refused with exit 10; give host, port and database instead |
 | `PGSERVICEFILE` | Ignored (no service files) |
 | `PGHOSTADDR` | Ignored; put the address in `PGHOST`, or `hostaddr=` in the connection string |
-| `PGSSLCRL`, `PGSSLCRLDIR` | Not checked: a `WARNING` on stderr and in `--json` `warnings`, then the deploy goes on. Under `sslmode=verify-ca` or `verify-full`, and under `require` with a root certificate, they are refused, exit 10 |
+| `PGSSLCRL`, `PGSSLCRLDIR` | Not checked: a `WARNING` on stderr and in `--json` `warnings`, then the deploy goes on. Under `sslmode=verify-ca` or `verify-full`, and under `require` with a root certificate, they are refused, exit 10, unless the server is verified against the system trust store (`sslrootcert=system`), where libpq reads no list either |
 | `PGREQUIREPEER` | Not checked: a `WARNING` on stderr and in `--json` `warnings`, then the deploy goes on |
 | `PGSSLMINPROTOCOLVERSION`, `PGSSLMAXPROTOCOLVERSION`, `PGSSLCOMPRESSION`, `PGGSSENCMODE`, `PGKRBSRVNAME`, `PGGSSLIB`, `PGLOADBALANCEHOSTS` | Ignored; their connection-string keys work where pgmi supports them ([Connections](CONNECTIONS.md#connection-string-formats)) |
 | `PGDATESTYLE`, `PGGEQO` | Ignored; set them through `PGOPTIONS`, e.g. `-c datestyle=ISO` |

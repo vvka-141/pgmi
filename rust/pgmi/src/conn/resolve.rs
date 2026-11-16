@@ -589,42 +589,43 @@ const UNSUPPORTED_ENV: [(&str, &str); 3] = [
     ),
 ];
 
-/// One WARNING line per libpq variable pgmi does not support that is set.
-/// A revocation list under `verify-ca` or `verify-full` is refused: those
-/// modes promise a check pgmi cannot make.
-/// `written` is the sslmode as given, `effective` the one TLS applies:
-/// `require` with a root certificate verifies like `verify-ca`.
-/// [`unsupported_env`] for `spec`, after refusing the default revocation
-/// list (`root.crl` beside `root.crt`) that libpq reads when it verifies.
+/// One WARNING line per libpq variable pgmi does not support that is set,
+/// for `spec`. A revocation list libpq would read (`PGSSLCRL`,
+/// `PGSSLCRLDIR`, or `root.crl` beside `root.crt`) is refused: there the
+/// sslmode promises a check pgmi cannot make.
 pub(crate) fn unsupported(env: &Env, spec: &Spec) -> Result<Vec<String>> {
     let (written, effective) = (spec.sslmode(), crate::conn::tls::effective_mode(spec));
-    if matches!(effective, SslMode::VerifyCa | SslMode::VerifyFull)
+    let revocable =
+        crate::conn::tls::reads_revocation_lists(spec).then_some((written, written != effective));
+    if let Some((mode, with_root)) = revocable
         && let Some(path) = crate::conn::tls::default_crl(spec)
     {
         return Err(ResolveError::DefaultRevocation {
             path,
-            mode: written,
-            with_root: written != effective,
+            mode,
+            with_root,
         });
     }
-    unsupported_env(env, written, effective)
+    unsupported_env(env, revocable)
 }
 
+/// `revocable` is the sslmode as written when libpq would read a revocation
+/// list under it, and whether it is `require` with a root certificate, which
+/// verifies like `verify-ca`.
 pub(crate) fn unsupported_env(
     env: &Env,
-    written: SslMode,
-    effective: SslMode,
+    revocable: Option<(SslMode, bool)>,
 ) -> Result<Vec<String>> {
     let mut lines = Vec::new();
     for (var, what) in UNSUPPORTED_ENV {
         if env.non_empty(var)?.is_some() {
             if var != "PGREQUIREPEER"
-                && matches!(effective, SslMode::VerifyCa | SslMode::VerifyFull)
+                && let Some((mode, with_root)) = revocable
             {
                 return Err(ResolveError::Revocation {
                     var,
-                    mode: written,
-                    with_root: written != effective,
+                    mode,
+                    with_root,
                 });
             }
             lines.push(format!(

@@ -48,6 +48,8 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   the `--json` record's `warnings`. libpq's default list
   `~/.postgresql/root.crl` is refused the same way when it exists and the
   connection verifies; move it away to connect without revocation checks.
+  With the system trust store (`sslrootcert=system`) nothing is refused:
+  libpq reads no revocation list there either.
 - **One unreachable host no longer uses the whole time box.** With several
   hosts and no `connect_timeout`, each host but the last gets at most its
   share of `--timeout` (and at most 30 s) before the next one is tried.
