@@ -179,6 +179,56 @@ mod tests {
     use crate::vfs::MemFs;
 
     #[test]
+    fn the_release_notes_state_the_dotenv_rule_the_binary_enforces() {
+        let notes = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../RELEASES.md"),
+        )
+        .unwrap();
+        let rule = notes
+            .lines()
+            .find(|l| l.contains("outside a short allow list"))
+            .expect("RELEASES.md states the .env allow list");
+        let (allowed, refused) = rule
+            .split_once("Everything else is refused")
+            .expect("the rule names what is refused");
+        let named = |text: &str| -> Vec<String> {
+            text.split('`')
+                .skip(1)
+                .step_by(2)
+                .filter(|k| {
+                    k.chars()
+                        .all(|c| c.is_ascii_uppercase() || c == '_' || c == '*')
+                })
+                .map(str::to_string)
+                .collect()
+        };
+        for key in named(allowed).into_iter().filter(|k| k != "PG*") {
+            assert!(
+                !refused_in_dotenv(&key.replace('*', "X")),
+                "RELEASES.md calls {key} allowed"
+            );
+        }
+        for key in ALLOWED_EXACT.iter().filter(|k| !k.starts_with("PG")) {
+            assert!(allowed.contains(&format!("`{key}`")), "{key} is not named");
+        }
+        let refused = named(refused);
+        assert!(refused.len() >= 4, "{refused:?}");
+        for key in refused {
+            assert!(refused_in_dotenv(&key), "RELEASES.md calls {key} refused");
+        }
+        for key in ["PGSSLROOTCERT", "PGPASSFILE"] {
+            assert!(!refused_in_dotenv(key));
+            assert!(
+                notes
+                    .lines()
+                    .all(|l| !l.contains(key) || !l.contains("trust roots")),
+                "RELEASES.md says a .env may not name {key}"
+            );
+        }
+        assert!(notes.contains("a project `.env` that does not parse"));
+    }
+
+    #[test]
     fn project_dotenv_fills_only_unset_keys_last_value_wins() {
         let fs = MemFs::default().file(
             ".env",
