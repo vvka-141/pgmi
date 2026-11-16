@@ -28,7 +28,7 @@ LANGUAGE sql STABLE AS $declaration$
          'Database admin role (LOGIN, full access)',
          false),
         ('database_admin_password', NULL, NULL, NULL,
-         'Database admin password, or a SCRAM verifier of it (SCRAM-SHA-256$...), so the plaintext never reaches the server. Required when the admin role does not exist yet, except with env=dev on a new or dev-labelled database, where it defaults to postgres. Left out once the role exists, the role keeps its password',
+         'Database admin password, or a SCRAM verifier of it (SCRAM-SHA-256$...), so the plaintext never reaches the server. Outside env=dev the value postgres is refused. Required when the admin role does not exist yet, except with env=dev on a new or dev-labelled database, where it defaults to postgres. Left out once the role exists, the role keeps its password; a test or prod deploy to a database that carries no label yet needs it whenever the role exists, since the role may come from an earlier dev database',
          true),
         ('database_api_role', current_database() || '_api', NULL, NULL,
          'API group role (NOLOGIN, permission bundle)',
@@ -178,6 +178,19 @@ BEGIN
     END LOOP;
 END $$;
 
+-- The dev default is the first password tried against a shared database. A
+-- SCRAM verifier of it cannot be told apart from any other.
+DO $$
+DECLARE
+    v_env text := pg_temp.parameter_value('env');
+BEGIN
+    IF v_env IS DISTINCT FROM 'dev'
+       AND pg_temp.parameter_value('database_admin_password') IS NOT DISTINCT FROM 'postgres' THEN
+        RAISE EXCEPTION 'Parameter database_admin_password is the dev default password, which env=% does not accept', v_env
+            USING ERRCODE = 'invalid_parameter_value', HINT = 'Choose another password.';
+    END IF;
+END $$;
+
 DO $$
 DECLARE
     v_env     text := pg_temp.parameter_value('env');
@@ -285,19 +298,27 @@ BEGIN
     END IF;
 
     -- A dev database's admin role may hold the dev default password, and a
-    -- deploy without the parameter keeps the role's password.
-    IF v_label IN ('dev', '(none)') AND v_env IS DISTINCT FROM 'dev'
-       AND pg_temp.parameter_value('database_admin_password') IS NULL THEN
-        RAISE EXCEPTION 'relabel_environment=%: database % was labelled %, so its admin role % may still have the dev default password, and no database_admin_password was given',
-            v_relabel, current_database(), v_label, pg_temp.parameter_value('database_admin_role')
+    -- deploy without the parameter keeps the role's password. Roles belong to
+    -- the server: an admin role that exists before a database has a label
+    -- outlived an earlier database of that name, which may have been dev.
+    IF v_env IS DISTINCT FROM 'dev'
+       AND pg_temp.parameter_value('database_admin_password') IS NULL
+       AND COALESCE(v_label IN ('dev', '(none)'),
+                    EXISTS (SELECT FROM pg_roles WHERE rolname = pg_temp.parameter_value('database_admin_role'))) THEN
+        RAISE EXCEPTION '%, so its admin role % may still have the dev default password, and no database_admin_password was given: set PGMI_PARAM_DATABASE_ADMIN_PASSWORD',
+            CASE WHEN v_label IS NULL
+                 THEN format('env=%s: database %s carries no environment label yet, but its admin role already exists (a role outlives a dropped database)', v_env, current_database())
+                 ELSE format('relabel_environment=%s: database %s was labelled %s', v_relabel, current_database(), v_label) END,
+            pg_temp.parameter_value('database_admin_role')
             USING ERRCODE = 'invalid_parameter_value',
-                  HINT = 'Set PGMI_PARAM_DATABASE_ADMIN_PASSWORD (a CI secret) or use --params-file -; never --param for a secret.';
+                  HINT = 'Pass it as a CI secret in PGMI_PARAM_DATABASE_ADMIN_PASSWORD or through --params-file -; never --param for a secret.';
     END IF;
 END $$;
 
 -- The admin password is needed only to create the admin role: once the role
 -- exists, a deploy without the parameter keeps its password, so a pipeline
 -- holds the long-lived secret only on the first deploy and on a rotation.
+-- The label check above asks for it where the kept password may be dev's.
 CREATE FUNCTION pg_temp.admin_password_kept()
 RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT pg_temp.parameter_value('database_admin_password') IS NULL

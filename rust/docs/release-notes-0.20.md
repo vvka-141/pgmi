@@ -81,8 +81,11 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   a server that is not allowed gets no client certificate of the operator. The operator's password
   never goes with a weaker `sslmode`, `channel_binding` or `require_auth`
   than the operator's own, nor to a server verified with another
-  `sslrootcert` than the operator's (such a call is refused, exit 10). See
-  [serve-allowed-hosts](switch-day/serve-allowed-hosts.md).
+  `sslrootcert` than the operator's (such a call is refused, exit 10). The
+  same holds for a cloud sign-in token, also when the call types a password
+  of its own. `pgmi serve` does not start (exit 10) when its own
+  environment does not resolve to connection settings, since those are the
+  rules. See [serve-allowed-hosts](switch-day/serve-allowed-hosts.md).
 - **`pgmi serve` cancels a running deploy when stdin closes.** Closing
   stdin is how an MCP client shuts the server down, so a deploy still
   running then is cancelled and rolls back what it had not committed yet;
@@ -111,6 +114,12 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
 - **The advanced template needs the admin password only once.**
   `database_admin_password` is required when the admin role does not exist
   yet; left out afterwards, the role keeps its password, also with `env=dev`.
+  Two cases still need it, because the role may hold the dev default
+  password: relabelling a database away from `dev`, and a `test` or `prod`
+  deploy to a database with no label yet whose admin role already exists (a
+  database rebuilt with `--overwrite` or dropped and created: roles outlive
+  it). Both are refused before any role is touched when it is missing.
+  `test` and `prod` also refuse `postgres` as the admin password.
   A SCRAM verifier is accepted in its place. A blank value (empty or only
   whitespace) is refused in every environment and never changes the
   password. See the template README, "Parameters".

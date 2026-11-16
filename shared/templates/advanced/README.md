@@ -167,8 +167,10 @@ Stdin (`--params-file -`) and a private params file also work; see the
 A complete pipeline job, with an approval gate and the secret mapping, is in
 [CI/CD: GitHub Actions, full job](https://github.com/vvka-141/pgmi/blob/main/docs/CICD.md#github-actions-full-job).
 
-The password needs to travel only when the admin role is created or rotated:
-once the role exists, a deploy without `database_admin_password` keeps its
+The password needs to travel only when the admin role is created or rotated,
+and when a `test` or `prod` database is rebuilt (see
+[Environments](#environments)): once the role exists and the database carries
+its label, a deploy without `database_admin_password` keeps the role's
 password. So a pipeline's routine deploys need no admin secret at all.
 
 pgmi sends every parameter to the server as a bind value. A server that logs
@@ -517,7 +519,7 @@ Any handler may declare a minimum isolation floor (`minTransactionIsolation`); a
 | Parameter | Default | Required | Description |
 |-----------|---------|----------|-------------|
 | `env` | - | **Yes** | `dev`, `test` or `prod`. See [Environments](#environments) |
-| `database_admin_password` | `postgres` when `env=dev` creates the admin role on a new or dev-labelled database (on Lakebase, which refuses a weak password, a generated value) | **Yes**, when the admin role does not exist yet; left out afterwards, the role keeps its password | Admin role password, or a SCRAM verifier of it. Blanked from the session once the role is set |
+| `database_admin_password` | `postgres` when `env=dev` creates the admin role on a new or dev-labelled database (on Lakebase, which refuses a weak password, a generated value) | **Yes**, when the admin role does not exist yet, and for a `test` or `prod` deploy to a database without a label whose admin role exists (see [Environments](#environments)); left out otherwise, the role keeps its password | Admin role password, or a SCRAM verifier of it. `test` and `prod` refuse the value `postgres`, the dev default. Blanked from the session once the role is set |
 | `relabel_environment` | empty | No | Change the database's label; must equal `env` |
 | `upgrade` | `false` | No | `true` refuses unless the database already carries the label `env` names |
 | `platform_operators` | `[]` | No | JSON array of platform operators (`email`, optional `displayName`, `issuer` + `subject`); synced every deploy, a person left out loses the status; an email-only entry names the address's verified holder, or a new verified person (an unverified holder is never promoted); an entry with `issuer` and `subject` names that login's person and verifies the address on it, refused (22023) when another person holds the address verified |
@@ -573,6 +575,13 @@ default.
   the passwords: pass them. Relabelling away from `dev` needs
   `database_admin_password`: the admin role may still have the dev default
   password, so the deploy is refused without one.
+- **Rebuilding a database** (`--overwrite`, or drop and create) removes its
+  label but not its roles: roles belong to the server. A `test` or `prod`
+  deploy to a database with no label yet, whose admin role already exists,
+  therefore needs `database_admin_password` too. The role may come from an
+  earlier `dev` database of that name and still have the dev default
+  password; the deploy cannot tell, so it asks, and is refused before any
+  role is touched when the password is missing.
 - **`upgrade=true`** is for pipelines that only ever upgrade: the deploy is
   refused unless the database already carries the label `env` names, so a typo
   in the database name never builds a fresh one. It cannot be combined with
@@ -1192,7 +1201,8 @@ CALL pgmi_test('.*/api/.*');
 ### "Missing required parameter(s)"
 Every deploy needs `env`. The deploy that creates the admin role needs
 `database_admin_password` too, unless `env=dev` targets a new or dev-labelled
-database. Pass it as `PGMI_PARAM_DATABASE_ADMIN_PASSWORD` or in a params file
+database. So does a `test` or `prod` deploy to a rebuilt database whose admin
+role outlived the old one ("may still have the dev default password"). Pass it as `PGMI_PARAM_DATABASE_ADMIN_PASSWORD` or in a params file
 (see [Deploy](#1-deploy)), not on the command line:
 ```bash
 pgmi deploy . -d mydb --params-file prod.params

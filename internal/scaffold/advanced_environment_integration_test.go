@@ -51,6 +51,12 @@ func TestAdvancedTemplate_RefusesBadParameters(t *testing.T) {
 	connString := testhelpers.RequireDatabase(t)
 	projectPath := scaffoldAdvanced(t, nil)
 	const pw = "TestPassword123!"
+	server := testhelpers.GetTestPool(t, connString, "postgres")
+	for _, r := range []string{"_admin", "_api", "_kernel", "_owner"} {
+		if _, err := server.Exec(context.Background(), "DROP ROLE IF EXISTS pgmi_advanced_params"+r); err != nil {
+			t.Fatalf("a role an earlier run left changes which refusal fires: %v", err)
+		}
+	}
 
 	for _, tc := range []struct {
 		name    string
@@ -71,6 +77,10 @@ func TestAdvancedTemplate_RefusesBadParameters(t *testing.T) {
 			want: "Missing required parameters: database_admin_password. Set PGMI_PARAM_DATABASE_ADMIN_PASSWORD", notWant: "--param <key>"},
 		{name: "prod with blank password", params: map[string]string{"env": "prod", "database_admin_password": " "},
 			want: "Parameter database_admin_password is blank"},
+		{name: "prod with the dev default password", params: map[string]string{"env": "prod", "database_admin_password": "postgres"},
+			want: "database_admin_password is the dev default password, which env=prod does not accept"},
+		{name: "test with the dev default password", params: map[string]string{"env": "test", "database_admin_password": "postgres"},
+			want: "database_admin_password is the dev default password, which env=test does not accept"},
 		{name: "relabel naming another label", params: map[string]string{"env": "prod", "relabel_environment": "test", "database_admin_password": pw},
 			want: "relabel_environment=test does not name the label env=prod"},
 		{name: "relabel on a new database", params: map[string]string{"env": "prod", "relabel_environment": "prod", "database_admin_password": pw},
@@ -719,5 +729,104 @@ END $$;
 			}
 			keeps(t)
 		})
+	}
+}
+
+// Roles belong to the server, so the admin role outlives its database. A
+// database first deployed as dev and then rebuilt as test or prod carries no
+// label yet, and its admin role may hold the dev default password: without
+// database_admin_password the deploy is refused before any role is touched.
+func TestAdvancedTemplate_ARebuiltDatabaseNeedsTheAdminPasswordOutsideDev(t *testing.T) {
+	connString := testhelpers.RequireDatabase(t)
+	projectPath := scaffoldAdvanced(t, nil)
+	const db = "pgmi_advanced_rebuilt_from_dev"
+	const other = "pgmi_advanced_rebuilt_other"
+	const real = "Rebuilt-Real-1095!"
+	server := testhelpers.GetTestPool(t, connString, "postgres")
+	dropAll := func() {
+		testhelpers.CleanupTestDB(t, connString, db)
+		testhelpers.CleanupTestDB(t, connString, other)
+		for _, r := range []string{"_admin", "_api", "_kernel", "_owner"} {
+			_, _ = server.Exec(context.Background(), "DROP ROLE IF EXISTS "+db+r)
+			_, _ = server.Exec(context.Background(), "DROP ROLE IF EXISTS "+other+r)
+		}
+	}
+	dropAll()
+	defer dropAll()
+
+	signIn := func(t *testing.T, database, password string) error {
+		t.Helper()
+		cfg, err := pgx.ParseConfig(connString)
+		if err != nil {
+			t.Fatalf("parse the connection string: %v", err)
+		}
+		cfg.User, cfg.Password, cfg.Database = db+"_admin", password, database
+		conn, err := pgx.ConnectConfig(context.Background(), cfg)
+		if err != nil {
+			return err
+		}
+		return conn.Close(context.Background())
+	}
+	refused := func(t *testing.T, what string, err error) {
+		t.Helper()
+		if err == nil || !strings.Contains(err.Error(), "may still have the dev default password") ||
+			!strings.Contains(err.Error(), "PGMI_PARAM_DATABASE_ADMIN_PASSWORD") {
+			t.Fatalf("%s without the admin password must be refused, naming PGMI_PARAM_DATABASE_ADMIN_PASSWORD, got: %v", what, err)
+		}
+		if err := signIn(t, "postgres", "postgres"); err != nil {
+			t.Fatalf("%s: a refused deploy must leave the admin role as it was: %v", what, err)
+		}
+	}
+	dev := func(t *testing.T) {
+		t.Helper()
+		if err := deployAdvanced(t, connString, db, projectPath, true, map[string]string{"env": "dev"}); err != nil {
+			t.Fatalf("dev deploy: %v", err)
+		}
+		if err := signIn(t, db, "postgres"); err != nil {
+			t.Fatalf("a dev database's admin signs in with the dev default password: %v", err)
+		}
+	}
+
+	dev(t)
+	for _, target := range []string{"prod", "test"} {
+		refused(t, "dev rebuilt with --overwrite as "+target,
+			deployAdvanced(t, connString, db, projectPath, true, map[string]string{"env": target}))
+	}
+
+	dev(t)
+	testhelpers.CleanupTestDB(t, connString, db)
+	refused(t, "dev dropped by hand, then deployed as prod",
+		deployAdvanced(t, connString, db, projectPath, false, map[string]string{"env": "prod"}))
+
+	shared := map[string]string{"env": "prod", "database_admin_role": db + "_admin", "database_owner_role": db + "_owner"}
+	refused(t, "a second, new database that shares the dev database's roles",
+		deployAdvanced(t, connString, other, projectPath, false, shared))
+
+	if err := deployAdvanced(t, connString, db, projectPath, true, map[string]string{"env": "dev"}); err != nil {
+		t.Fatalf("rebuilding as dev needs no password, the role keeps its own: %v", err)
+	}
+
+	if err := deployAdvanced(t, connString, db, projectPath, true, map[string]string{"env": "prod", "database_admin_password": real}); err != nil {
+		t.Fatalf("rebuilt as prod with a password: %v", err)
+	}
+	if err := signIn(t, db, "postgres"); err == nil {
+		t.Fatal("the dev default password still signs in to a database rebuilt as prod")
+	}
+	if err := signIn(t, db, real); err != nil {
+		t.Fatalf("the admin must sign in with the password the rebuild gave: %v", err)
+	}
+	if err := deployAdvanced(t, connString, db, projectPath, false, map[string]string{"env": "prod"}); err != nil {
+		t.Fatalf("a redeploy of the labelled prod database needs no password: %v", err)
+	}
+	if err := signIn(t, db, real); err != nil {
+		t.Fatalf("a redeploy as prod without the parameter keeps the password: %v", err)
+	}
+
+	err := deployAdvanced(t, connString, db, projectPath, true, map[string]string{"env": "prod"})
+	if err == nil || !strings.Contains(err.Error(), "PGMI_PARAM_DATABASE_ADMIN_PASSWORD") {
+		t.Fatalf("a prod database rebuilt as prod carries no label either, so the password is asked again, got: %v", err)
+	}
+	if err := signIn(t, "postgres", real); err != nil {
+		t.Fatalf("the refused rebuild must leave the admin role's password: %v", err)
 	}
 }

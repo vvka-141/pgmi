@@ -85,6 +85,16 @@ fn refuses_bad_parameters() {
             "Parameter database_admin_password is blank",
         ),
         case(
+            "prod with the dev default password",
+            &[("env", "prod"), ("database_admin_password", "postgres")],
+            "database_admin_password is the dev default password, which env=prod does not accept",
+        ),
+        case(
+            "test with the dev default password",
+            &[("env", "test"), ("database_admin_password", "postgres")],
+            "database_admin_password is the dev default password, which env=test does not accept",
+        ),
+        case(
             "relabel naming another label",
             &[
                 ("env", "prod"),
@@ -898,4 +908,109 @@ END $$;
         drop(db);
     }
     drop_roles();
+}
+
+/// Roles belong to the server, so the admin role outlives its database. A
+/// database first deployed as dev and then rebuilt as test or prod carries
+/// no label yet, and its admin role may hold the dev default password:
+/// without `database_admin_password` the deploy is refused before any role
+/// is touched.
+#[test]
+fn a_rebuilt_database_needs_the_admin_password_outside_dev() {
+    const DB: &str = "pgmi_rs_a_rebuilt_from_dev";
+    const OTHER: &str = "pgmi_rs_a_rebuilt_other";
+    const REAL: &str = "Rebuilt-Real-1095!";
+    let _serial = adv::serial();
+    let Some(pg) = pg() else { return };
+    let project = scaffold(&[]);
+    let drop_all = || {
+        let admin = pg.admin();
+        for name in [DB, OTHER] {
+            let _ = admin.batch(&format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"));
+            for r in ["_admin", "_api", "_kernel", "_owner"] {
+                let _ = admin.batch(&format!("DROP ROLE IF EXISTS {name}{r}"));
+            }
+        }
+    };
+    drop_all();
+    let db = pg.database(DB);
+    let other = pg.database(OTHER);
+    let admin = format!("{DB}_admin");
+    let owner = format!("{DB}_owner");
+    let refused = |what: &str, out: &common::Outcome| {
+        let text = refused_with(out, "may still have the dev default password");
+        assert!(
+            text.contains("PGMI_PARAM_DATABASE_ADMIN_PASSWORD"),
+            "{what}: {text}"
+        );
+        assert!(
+            common::Client::try_connect(&db, &admin, "postgres").is_ok(),
+            "{what}: a refused deploy must leave the admin role as it was"
+        );
+    };
+    let dev = || {
+        deployed(&pg, &project, &db, true, &[("env", "dev")]);
+        common::Client::try_connect(&db, &admin, "postgres")
+            .expect("a dev database's admin signs in with the dev default password");
+    };
+
+    dev();
+    for target in ["prod", "test"] {
+        refused(
+            &format!("dev rebuilt with --overwrite as {target}"),
+            &deploy(&pg, &project, &db, true, &[("env", target)]),
+        );
+    }
+
+    dev();
+    pg.admin()
+        .batch(&format!("DROP DATABASE {DB} WITH (FORCE)"))
+        .expect("drop the dev database by hand");
+    refused(
+        "dev dropped by hand, then deployed as prod",
+        &deploy(&pg, &project, &db, false, &[("env", "prod")]),
+    );
+
+    refused(
+        "a second, new database that shares the dev database's roles",
+        &deploy(
+            &pg,
+            &project,
+            &other,
+            false,
+            &[
+                ("env", "prod"),
+                ("database_admin_role", &admin),
+                ("database_owner_role", &owner),
+            ],
+        ),
+    );
+
+    deployed(&pg, &project, &db, true, &[("env", "dev")]);
+
+    deployed(
+        &pg,
+        &project,
+        &db,
+        true,
+        &[("env", "prod"), ("database_admin_password", REAL)],
+    );
+    assert!(
+        common::Client::try_connect(&db, &admin, "postgres").is_err(),
+        "the dev default password still signs in to a database rebuilt as prod"
+    );
+    common::Client::try_connect(&db, &admin, REAL)
+        .expect("the admin must sign in with the password the rebuild gave");
+    deployed(&pg, &project, &db, false, &[("env", "prod")]);
+    common::Client::try_connect(&db, &admin, REAL)
+        .expect("a redeploy as prod without the parameter keeps the password");
+
+    let again = deploy(&pg, &project, &db, true, &[("env", "prod")]);
+    let text = refused_with(&again, "PGMI_PARAM_DATABASE_ADMIN_PASSWORD");
+    assert!(text.contains("carries no environment label yet"), "{text}");
+    common::Client::try_connect(&db, &admin, REAL)
+        .expect("the refused rebuild must leave the admin role's password");
+    drop(db);
+    drop(other);
+    drop_all();
 }
