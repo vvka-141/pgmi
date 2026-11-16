@@ -68,6 +68,22 @@ Own parser; option 2.
   `.env` sign the RDS token (`cloud/dotenv-feeds-sdk`). Exporting the keys
   before any thread exists, as above, keeps that. `pgmi serve` never reads
   `.env` (`serve/deploy-guards`).
+- Amended 2026-11-16 (PGMI-1045, PGMI-1066, owner decision): the project
+  `.env` may set only an allow list of keys (the behaviour contract has the
+  list). Any other key ends the deploy with exit 10 before connecting, also
+  when the environment sets the same key, so the file is either accepted or
+  not on every machine. The error names the keys, never a value, and says
+  what to do. A `.env` that does not parse also ends the deploy with exit
+  10, naming the line; the WARNING above is Go's behaviour only. Reason for
+  both: dropping the file, or a key of it, lets the deploy reach whatever
+  the operator's environment points at. Allowed besides parameters, the
+  connection and the AWS keys: the connection's file keys (`PGPASSFILE`,
+  `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`), since a `.env` connection
+  string and `pgmi.yaml` may name the same files, and `PGMI_MAX_FILE_SIZE`,
+  `PGMI_NO_BANNER`, `NO_COLOR`, which only pgmi reads. Still refused:
+  `PGMI_PAGER` (a command), and `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`,
+  `AZURE_CLIENT_SECRET`, `DATABRICKS_TOKEN`: each one alone changes which
+  of the operator's identities a sign-in uses.
 
 ## Serves
 

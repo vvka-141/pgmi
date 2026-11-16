@@ -138,16 +138,23 @@ changes in 0.20" of `docs/design/behaviour-contract.md`.
   `sslrootcert` is given, the system trust store vouches for the server, so
   pgmi also checks the server's name, as `verify-full` does. With an
   explicit root file `verify-ca` is unchanged.
-- **A project `.env` may set only parameters, the connection and the AWS
-  region and keys.** `PGMI_PARAM_*`, `PGMI_CONNECTION_STRING`, `DATABASE_URL`,
-  the `PG*` connection settings that point at no file, and `AWS_REGION`,
+- **A project `.env` may set only what pgmi itself reads; any other key
+  stops the deploy.** Allowed: `PGMI_PARAM_*`, `PGMI_CONNECTION_STRING`,
+  `DATABASE_URL`, the `PG*` variables pgmi supports, `AWS_REGION`,
   `AWS_DEFAULT_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
-  `AWS_SESSION_TOKEN`, `AWS_MAX_ATTEMPTS`, `AWS_RETRY_MODE` apply; every other
-  key (`HOME`, `PATH`, `BASH_ENV`, `LD_PRELOAD`, `AWS_PROFILE`,
-  `PGSSLROOTCERT`, `HTTPS_PROXY`, ...) is refused and named on the
-  `.env applied:` line, so a cloned project cannot point the operator's
-  credentials elsewhere or make a sign-in helper run its code. Set those in
-  the environment pgmi runs in. pgmi 0.14 applied every key.
+  `AWS_SESSION_TOKEN`, `AWS_MAX_ATTEMPTS`, `AWS_RETRY_MODE`,
+  `PGMI_MAX_FILE_SIZE`, `PGMI_NO_BANNER` and `NO_COLOR`. Any other key
+  (`HOME`, `PATH`, `BASH_ENV`, `LD_PRELOAD`, `AWS_PROFILE`,
+  `AZURE_CLIENT_ID`, `HTTPS_PROXY`, `PGSERVICE`, or an application's
+  `NODE_ENV`) ends the deploy with exit 10 before it connects, and the error
+  names the key, the reason and the fix. A cloned project cannot point the
+  operator's credentials elsewhere or make a sign-in helper run its code.
+  **If your `.env` is shared with an application, move the application's keys
+  to a file of another name** (for example `.env.app`), and set what a cloud
+  sign-in needs in the environment pgmi runs in. A `.env` that does not
+  parse also ends the deploy with exit 10, naming the file and the line.
+  pgmi 0.14 applied every key, and skipped an unparseable file with a
+  warning. See [Configuration, "Local Development"](../../docs/CONFIGURATION.md#local-development).
 - **`pg_temp.pgmi_run_file(path)` in every deploy session.** deploy.sql can
   run one project file by its path, with errors named by file and line as
   before; both templates use it, and a helper of your own keeps working. See

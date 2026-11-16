@@ -398,20 +398,38 @@ key. A `PGMI_CONNECTION_STRING` set only in `.env` outranks the pipeline's real
 the keys `.env` set (names only, never values), and `--json` carries them as
 `dotenvKeys`.
 
-A checked-out project's `.env` may set only deploy parameters
-(`PGMI_PARAM_*`), the connection (`PGMI_CONNECTION_STRING`, `DATABASE_URL`,
-and the `PG*` connection settings except the ones that point at files:
-`PGPASSFILE`, `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`, `PGSERVICEFILE`,
-`PGSYSCONFDIR`) and the AWS region, keys and retry settings (`AWS_REGION`,
-`AWS_DEFAULT_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
-`AWS_SESSION_TOKEN`, `AWS_MAX_ATTEMPTS`, `AWS_RETRY_MODE`). Any other key
-(`HOME`, `PATH`, `BASH_ENV`, `AWS_PROFILE`, `HTTPS_PROXY`, ...) is skipped,
-because it could point the operator's credentials elsewhere or make a
-sign-in helper run project code, and the `.env applied:` line names each
-one. Set them in the environment pgmi runs in. A
-`.env` that exists but cannot be read, or that is larger than
-`PGMI_MAX_FILE_SIZE`, stops the deploy with exit 10; one that does not parse is
-not applied at all, with a warning naming the file. A leading UTF-8
+A checked-out project's `.env` may set only:
+
+- deploy parameters (`PGMI_PARAM_*`);
+- the connection: `PGMI_CONNECTION_STRING`, `DATABASE_URL` and the `PG*`
+  variables pgmi supports, with the ones that name a file (`PGPASSFILE`,
+  `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY`), as a connection string and
+  `pgmi.yaml` may name them too;
+- the AWS region, keys and retry settings (`AWS_REGION`,
+  `AWS_DEFAULT_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+  `AWS_SESSION_TOKEN`, `AWS_MAX_ATTEMPTS`, `AWS_RETRY_MODE`);
+- `PGMI_MAX_FILE_SIZE`, `PGMI_NO_BANNER` and `NO_COLOR`.
+
+Any other key stops the deploy with exit 10 before it connects, whether or not
+the environment sets the same key. The error names each such key, never its
+value. pgmi passes its environment to the programs it starts for cloud
+sign-in, so another key (`HOME`, `PATH`, `BASH_ENV`, `AWS_PROFILE`,
+`AZURE_CLIENT_ID`, `HTTPS_PROXY`, ...) could change which credentials they use
+or what they run. What to do:
+
+- A key pgmi or a cloud sign-in needs: set it in the environment pgmi runs in
+  (an exported variable, a CI variable).
+- A key of an application that shares the folder (`NODE_ENV`, `PORT`, ...):
+  keep it in a file of another name, such as `.env.app`. pgmi reads only
+  `.env`.
+- `PGSERVICE` and `PGSERVICEFILE`: pgmi reads no service files. Name the
+  server with `PGHOST`, `PGPORT`, `PGDATABASE` and `PGUSER`, or with
+  `PGMI_CONNECTION_STRING`.
+
+A
+`.env` that exists but cannot be read, that is larger than
+`PGMI_MAX_FILE_SIZE`, or that does not parse stops the deploy with exit 10; a
+parse error names the file and the line, never the text. A leading UTF-8
 byte-order mark is ignored.
 
 ### CI/CD Pipeline

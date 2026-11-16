@@ -1,7 +1,7 @@
-description: a project .env may not set keys that locate credentials, endpoints, proxies or trust roots (owner 2026-11-12, PGMI-921; PG trust and credential files and cloud profiles, PGMI-980); Go applies them, Rust refuses them, applies the rest and names the refused keys on the applied line; the operator's own environment still sets them (contract "Behaviour changes in 0.20")
+description: a project .env may set only deploy parameters, the connection, the AWS region and keys and three settings of pgmi's own; any other key stops the deploy with exit 10 before connecting, named, with why and what to do instead, also when the environment sets the same key (owner 2026-11-16, PGMI-1066; the allow list PGMI-1045). Go applies every key (contract "Behaviour changes in 0.20")
 project:
   files:
-    .env: "PGMI_PARAM_GREETING=hello\nSSL_CERT_FILE=./not-a-ca.pem\nhttps_proxy=http://127.0.0.1:9\nPGPASSFILE=./none\nAWS_PROFILE=other\nUSERPROFILE=./planted\nXDG_CONFIG_HOME=./planted\n"
+    .env: "PGMI_PARAM_GREETING=hello\nSSL_CERT_FILE=./not-a-ca.pem\nhttps_proxy=http://127.0.0.1:9\nAWS_PROFILE=other\nUSERPROFILE=./planted\nXDG_CONFIG_HOME=./planted\n"
     deploy.sql: |
       DO $$ BEGIN
         IF current_setting('pgmi.greeting', true) IS DISTINCT FROM 'hello' THEN
@@ -14,4 +14,17 @@ steps:
       exit: 0
       stderr: ["\\.env applied: .*PGMI_PARAM_GREETING"]
       rust:
-        stderr: ["\\.env applied: PGMI_PARAM_GREETING; refused: AWS_PROFILE, PGPASSFILE, SSL_CERT_FILE, USERPROFILE, XDG_CONFIG_HOME, https_proxy \\(a project \\.env may not locate credentials"]
+        exit: 10
+        stderr:
+          - "^pgmi: error: {project}/\\.env sets AWS_PROFILE, SSL_CERT_FILE, USERPROFILE, XDG_CONFIG_HOME, https_proxy, which a project \\.env may not set$"
+          - "^A project \\.env may set only deploy parameters \\(PGMI_PARAM_\\*\\), the connection "
+          - "set it in the environment pgmi runs in\\. A key of an application: keep it in a file of another name, such as \\.env\\.app\\.$"
+        stderr_not: ["applied:", "PGSERVICE", "not-a-ca"]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --json]
+    env: {AWS_PROFILE: operator, XDG_CONFIG_HOME: "{home}"}
+    expect:
+      exit: 0
+      rust:
+        exit: 10
+        json: {status: failed, exitCode: 10}
+        stderr: ["\\.env sets AWS_PROFILE, SSL_CERT_FILE, USERPROFILE, XDG_CONFIG_HOME, https_proxy, which a project \\.env may not set"]

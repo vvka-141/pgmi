@@ -759,7 +759,8 @@ END $$;
         }
     };
     let admin = format!("{DB}_admin");
-    let blanks: [(&str, Box<dyn Fn(common::Deploy) -> common::Deploy>); 6] = [
+    type Blank = Box<dyn Fn(common::Deploy) -> common::Deploy>;
+    let blanks: [(&str, Blank); 6] = [
         (
             "an empty --param",
             Box::new(|d| d.arg("--param").arg("database_admin_password=")),

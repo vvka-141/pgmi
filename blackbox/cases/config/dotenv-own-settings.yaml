@@ -1,0 +1,13 @@
+description: a project .env may set PGMI_MAX_FILE_SIZE, PGMI_NO_BANNER, NO_COLOR and the connection's file keys (PGSSLROOTCERT, PGSSLCERT, PGSSLKEY, PGPASSFILE), as in Go; the size limit it sets applies to the project's files (PGMI-1066)
+project:
+  files:
+    .env: "PGMI_MAX_FILE_SIZE=64\nPGMI_NO_BANNER=1\nNO_COLOR=1\nPGPASSFILE=./none\nPGSSLROOTCERT=./no-ca.pem\nPGSSLCERT=./no.crt\nPGSSLKEY=./no.key\n"
+    deploy.sql: SELECT 1;
+    big.sql: "SELECT 'this file is longer than the sixty-four bytes the project .env allows';\n"
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 10
+      stderr:
+        - "\\.env applied: NO_COLOR, PGMI_MAX_FILE_SIZE, PGMI_NO_BANNER, PGPASSFILE, PGSSLCERT, PGSSLKEY, PGSSLROOTCERT$"
+        - "big\\.sql.*64"

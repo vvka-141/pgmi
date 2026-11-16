@@ -1,4 +1,4 @@
-description: a NUL byte in the project .env never crashes and never prints the value; Go drops that pair, Rust applies nothing and warns
+description: a NUL byte in the project .env never crashes and never prints the value; Go drops that pair, Rust stops with exit 10 naming the file and the line (contract "Behaviour changes in 0.20", PGMI-1066)
 project:
   files:
     .env: {hex: "50474d495f504152414d5f583d6162630068696464656e2d76616c75650a50474d495f504152414d5f593d310a"}
@@ -12,4 +12,5 @@ steps:
       stderr_not: ["hidden-value", "panicked"]
       stdout_not: ["hidden-value"]
       rust:
-        stderr: ["WARNING: .*\\.env could not be parsed, so none of its values were applied", "x=\\[<NULL>\\] y=\\[<NULL>\\]"]
+        exit: 10
+        stderr: ["^pgmi: error: .*\\.env could not be parsed at line \\d+; without its values"]

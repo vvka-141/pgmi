@@ -1,0 +1,21 @@
+description: PGSERVICE in a project .env stops the deploy with exit 10 before connecting, in both binaries; it is never dropped so that the deploy goes to whatever the operator's environment points at (PGMI-1066). Rust names the file and says what to set instead (contract "Behaviour changes in 0.20")
+project:
+  files:
+    .env: "PGSERVICE=prod\n"
+    deploy.sql: CREATE TABLE reached_the_default_target (id int);
+steps:
+  - pgmi: [deploy, "{project}", -d, "{db}"]
+    env: {PGHOST: "{host}", PGPORT: "{port}", PGUSER: "{user}", PGPASSWORD: "{password}", PGDATABASE: postgres}
+    expect:
+      exit: 10
+      stderr: ["PGSERVICE"]
+      stderr_not: ["Deploying", "DONE"]
+      rust:
+        stderr:
+          - "^pgmi: error: {project}/\\.env sets PGSERVICE, which a project \\.env may not set$"
+          - "^PGSERVICE and PGSERVICEFILE name a connection service file, and pgmi reads none\\. Name the server with PGHOST, PGPORT, PGDATABASE and PGUSER, or with PGMI_CONNECTION_STRING\\.$"
+        stderr_not: ["application", "applied:"]
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 10
+      stderr: ["PGSERVICE"]

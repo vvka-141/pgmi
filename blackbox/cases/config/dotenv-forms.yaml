@@ -1,4 +1,4 @@
-description: the project .env reads every form as godotenv does - an escaped $ stays literal, double-quote escapes other than \n and \r drop the backslash, KEY:value, export with a tab, \' inside single quotes, lowercase $names left alone, the last ' #' starts the comment, a second assignment after a closing quote; text after a closing quote that is not an assignment makes the whole file unparseable
+description: the project .env reads every form as godotenv does - an escaped $ stays literal, double-quote escapes other than \n and \r drop the backslash, KEY:value, export with a tab, \' inside single quotes, lowercase $names left alone, the last ' #' starts the comment, a second assignment after a closing quote; text after a closing quote that is not an assignment makes the whole file unparseable (Go warns and applies nothing; Rust stops with exit 10, contract "Behaviour changes in 0.20", PGMI-1066)
 project:
   files:
     .env: "PGMI_PARAM_DOLLAR_QUOTED=\"p\\$word\"\nPGMI_PARAM_DOLLAR_UNQUOTED=p\\$word\nPGMI_PARAM_ESCAPES=\"a\\tb \\\\ \\\"q\\\" x\\ny\"\nPGMI_PARAM_COLON: colon\nexport\tPGMI_PARAM_EXPORT_TAB=tab\nPGMI_PARAM_SINGLE='it\\'s'\nPGMI_PARAM_LOWER=x$home\nPGMI_PARAM_COMMENTS=a #b #c\nPGMI_PARAM_FIRST=\"x\" PGMI_PARAM_SECOND=y\n"
@@ -31,3 +31,7 @@ steps:
       sql:
         - query: SELECT count(*) FROM broken_seen
           rows: [[0]]
+      rust:
+        exit: 10
+        stderr: ["^pgmi: error: .*broken/\\.env could not be parsed at line \\d+; without its values the deploy could reach another server or run with defaults$"]
+        sql: []

@@ -1,0 +1,17 @@
+description: a .env shared with an application stops the deploy with exit 10 in Rust, naming the application's keys with a reason that is true for them and never their values (owner 2026-11-16, PGMI-1066). Go applies every key (contract "Behaviour changes in 0.20")
+project:
+  files:
+    .env: "NODE_ENV=production\nPORT=3000\nSESSION_SECRET=app-Secret-1066\nPGMI_PARAM_GREETING=hello\n"
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      stderr_not: [app-Secret-1066]
+      rust:
+        exit: 10
+        stderr:
+          - "\\.env sets NODE_ENV, PORT, SESSION_SECRET, which a project \\.env may not set$"
+          - "pgmi passes its environment to the programs it starts for cloud sign-in, so any other key could change which credentials they use or what they run\\.$"
+          - "A key of an application: keep it in a file of another name, such as \\.env\\.app\\.$"
+        stderr_not: [app-Secret-1066, "production", "3000", "trust roots", "service file"]

@@ -1,4 +1,4 @@
-description: the project .env expands $NAME and ${NAME} in unquoted and double-quoted values, from earlier lines only (a name set only in the environment expands to empty); single quotes keep $ literal; a .env that does not parse is warned about and applies nothing
+description: the project .env expands $NAME and ${NAME} in unquoted and double-quoted values, from earlier lines only (a name set only in the environment expands to empty); single quotes keep $ literal; a .env that does not parse is warned about and applies nothing in Go, and stops the deploy with exit 10 in Rust (contract "Behaviour changes in 0.20", PGMI-1066)
 project:
   files:
     .env: "PGMI_PARAM_BASE=b\nPGMI_PARAM_UNQUOTED=x$PGMI_PARAM_BASE\nPGMI_PARAM_BRACED=x${PGMI_PARAM_BASE}y\nPGMI_PARAM_DOUBLE=\"x${PGMI_PARAM_BASE}\"\nPGMI_PARAM_SINGLE='x${PGMI_PARAM_BASE}'\nPGMI_PARAM_FROM_ENV=a${SHELL_VALUE}b\nPGMI_PARAM_UNSET=a${NOT_SET_ANYWHERE}b\n"
@@ -29,3 +29,7 @@ steps:
       sql:
         - query: SELECT count(*) FROM broken_seen
           rows: [[0]]
+      rust:
+        exit: 10
+        stderr: ["^pgmi: error: .*broken/\\.env could not be parsed at line \\d+; without its values"]
+        sql: []

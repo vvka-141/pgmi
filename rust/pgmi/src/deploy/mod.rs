@@ -137,7 +137,6 @@ pub(crate) struct Context {
     pub(crate) verbose: bool,
     pub(crate) env: Env,
     pub(crate) dotenv_keys: Vec<String>,
-    pub(crate) dotenv_refused: Vec<String>,
     /// `pgmi serve`: the hosts the operator's own credentials may go to.
     pub(crate) serve_hosts: Option<ServeHosts>,
     pub(crate) stdin: Stdin,
@@ -274,7 +273,6 @@ fn provenance(
     spec: &Spec,
     dotenv_path: &str,
     dotenv_keys: &[String],
-    dotenv_refused: &[String],
     overrides: &[Override],
     pgoptions: bool,
 ) -> Vec<String> {
@@ -292,29 +290,14 @@ fn provenance(
             spec.describe()
         ));
     }
-    lines.extend(dotenv_line(dotenv_path, dotenv_keys, dotenv_refused));
+    if !dotenv_keys.is_empty() {
+        lines.push(format!("{dotenv_path} applied: {}", dotenv_keys.join(", ")));
+    }
     lines.extend(overrides.iter().map(ToString::to_string));
     if pgoptions {
         lines.push("session options: from PGOPTIONS".into());
     }
     lines
-}
-
-/// What the project `.env` set and which of its keys were refused.
-fn dotenv_line(path: &str, applied: &[String], refused: &[String]) -> Option<String> {
-    match (applied.is_empty(), refused.is_empty()) {
-        (true, true) => None,
-        (false, true) => Some(format!("{path} applied: {}", applied.join(", "))),
-        (applied_none, false) => Some(format!(
-            "{path} applied: {}; refused: {} (a project .env may not locate credentials, endpoints, proxies or trust roots; set them in the environment pgmi runs in)",
-            if applied_none {
-                "nothing".to_string()
-            } else {
-                applied.join(", ")
-            },
-            refused.join(", ")
-        )),
-    }
 }
 
 struct Loaded {
@@ -872,7 +855,6 @@ impl Steps<'_> {
             spec,
             &crate::config::dotenv_path(&self.ctx.request.project),
             &self.ctx.dotenv_keys,
-            &self.ctx.dotenv_refused,
             &st.overrides,
             self.ctx.env.non_empty("PGOPTIONS")?.is_some(),
         ) {
@@ -2111,7 +2093,6 @@ mod tests {
             verbose: false,
             env: Env::default(),
             dotenv_keys: vec!["PGPASSWORD".into()],
-            dotenv_refused: Vec::new(),
             serve_hosts: None,
             stdin: Stdin::Unavailable,
             approver: Box::new(ConfirmedName(None)),
@@ -2559,32 +2540,9 @@ mod tests {
             &spec,
             "./app/.env",
             &keys,
-            &[],
             &notes,
             env.non_empty("PGOPTIONS").unwrap().is_some(),
         )
-    }
-
-    #[test]
-    fn the_dotenv_line_names_refused_keys() {
-        let k = |v: &[&str]| v.iter().map(ToString::to_string).collect::<Vec<_>>();
-        assert_eq!(dotenv_line("./.env", &[], &[]), None);
-        assert_eq!(
-            dotenv_line("./.env", &k(&["A"]), &[]).as_deref(),
-            Some("./.env applied: A")
-        );
-        let both = dotenv_line("./.env", &k(&["A", "B"]), &k(&["SSL_CERT_FILE"])).unwrap();
-        assert!(
-            both.starts_with(
-                "./.env applied: A, B; refused: SSL_CERT_FILE (a project .env may not"
-            ),
-            "{both}"
-        );
-        assert!(
-            dotenv_line("./.env", &[], &k(&["https_proxy"]))
-                .unwrap()
-                .starts_with("./.env applied: nothing; refused: https_proxy")
-        );
     }
 
     #[test]

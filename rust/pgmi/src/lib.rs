@@ -149,7 +149,6 @@ fn run_deploy(args: cli::DeployArgs, verbose: bool, env: Env, export: impl Fn(&s
         verbose,
         env,
         dotenv_keys: Vec::new(),
-        dotenv_refused: Vec::new(),
         serve_hosts: None,
         stdin: deploy::Stdin::Process,
     };
@@ -157,13 +156,12 @@ fn run_deploy(args: cli::DeployArgs, verbose: bool, env: Env, export: impl Fn(&s
         Ok(d) => d,
         Err(e) => return deploy::refused(&ctx, e),
     };
-    for (k, v) in &dotenv.applied {
+    for (k, v) in &dotenv {
         export(k, v);
         ctx.env.insert(k, v);
     }
     ctx.approver = Box::new(deploy::Terminal::new(ctx.request.force, &ctx.env));
-    ctx.dotenv_keys = dotenv.applied.into_iter().map(|(k, _)| k).collect();
-    ctx.dotenv_refused = dotenv.refused;
+    ctx.dotenv_keys = dotenv.into_iter().map(|(k, _)| k).collect();
     match runtime() {
         Ok(runtime) => deploy::run(runtime, &ctx),
         Err(e) => deploy::refused(&ctx, e),
