@@ -286,7 +286,7 @@ BEGIN
 
     -- A dev database's admin role may hold the dev default password, and a
     -- deploy without the parameter keeps the role's password.
-    IF v_label IN ('dev', '(none)') AND v_env <> 'dev'
+    IF v_label IN ('dev', '(none)') AND v_env IS DISTINCT FROM 'dev'
        AND pg_temp.parameter_value('database_admin_password') IS NULL THEN
         RAISE EXCEPTION 'relabel_environment=%: database % was labelled %, so its admin role % may still have the dev default password, and no database_admin_password was given',
             v_relabel, current_database(), v_label, pg_temp.parameter_value('database_admin_role')
