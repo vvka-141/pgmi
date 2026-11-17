@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   docs-rust:
-    name: Docs describe the Rust binary
+    name: Docs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -163,7 +163,7 @@ jobs:
           cd blackbox && uv run --locked pytest test_differential.py
 
   rust:
-    name: Rust
+    name: Build and lint
     runs-on: ubuntu-latest
     env:
       CARGO_TERM_COLOR: never
@@ -232,7 +232,7 @@ jobs:
           grep -aqF "$version" "$(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-musl/lib/self-contained/libc.a"
 
   fuzz:
-    name: Fuzz (Rust)
+    name: Fuzz
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
