@@ -53,7 +53,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `serve`: a client that reads slowly after closing its input gets every answer as a complete line (8 KB/s through eight 16 KB answers; 800 KB/s through one 3.5 MB `metadata_plan`) | ✓ `serve/slow-reader-many-answers`, `serve/slow-reader-huge-answer` |
 | `serve`: a second SIGINT while answers drain to a slow reader (Go drains and exits 0; Rust exits 130 at once) | ✓ `serve/second-signal` |
 | `serve`: `deploy` tool with params, ping answered during a deploy, `notifications/cancelled` rolls the deploy back | ✓ `serve/deploy-tool`, `serve/cancel`; WARNINGs in the text block ✓ `serve/deploy-warning-lines` |
-| `serve`: malformed input (not JSON, non-object, `jsonrpc`, id types, unknown method and tool, bad params, blank line, 2 MB line, invalid UTF-8) | ✓ `serve/malformed`; the bare value `null` (no answer) ✗ deliberately unpinned, see `rust/docs/decisions/go-review.md` |
+| `serve`: malformed input (not JSON, non-object, `jsonrpc`, id types, unknown method and tool, bad params, blank line, 2 MB line, invalid UTF-8) | ✓ `serve/malformed`; the bare value `null` (no answer) ✗ deliberately unpinned, see `decisions/go-review.md` |
 | `serve`: protocol versions, `server/discover`, the 2026-07-28 stateless era | ✓ `serve/protocol-versions` |
 | `serve`: no `.env`, overwrite needs `confirmDatabaseName` (12), unknown argument (10) | ✓ `serve/deploy-guards` |
 | `serve` deploy tool `verbose: true` passes `RAISE DEBUG`; without it, not | ✓ `serve/deploy-verbose` |
@@ -129,7 +129,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | Source | Coverage |
 |---|---|
 | `pgmi.yaml` connection, params, timeout; unknown key or a timeout too long = 10 | ✓ `config/pgmi-yaml`, `config/pgmi-yaml-invalid`, `config/pgmi-yaml-timeout-too-long` |
-| `pgmi.yaml` parsing: anchors, aliases and merge keys; block scalars and chomping; comments; YAML 1.1 booleans and numbers kept as text; tabs; BOM; CRLF; case-sensitive keys; duplicate keys, a quoted port, a timeout without a unit = 10; empty file, `---`, `~` and empty sections; `---`/`...`, `%YAML 1.2`, two documents | ✓ `config/yaml-anchors`, `config/yaml-block-scalars`, `config/yaml-comments`, `config/yaml-booleans`, `config/yaml-numbers`, `config/yaml-tabs`, `config/yaml-bom`, `config/yaml-crlf`, `config/yaml-unknown-keys`, `config/yaml-duplicate-keys`, `config/yaml-port`, `config/yaml-timeout`, `config/yaml-empty`, `config/yaml-documents` (the last five differ on Rust, see `rust/docs/decisions/0013-yaml.md`) |
+| `pgmi.yaml` parsing: anchors, aliases and merge keys; block scalars and chomping; comments; YAML 1.1 booleans and numbers kept as text; tabs; BOM; CRLF; case-sensitive keys; duplicate keys, a quoted port, a timeout without a unit = 10; empty file, `---`, `~` and empty sections; `---`/`...`, `%YAML 1.2`, two documents | ✓ `config/yaml-anchors`, `config/yaml-block-scalars`, `config/yaml-comments`, `config/yaml-booleans`, `config/yaml-numbers`, `config/yaml-tabs`, `config/yaml-bom`, `config/yaml-crlf`, `config/yaml-unknown-keys`, `config/yaml-duplicate-keys`, `config/yaml-port`, `config/yaml-timeout`, `config/yaml-empty`, `config/yaml-documents` (the last five differ on Rust, see `decisions/0013-yaml.md`) |
 | precedence: flags > environment > `pgmi.yaml` > defaults, with the `connection: from ...` line | ✓ `config/precedence`, `config/pgmi-yaml`, `env/connection-string-vars` |
 | project `.env` loaded first, set variables win, `dotenvKeys` in `--json` lists only the keys it set | ✓ `config/dotenv` |
 | `.env` named on stderr: `(set by <path>)` on the connection line, `<path> applied: <keys>` (never values; `./` for a relative project path) | ✓ `config/dotenv-provenance` |
@@ -258,7 +258,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 ## Contract notes
 
 The PGMI-830 review against Go adds its own list, with owner questions, in
-`rust/docs/decisions/go-review.md`.
+`decisions/go-review.md`.
 
 Oddities found while writing cases. Go is frozen, so they are recorded here and
 decided in the behaviour contract (PGMI-828), not fixed.

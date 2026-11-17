@@ -308,14 +308,14 @@ land before or between steps, each with a black-box case.
 
 Separate tickets, in parallel after steps 3 and 7: port the remaining Go
 unit groups (2, 3, 4, 10, 12, wizards; done 2026-11-11, PGMI-863, mapped in
-`rust/docs/test-parity-units.md` with the parity fixes the ports forced); a fuzz/property target for
+[test-parity-units.md](test-parity-units.md) with the parity fixes the ports forced); a fuzz/property target for
 `conn::parse` (done 2026-11-11 with the lexer, splitter, metadata, `.env` and
 `.pgpass` targets, PGMI-864 and PGMI-870: proptests in `invariants.rs`, one
 cargo-fuzz target per parser, the CI job `fuzz` blocking); port the content linters and the template deployment tests
 of `internal/scaffold` and `internal/services` to `rust/pgmi/tests/` before
 switch day. That port landed 2026-11-11 (PGMI-862): linters in
 `src/content_tests/`, deployments in `tests/`, mapped in
-`rust/docs/test-parity-shared.md`.
+[test-parity-shared.md](test-parity-shared.md).
 
 ### Left alone
 
@@ -363,7 +363,7 @@ these, allowed workspace-wide:
 - **m4, m6** Done in the gate 2 round below (`deploy::Stdin`, `Steps`).
 - **m10** The unported Go groups (`internal/cli/pgpass_test.go`,
   `internal/ui/approver_test.go`, `internal/cli/serve_*_test.go`) are test
-  porting, PGMI-863's kind of work; listed in `rust/docs/test-parity-units.md`.
+  porting, PGMI-863's kind of work; listed in [test-parity-units.md](test-parity-units.md).
 - **s1, s2** Done in the gate 2 round below. **s3** `Env`'s per-lookup
   allocation is left: no bug behind it. **s5** The DB tests still skip when `PGMI_TEST_CONN` is
   unset; CI sets `PGMI_REQUIRE_DB`, which turns a skip into a failure.

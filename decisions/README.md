@@ -1,4 +1,4 @@
-# Rust re-implementation: decision records
+# Decision records
 
 Design decisions for the Rust pgmi binary (PGMI-829), written 2026-11-10 from
 `docs/design/behaviour-contract.md`, the black-box suite and the spike
@@ -37,6 +37,7 @@ them.
 | [0024](0024-templates-on-every-host.md) | Templates that deploy and pass their tests on local PostgreSQL and every listed cloud host with only the README's edits (PGMI-874) |
 | [0025](0025-whole-deploy-retry.md) | Accepted (PGMI-882): a transient failure reruns the whole deploy from the start, like a redeploy, inside the `--timeout` time box; the retried and never-retried failures, backoff, reporting, open choices for the owner |
 | [0026](0026-crypto-provider-review.md) | Deferred (owner, 2026-11-15): 0.20 keeps graviola; the measured comparison recommends aws-lc-rs; reopens on another graviola correctness bug, PR #248 unmerged at 1.0, or a Fable flag |
+| [0027](0027-repository-layout.md) | The repository's native Rust layout: a virtual workspace with `crates/pgmi` and `crates/pgmi-shared`, `fuzz/`, `packaging/`, `decisions/`; `release-rust.yml` keeps its name |
 | [go-review](go-review.md) | PGMI-830: Go behaviour missing from the contract, the cases added for it, and six owner questions |
 
 ## Contract coverage

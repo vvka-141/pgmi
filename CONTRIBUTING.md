@@ -43,7 +43,7 @@ For security vulnerabilities, please see [SECURITY.md](SECURITY.md). Do not open
 pgmi is written in Rust: one binary, built from `crates/pgmi`, with the files
 it embeds (templates, skills, the session SQL) in the `pgmi-shared` crate under
 `crates/pgmi-shared/`. The crate layout and its main abstractions are described in
-[record 0022](rust/docs/decisions/0022-library-layout-and-seams.md). You need:
+[record 0022](decisions/0022-library-layout-and-seams.md). You need:
 
 - `rustup`; it installs the toolchain pinned in `rust-toolchain.toml`, with
   rustfmt and clippy. No C code is compiled: every dependency is pure Rust,
@@ -138,7 +138,7 @@ Other jobs:
   weather, is a finding.
 
 The design records behind the code are in
-[rust/docs/decisions/](rust/docs/decisions/README.md). The Go implementation
+[decisions/](decisions/README.md). The Go implementation
 ended with 0.14.1; its sources are at the `go-legacy` tag.
 
 ## Code Style
@@ -147,7 +147,7 @@ ended with 0.14.1; its sources are at the `go-legacy` tag.
 
 Every failure is a `crate::error::Error` with a `Kind`, and the kind alone
 decides the exit code (`crates/pgmi/src/error.rs`; record
-[0002](rust/docs/decisions/0002-errors-and-exit-codes.md)). A message gives
+[0002](decisions/0002-errors-and-exit-codes.md)). A message gives
 context first and names the next step; secrets never reach it.
 
 ### Testing

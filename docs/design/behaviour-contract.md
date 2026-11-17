@@ -1371,7 +1371,7 @@ Go ignores a line holding only `null`; JSON-RPC 2.0 calls it an invalid
 request. The Rust binary answers it with `-32600` and a null id. Go echoes an
 id holding invalid UTF-8 as raw bytes, so its answer is not valid JSON; the
 Rust binary reads each line lossily and echoes U+FFFD, so every answer is
-valid JSON (questions Q1 and Q2 in `rust/docs/decisions/go-review.md`).
+valid JSON (questions Q1 and Q2 in `decisions/go-review.md`).
 
 Cases: `serve/null-request`; Q2 by the Rust unit tests of `serve::wire`.
 
@@ -1382,7 +1382,7 @@ Rust driver speaks 3.0 only, so the Rust binary refuses `min_protocol_version`
 `3.2` or `latest` before connecting, exit 10 (`protocol 3.2 is not supported
 yet`). `max_protocol_version` is honoured: it caps the version, and 3.0 is
 always within it. Adding 3.2 to pgmi's own connection layer is PGMI-865, done
-only if a user asks (question Q4 in `rust/docs/decisions/go-review.md`).
+only if a user asks (question Q4 in `decisions/go-review.md`).
 
 Cases: `connection/protocol-version`.
 
@@ -1400,12 +1400,12 @@ Cases: `cloud/azure-token-credentials-invalid` (the exit code),
 `cloud/azure-tenant-id-refused` (a tenant id outside letters, digits, `.` and `-`),
 `terminal/init-wizard-keeps-unparseable-yaml` (init keeps the file). The fresh
 block: `terminal/config-replace-unparseable` checks what both binaries keep;
-the replacement itself is recorded in `rust/docs/decisions/0013-yaml.md`.
+the replacement itself is recorded in `decisions/0013-yaml.md`.
 
 ### Every accepted connection key is honoured or refused (owner, 2026-11-11)
 
 No connection setting is accepted and then ignored (PGMI-860; libpq keys,
-question Q3 in `rust/docs/decisions/go-review.md`). Go sends most of the keys
+question Q3 in `decisions/go-review.md`). Go sends most of the keys
 below to the server as settings, which refuses them (exit 11). The Rust
 binary handles each one as libpq does, or refuses it before connecting with
 exit 10 when it needs something pgmi has not:
