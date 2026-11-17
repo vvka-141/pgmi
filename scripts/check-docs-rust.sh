@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-pattern='go install [^ ]*vvka-141/pgmi|go (build|run|test|vet) [^ ]*\./(cmd|internal|pkg)\b|go test \./\.\.\.|github\.com/vvka-141/pgmi/(pkg|internal|cmd)\b|\bpkg/pgmi\b|GO-LIBRARY|img\.shields\.io/github/go-mod|badge/Go-|\bGo [Vv]ersion\b|written in Go|\bthe Go (binary|core|code|preprocessor)\b|\bjackc/pgx\b|\bpgx\b'
+pattern='go install [^ ]*vvka-141/pgmi|go (build|run|test|vet) [^ ]*\./(cmd|internal|pkg)\b|go test \./\.\.\.|github\.com/vvka-141/pgmi/(pkg|internal|cmd)\b|\bpkg/pgmi\b|GO-LIBRARY|img\.shields\.io/github/go-mod|badge/Go-|\bGo [Vv]ersion\b|written in Go|\bthe Go (binary|core|code|preprocessor|scanner|suite|tests?)\b|\bGo preprocessor\b|\bby Go\b|\binternal/(scaffold|contract|services|db|mcp|cli|params|files|preprocessor)/|\bcmd/pgmi\b|\bjackc/pgx\b|\bpgx\b'
 allow=scripts/check-docs-rust.allow
 
 files=$(git ls-files README.md CONTRIBUTING.md SUPPORT.md SECURITY.md docs website/content website/static/llms.txt shared/ai \
