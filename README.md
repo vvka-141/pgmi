@@ -294,10 +294,13 @@ brew install --cask vvka-141/pgmi/pgmi
 **Direct download:** grab an archive (`pgmi_<version>_<os>_<arch>.tar.gz`, `.zip` on Windows) or a Debian/Ubuntu `.deb` package from [GitHub Releases](https://github.com/vvka-141/pgmi/releases). To check that a file was built by pgmi's release workflow from this repository, run the GitHub CLI on it:
 
 ```bash
-gh attestation verify pgmi_<version>_linux_amd64.tar.gz --repo vvka-141/pgmi
+gh attestation verify pgmi_<version>_linux_amd64.tar.gz \
+  --repo vvka-141/pgmi \
+  --signer-workflow vvka-141/pgmi/.github/workflows/release-rust.yml \
+  --source-ref refs/heads/main
 ```
 
-It prints the workflow run and the commit. `checksums.txt` lists the SHA-256 of every file (`sha256sum -c checksums.txt --ignore-missing` checks the ones you downloaded), and each release carries a CycloneDX SBOM, `pgmi_<version>_sbom.cdx.json`. Install a `.deb` with `sudo apt install ./pgmi_<version>_linux_amd64.deb`; there is no APT repository, so install each new release the same way.
+`--repo` alone would accept a file attested by any workflow on any branch of the repository; the two other options name the release workflow and the branch it runs on. It prints the workflow run and the commit. `checksums.txt` lists the SHA-256 of every file (`sha256sum -c checksums.txt --ignore-missing` checks the ones you downloaded), and each release carries a CycloneDX SBOM, `pgmi_<version>_sbom.cdx.json`. Install a `.deb` with `sudo apt install ./pgmi_<version>_linux_amd64.deb`; there is no APT repository, so install each new release the same way.
 
 **From source** (the Rust toolchain pinned in `rust-toolchain.toml` installs itself through `rustup`; pgmi compiles no C code, but the build needs the platform linker: `cc` on Linux, the Xcode command-line tools on macOS, the MSVC build tools on Windows):
 ```bash

@@ -1,15 +1,9 @@
 name: Examples
 
-# The end-to-end example gates. Defined once and called by both ci.yml and
-# release.yml: a tag used to run only the package tests, so a release could
-# publish while the flagship examples in the README were broken.
+# The end-to-end example gates, called by ci.yml: the README's flagship
+# examples deploy on every push, with the binary built from that commit.
 on:
   workflow_call:
-    inputs:
-      impl:
-        description: Which pgmi the examples run on, go or rust (the Rust leg is non-blocking until switch day)
-        type: string
-        default: go
 
 jobs:
   example-test-gated:
@@ -31,12 +25,9 @@ jobs:
       PGMI_CONNECTION_STRING: postgresql://postgres:postgres@127.0.0.1:5434/postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27'
 
       - name: Build pgmi
-        run: .github/scripts/build-pgmi.sh "${{ inputs.impl }}"
+        run: .github/scripts/build-pgmi.sh
 
       - name: Success path — tests pass, deployment commits
         working-directory: examples/test-gated-deploy
@@ -77,12 +68,9 @@ jobs:
       PGMI_CONNECTION_STRING: postgresql://postgres:postgres@127.0.0.1:5435/postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27'
 
       - name: Build pgmi
-        run: .github/scripts/build-pgmi.sh "${{ inputs.impl }}"
+        run: .github/scripts/build-pgmi.sh
 
       - name: Success path — one file at two plan positions, deploy commits
         working-directory: examples/execution-order-policy/project
@@ -141,12 +129,9 @@ jobs:
       PGMI_CONNECTION_STRING: postgresql://postgres:postgres@127.0.0.1:5437/postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27'
 
       - name: Build pgmi
-        run: .github/scripts/build-pgmi.sh "${{ inputs.impl }}"
+        run: .github/scripts/build-pgmi.sh
 
       - name: First deploy — seeds roles and permissions, tests pass
         working-directory: examples/seed-demo
@@ -184,12 +169,9 @@ jobs:
       PGMI_CONNECTION_STRING: postgresql://postgres:postgres@127.0.0.1:5436/postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27'
 
       - name: Build pgmi
-        run: .github/scripts/build-pgmi.sh "${{ inputs.impl }}"
+        run: .github/scripts/build-pgmi.sh
 
       - name: Deploy — atomic head, then CIC / backfill / CIC in psql mode
         working-directory: examples/lock-safe-deploy/project
@@ -286,12 +268,9 @@ jobs:
       PGMI_CONNECTION_STRING: postgresql://postgres:postgres@127.0.0.1:5438/postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27'
 
       - name: Build pgmi
-        run: .github/scripts/build-pgmi.sh "${{ inputs.impl }}"
+        run: .github/scripts/build-pgmi.sh
 
       - name: Deploy with TAP callback — tests emit TAP 14 output
         working-directory: examples/tap-reporter
@@ -312,12 +291,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27'
 
       - name: Build pgmi
-        run: .github/scripts/build-pgmi.sh "${{ inputs.impl }}"
+        run: .github/scripts/build-pgmi.sh
 
       - name: Run the documented first-run path verbatim
         run: scripts/verify-walkthrough.sh ./pgmi
@@ -341,12 +317,9 @@ jobs:
       PGMI_CONNECTION_STRING: postgresql://postgres:postgres@127.0.0.1:5439/postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27'
 
       - name: Build pgmi
-        run: .github/scripts/build-pgmi.sh "${{ inputs.impl }}"
+        run: .github/scripts/build-pgmi.sh
 
       - name: First deploy applies both migrations
         working-directory: examples/apply-once-tracking/project
@@ -390,7 +363,7 @@ jobs:
 
 
   # Each client job runs the gateway's own tests, then the language-neutral
-  # end-to-end harness (internal/scaffold/testdata/gateways/e2e) against the
+  # end-to-end harness (tests/gateways/e2e) against the
   # running gateway. A suite a gateway does not implement yet is listed in
   # EXPECTED_MISSING: it still runs and is reported, and the job fails once
   # it passes, so the list is shortened as each port lands.
@@ -414,23 +387,20 @@ jobs:
       DATABASE_URL: postgresql://clients_gateway:gateway@127.0.0.1:5441/clients_e2e
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27'
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'
 
       - name: Build pgmi
-        run: .github/scripts/build-pgmi.sh "${{ inputs.impl }}"
+        run: .github/scripts/build-pgmi.sh
 
       - name: Scaffold the advanced template and deploy it with env=dev
-        run: PGMI_BIN=$PWD/pgmi internal/scaffold/testdata/gateways/prepare.sh "$RUNNER_TEMP/project" clients_e2e
+        run: PGMI_BIN=$PWD/pgmi tests/gateways/prepare.sh "$RUNNER_TEMP/project" clients_e2e
 
       - name: Install the client's and the end-to-end harness's requirements
         run: |
           pip install -r "$RUNNER_TEMP/project/gateways/python/requirements.txt"
-          pip install -r internal/scaffold/testdata/gateways/e2e/requirements.txt
+          pip install -r tests/gateways/e2e/requirements.txt
 
       - name: Audit the client's pinned dependencies
         working-directory: ${{ runner.temp }}/project/gateways/python
@@ -448,10 +418,10 @@ jobs:
           EXPECTED_MISSING: rpc
           GATEWAY_DIR: ${{ runner.temp }}/project/gateways/python
           GATEWAY_COMMAND: python gateway.py
-        run: python internal/scaffold/testdata/gateways/e2e/run.py
+        run: python tests/gateways/e2e/run.py
 
       - name: The database tests ran (a skipped run signs nobody in)
-        run: internal/scaffold/testdata/gateways/signed-in.sh client-python
+        run: tests/gateways/signed-in.sh client-python
 
   client-typescript:
     name: Client — TypeScript reference gateway
@@ -473,9 +443,6 @@ jobs:
       DATABASE_URL: postgresql://clients_gateway:gateway@127.0.0.1:5442/clients_e2e
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27'
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
@@ -484,10 +451,10 @@ jobs:
           python-version: '3.13'
 
       - name: Build pgmi
-        run: .github/scripts/build-pgmi.sh "${{ inputs.impl }}"
+        run: .github/scripts/build-pgmi.sh
 
       - name: Scaffold the advanced template and deploy it with env=dev
-        run: PGMI_BIN=$PWD/pgmi internal/scaffold/testdata/gateways/prepare.sh "$RUNNER_TEMP/project" clients_e2e
+        run: PGMI_BIN=$PWD/pgmi tests/gateways/prepare.sh "$RUNNER_TEMP/project" clients_e2e
 
       - name: Build and test the scaffolded client against the deployed template
         working-directory: ${{ runner.temp }}/project/gateways/typescript
@@ -503,11 +470,11 @@ jobs:
           GATEWAY_DIR: ${{ runner.temp }}/project/gateways/typescript
           GATEWAY_COMMAND: node dist/main.js
         run: |
-          pip install -r internal/scaffold/testdata/gateways/e2e/requirements.txt
-          python internal/scaffold/testdata/gateways/e2e/run.py
+          pip install -r tests/gateways/e2e/requirements.txt
+          python tests/gateways/e2e/run.py
 
       - name: The database tests ran (a skipped run signs nobody in)
-        run: internal/scaffold/testdata/gateways/signed-in.sh client-typescript
+        run: tests/gateways/signed-in.sh client-typescript
 
   client-go:
     name: Client — Go reference gateway
@@ -537,10 +504,10 @@ jobs:
           python-version: '3.13'
 
       - name: Build pgmi
-        run: .github/scripts/build-pgmi.sh "${{ inputs.impl }}"
+        run: .github/scripts/build-pgmi.sh
 
       - name: Scaffold the advanced template and deploy it with env=dev
-        run: PGMI_BIN=$PWD/pgmi internal/scaffold/testdata/gateways/prepare.sh "$RUNNER_TEMP/project" clients_e2e
+        run: PGMI_BIN=$PWD/pgmi tests/gateways/prepare.sh "$RUNNER_TEMP/project" clients_e2e
 
       - name: Build and test the scaffolded client, its own module, against the deployed template
         working-directory: ${{ runner.temp }}/project/gateways/go
@@ -557,11 +524,11 @@ jobs:
           GATEWAY_COMMAND: ./gateway
           GORACE: halt_on_error=1
         run: |
-          pip install -r internal/scaffold/testdata/gateways/e2e/requirements.txt
-          python internal/scaffold/testdata/gateways/e2e/run.py
+          pip install -r tests/gateways/e2e/requirements.txt
+          python tests/gateways/e2e/run.py
 
       - name: The database tests ran (a skipped run signs nobody in)
-        run: internal/scaffold/testdata/gateways/signed-in.sh client-go
+        run: tests/gateways/signed-in.sh client-go
 
   client-csharp:
     name: Client — C# reference gateway
@@ -583,21 +550,18 @@ jobs:
       DATABASE_URL: postgresql://clients_gateway:gateway@127.0.0.1:5444/clients_e2e
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27'
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'
 
       - name: Build pgmi
-        run: .github/scripts/build-pgmi.sh "${{ inputs.impl }}"
+        run: .github/scripts/build-pgmi.sh
 
       - name: Scaffold the advanced template and deploy it with env=dev
-        run: PGMI_BIN=$PWD/pgmi internal/scaffold/testdata/gateways/prepare.sh "$RUNNER_TEMP/project" clients_e2e
+        run: PGMI_BIN=$PWD/pgmi tests/gateways/prepare.sh "$RUNNER_TEMP/project" clients_e2e
 
       - name: Start a TLS-only PostgreSQL for the sslmode test
-        run: internal/scaffold/testdata/gateways/tls-postgres.sh 5460 "$RUNNER_TEMP/tls"
+        run: tests/gateways/tls-postgres.sh 5460 "$RUNNER_TEMP/tls"
 
       - name: Build and test the scaffolded client against the deployed template (official .NET SDK image)
         working-directory: ${{ runner.temp }}/project/gateways/csharp
@@ -620,11 +584,11 @@ jobs:
             mcr.microsoft.com/dotnet/sdk:10.0.403 dotnet out/Gateway.dll
           GATEWAY_STOP: docker rm -f pgmi-gateway-{port}
         run: |
-          pip install -r internal/scaffold/testdata/gateways/e2e/requirements.txt
-          python internal/scaffold/testdata/gateways/e2e/run.py
+          pip install -r tests/gateways/e2e/requirements.txt
+          python tests/gateways/e2e/run.py
 
       - name: The database tests ran (a skipped run signs nobody in)
-        run: internal/scaffold/testdata/gateways/signed-in.sh client-csharp
+        run: tests/gateways/signed-in.sh client-csharp
 
   client-rust:
     name: Client — Rust reference gateway
@@ -646,21 +610,18 @@ jobs:
       DATABASE_URL: postgresql://clients_gateway:gateway@127.0.0.1:5445/clients_e2e
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27'
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'
 
       - name: Build pgmi
-        run: .github/scripts/build-pgmi.sh "${{ inputs.impl }}"
+        run: .github/scripts/build-pgmi.sh
 
       - name: Scaffold the advanced template and deploy it with env=dev
-        run: PGMI_BIN=$PWD/pgmi internal/scaffold/testdata/gateways/prepare.sh "$RUNNER_TEMP/project" clients_e2e
+        run: PGMI_BIN=$PWD/pgmi tests/gateways/prepare.sh "$RUNNER_TEMP/project" clients_e2e
 
       - name: Start a TLS-only PostgreSQL for the sslmode test
-        run: internal/scaffold/testdata/gateways/tls-postgres.sh 5460 "$RUNNER_TEMP/tls"
+        run: tests/gateways/tls-postgres.sh 5460 "$RUNNER_TEMP/tls"
 
       - name: Build and test the scaffolded client against the deployed template (official Rust image)
         working-directory: ${{ runner.temp }}/project/gateways/rust
@@ -685,8 +646,8 @@ jobs:
             rust:1.99.0-trixie target/debug/pgmi-gateway
           GATEWAY_STOP: docker rm -f pgmi-gateway-{port}
         run: |
-          pip install -r internal/scaffold/testdata/gateways/e2e/requirements.txt
-          python internal/scaffold/testdata/gateways/e2e/run.py
+          pip install -r tests/gateways/e2e/requirements.txt
+          python tests/gateways/e2e/run.py
 
       - name: The database tests ran (a skipped run signs nobody in)
-        run: internal/scaffold/testdata/gateways/signed-in.sh client-rust
+        run: tests/gateways/signed-in.sh client-rust

@@ -93,6 +93,7 @@ class Project:
     init: str | None
     files: dict[str, str | bytes | Symlink | Fifo | Dir]
     generate: Generate | None = None
+    init_reference: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,7 +134,7 @@ class Case:
 
 
 def implementation(environ: Mapping[str, str]) -> str:
-    impl = environ.get("PGMI_IMPL", "go")
+    impl = environ.get("PGMI_IMPL", "rust")
     if impl not in IMPLEMENTATIONS:
         raise CaseError(f"PGMI_IMPL={impl!r}: must be one of {', '.join(IMPLEMENTATIONS)}")
     return impl
@@ -348,7 +349,7 @@ def _home(r: _Reader, value: Any) -> dict[str, HomeFile]:
 
 
 def _project(r: _Reader, value: Any) -> Project:
-    value = r.mapping(value, "project", {"init", "files", "generate"})
+    value = r.mapping(value, "project", {"init", "init_binary", "files", "generate"})
     init = value.get("init")
     if init is not None and init not in TEMPLATES:
         raise r.fail("project.init", f"must be one of {', '.join(TEMPLATES)}")
@@ -361,7 +362,10 @@ def _project(r: _Reader, value: Any) -> Project:
         generate = Generate(
             count, r.string(g["path"], "project.generate.path"), r.string(g["content"], "project.generate.content")
         )
-    return Project(init, _project_files(r, value.get("files", {})), generate)
+    init_reference = _binary(r, value.get("init_binary", "test"), "project.init_binary")
+    if init_reference and init is None:
+        raise r.fail("project.init_binary", "needs project.init")
+    return Project(init, _project_files(r, value.get("files", {})), generate, init_reference)
 
 
 def _project_files(r: _Reader, value: Any) -> dict[str, str | bytes | Symlink | Fifo | Dir]:

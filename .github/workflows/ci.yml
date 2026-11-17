@@ -17,138 +17,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: scripts/check-docs-rust.sh
 
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27'
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          version: v2.15.0
-          install-mode: goinstall
-
-      - name: dead code (production only)
-        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          version: v2.15.0
-          install-mode: goinstall
-          args: -c .golangci-deadcode.yml
-
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27'
-
-      # PGMI_REQUIRE_DB: without it an unreachable Docker daemon skips every
-      # integration test and the job still passes.
-      # The runner is discarded after the job, so testcontainers' reaper has
-      # nothing to clean up; a failed reaper handshake reaped the shared
-      # PostgreSQL mid-run. internal/scaffold alone takes over 10m under -race.
-      - name: Run tests
-        env:
-          PGMI_REQUIRE_DB: '1'
-          TESTCONTAINERS_RYUK_DISABLED: 'true'
-        run: go test -race -tags pgmi_testhooks -timeout 25m ./...
-
-  # The compatibility table is a claim, and until this job existed nothing
-  # checked it: every test ran against a single PostgreSQL image. This job
-  # covers the core and basic-template floor (15); the advanced template's
-  # floor is 18, the image the `test` job already runs it on, so a construct
-  # that silently raises either one red-lines instead of reaching a user.
-  #
-  # Official postgres:N images via `services`, which is both cheaper than
-  # testcontainers for a matrix and published per major, so a version is one
-  # matrix entry.
-  test-pg-versions:
-    name: PostgreSQL ${{ matrix.pg }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        pg: ['15']
-    services:
-      postgres:
-        image: postgres:${{ matrix.pg }}
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-    env:
-      PGMI_TEST_CONN: postgresql://postgres:postgres@127.0.0.1:5432/postgres
-      PGMI_REQUIRE_DB: '1'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27'
-
-      - name: Core and basic template
-        run: |
-          go test -timeout 25m \
-            ./internal/services/... ./internal/params/... ./internal/contract/... \
-            ./internal/files/... ./internal/cli/... ./internal/preprocessor/... \
-            ./internal/db/... ./internal/metadata/...
-          go test -timeout 10m -run 'TestTemplateDeployment/basic|TestSkillBlocksDeploy/basic' ./internal/scaffold
-
-  # The black-box suite runs the built binary from outside, as a user does. It
-  # is the executable contract the Rust re-implementation must pass unchanged
-  # (PGMI_BIN points it at any binary).
+  # The black-box suite runs the built binary from outside, as a user does:
+  # every case but those in rust/blackbox-skip.txt, with the last Go release
+  # (0.14.1) as the reference for the cross-binary checksum cases. 15 is the
+  # floor the binary enforces; the advanced-template cases skip below 18,
+  # that template's own floor.
   blackbox:
-    name: Black-box suite
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:18
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-    env:
-      PGMI_TEST_CONN: postgresql://postgres:postgres@127.0.0.1:5432/postgres
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27'
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '3.13'
-
-      - name: Build pgmi
-        run: go build -o "$RUNNER_TEMP/pgmi" ./cmd/pgmi
-
-      - name: Run the black-box suite
-        env:
-          PGMI_BIN: ${{ runner.temp }}/pgmi
-        run: |
-          python -m pip install --require-hashes -r blackbox/uv-requirements.txt
-          cd blackbox && uv run --locked pytest
-
-  # The Rust binary against every case but those in rust/blackbox-skip.txt,
-  # with the Go binary as the reference for the cross-binary checksum cases.
-  # 15 is the floor the binary enforces; the advanced-template cases skip
-  # below 18, that template's own floor.
-  blackbox-rust:
-    name: Black-box suite (Rust, PostgreSQL ${{ matrix.pg }})
+    name: Black-box suite (PostgreSQL ${{ matrix.pg }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -171,15 +46,12 @@ jobs:
       CARGO_TERM_COLOR: never
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27'
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'
 
-      - name: Build the Go reference
-        run: go build -o "$RUNNER_TEMP/pgmi-go" ./cmd/pgmi
+      - name: The last Go release, as the reference
+        run: .github/scripts/go-reference.sh "$RUNNER_TEMP/pgmi-go"
 
       - name: Build the Rust binary
         run: |
@@ -197,10 +69,11 @@ jobs:
           mapfile -t skip < <(sed -n 's|^\([^#[:space:]][^[:space:]]*\).*|--deselect=test_cases.py::test_case[cases/\1.yaml]|p' ../rust/blackbox-skip.txt)
           uv run --locked pytest test_cases.py "${skip[@]}"
 
-  # Fault injection (proxy, locks, signals, flaky sign-in) on both binaries; non-blocking
-  # (nothing needs it). A Rust failure here is a result worse than Go's in bad weather.
+  # Fault injection (proxy, locks, signals, flaky sign-in) on pgmi and on the
+  # last Go release. A failure on pgmi alone is a result worse than Go's in bad
+  # weather.
   bad-weather:
-    name: Bad weather (Go and Rust)
+    name: Bad weather (pgmi and Go 0.14.1)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -219,38 +92,38 @@ jobs:
       CARGO_TERM_COLOR: never
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27'
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'
 
-      - name: Build the Go binary
-        run: go build -o "$RUNNER_TEMP/pgmi-go" ./cmd/pgmi
+      - name: The last Go release, as the reference
+        run: .github/scripts/go-reference.sh "$RUNNER_TEMP/pgmi-go"
 
       - name: Build the Rust binary
         run: |
           rustup toolchain install
           cargo build --locked --release -p pgmi
 
-      - name: Go
+      - name: Go 0.14.1
         env:
           PGMI_BIN: ${{ runner.temp }}/pgmi-go
+          PGMI_IMPL: go
         run: |
           python -m pip install --require-hashes -r blackbox/uv-requirements.txt
           cd blackbox && uv run --locked pytest -k bad-weather test_cases.py
 
-      - name: Rust
+      - name: pgmi
         if: ${{ !cancelled() }}
         env:
           PGMI_BIN: ${{ github.workspace }}/target/release/pgmi
           PGMI_IMPL: rust
         run: cd blackbox && uv run --locked pytest -k bad-weather test_cases.py
 
-  # Go and Rust on the same input; non-blocking (nothing needs it) until the Rust port settles.
+  # pgmi and the last Go release on the same input; every difference is
+  # explained in blackbox/differential-allow.yaml. Kept through the test
+  # period before 1.0 (PGMI-894).
   differential:
-    name: Differential (Go vs Rust)
+    name: Differential (pgmi vs Go 0.14.1)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -269,15 +142,12 @@ jobs:
       CARGO_TERM_COLOR: never
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27'
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'
 
-      - name: Build the Go binary
-        run: go build -o "$RUNNER_TEMP/pgmi-go" ./cmd/pgmi
+      - name: The last Go release, as the reference
+        run: .github/scripts/go-reference.sh "$RUNNER_TEMP/pgmi-go"
 
       - name: Build the Rust binary
         run: |
@@ -435,7 +305,8 @@ jobs:
   # The Rust unit tests on the platforms whose code is cfg-gated: path
   # handling, the Windows environment and APPDATA, key-file modes, Unix
   # sockets, signals. Integration tests need PostgreSQL in a Linux container
-  # and stay in the Linux job. Both shells on Windows, as for Go below.
+  # and stay in the Linux job. Both shells on Windows: a test that resolved
+  # `bash` through PATH once passed under Git Bash and failed from PowerShell.
   rust-platforms:
     name: Rust (${{ matrix.os }}, ${{ matrix.shell }})
     runs-on: ${{ matrix.os }}
@@ -473,83 +344,9 @@ jobs:
           & target/debug/pgmi.exe deploy smoke --connection 'postgresql://postgres:root@127.0.0.1:5432/postgres?sslmode=disable'
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
-  # pgmi ships Windows and macOS binaries, so their behaviour has to be
-  # exercised somewhere: path separators and drive letters in project scanning,
-  # .pgpass location, CRLF through the head/tail splitter, signal handling.
-  #
-  # -short only. GitHub's Windows and macOS runners cannot run the Linux
-  # containers the integration tests need, so PGMI_REQUIRE_DB would fail every
-  # one of them. No -race either: on Windows it needs a C toolchain, and a data
-  # race is in Go code rather than in the platform behaviour these jobs exist to
-  # cover. The Linux job above runs the full suite under -race.
-  test-platforms:
-    name: Test (${{ matrix.os }}, ${{ matrix.shell }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            shell: pwsh
-          # Both shells on Windows: a test that resolved `bash` through PATH
-          # passed under Git Bash and failed from PowerShell (PGMI-239..244).
-          # One shell green is not a green suite.
-          - os: windows-latest
-            shell: bash
-          - os: macos-latest
-            shell: bash
-    defaults:
-      run:
-        shell: ${{ matrix.shell }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27'
-
-      - name: Run unit tests
-        run: go test -short -tags pgmi_testhooks -timeout 10m ./...
-
-  connection-tests:
-    name: Connection & Security Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27'
-
-      - name: Run connection tests
-        env:
-          PGMI_REQUIRE_DB: '1'
-        run: go test -race -tags conntest -timeout 5m ./internal/db/conntest/...
-
-  # Informational on branches: the vulnerability database moves independently of
-  # this repo, so a CVE published overnight must not red-line unrelated PRs. The
-  # release job runs the same pinned command as a hard gate.
-  vulncheck:
-    name: Vulnerability scan
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27'
-
-      - name: govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
-
   examples:
     name: Examples
     uses: ./.github/workflows/examples.yml
-
-  # Non-blocking until switch day (PGMI-835): no job needs it.
-  examples-rust:
-    name: Examples (Rust)
-    uses: ./.github/workflows/examples.yml
-    with:
-      impl: rust
 
   # Advisory here, like vulncheck: a CVE published overnight must not red-line
   # an unrelated branch. The weekly schedule fails on a finding.
@@ -558,34 +355,3 @@ jobs:
     uses: ./.github/workflows/gateway-audit.yml
     with:
       advisory: true
-
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    needs: [lint, test, test-pg-versions, test-platforms, connection-tests, examples]
-    strategy:
-      matrix:
-        goos: [linux, darwin, windows]
-        goarch: [amd64, arm64]
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27'
-
-      - name: Build
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-        run: |
-          mkdir -p dist
-          go build -ldflags="-s -w -X github.com/vvka-141/pgmi/internal/cli.version=dev-${{ github.sha }}" \
-            -o dist/pgmi-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goos == 'windows' && '.exe' || '' }} \
-            ./cmd/pgmi
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: pgmi-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/*

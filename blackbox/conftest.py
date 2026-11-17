@@ -19,8 +19,8 @@ def server_version_num(server):
 
 
 @pytest.fixture(scope="session")
-def binary(tmp_path_factory):
-    return pgmi_binary(tmp_path_factory.mktemp("bin"))
+def binary():
+    return pgmi_binary()
 
 
 @pytest.fixture(scope="session")

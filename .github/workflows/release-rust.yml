@@ -1,16 +1,16 @@
 name: Release (Rust)
 
-# The Rust binary's release (record 0018, PGMI-925). Until switch day
-# (PGMI-835) it runs by hand, or as a dry run when a branch changes the
-# release files; only `publish: true` writes anything;
-# the Go release (release.yml) stays the one a v* tag triggers. Switch day
-# moves the tag trigger here.
+# pgmi's release (record 0018). It runs by hand on main (`workflow_dispatch`
+# with the tag and `publish: true`), or as a dry run when a branch changes the
+# release files; only `publish: true` writes anything. The publish job creates
+# the tag itself, after every check passed, so a failed release leaves no
+# public tag, and the attestation names refs/heads/main, which the documented
+# download check requires.
 #
 # Every target builds on its own native runner (record 0021: no C, Apple's
-# linker on macOS, MSVC on Windows, rust-lld for static Linux), so GoReleaser
-# OSS, which cannot merge prebuilt binaries, does the packaging no more:
-# rust/release/package.sh writes the archives under the Go release's names,
-# which scripts/install.sh and install.ps1 expect.
+# linker on macOS, MSVC on Windows, rust-lld for static Linux);
+# rust/release/package.sh writes the archives under the names
+# scripts/install.sh and install.ps1 expect.
 on:
   push:
     branches-ignore: [main]
@@ -21,7 +21,7 @@ on:
         description: 'Release tag, vX.Y.Z or vX.Y.Z-rc.N; must equal the Cargo version'
         required: true
       publish:
-        description: 'Publish the GitHub release, attestation and Homebrew cask (switch day and later only)'
+        description: 'Publish the GitHub release, attestation and Homebrew cask'
         type: boolean
         default: false
 
@@ -268,9 +268,6 @@ jobs:
       PGMI_TEST_CONN: postgresql://postgres:postgres@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27'
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.13'
@@ -278,8 +275,8 @@ jobs:
         with:
           name: bin-x86_64-unknown-linux-musl
           path: ${{ runner.temp }}/bin
-      - name: Build the Go reference
-        run: go build -o "$RUNNER_TEMP/pgmi-go" ./cmd/pgmi
+      - name: The last Go release, as the reference
+        run: .github/scripts/go-reference.sh "$RUNNER_TEMP/pgmi-go"
       - name: Run every case against the binary that ships
         env:
           PGMI_BIN: ${{ runner.temp }}/bin/x86_64-unknown-linux-musl/pgmi
@@ -291,6 +288,8 @@ jobs:
           cd blackbox
           mapfile -t skip < <(sed -n 's|^\([^#[:space:]][^[:space:]]*\).*|--deselect=test_cases.py::test_case[cases/\1.yaml]|p' ../rust/blackbox-skip.txt)
           uv run --locked pytest test_cases.py "${skip[@]}"
+      - name: The README and Quickstart walkthrough, as written
+        run: scripts/verify-walkthrough.sh "$RUNNER_TEMP/bin/x86_64-unknown-linux-musl/pgmi"
 
   package:
     name: Package

@@ -165,7 +165,7 @@ def test_a_case_runs_on_every_implementation_unless_it_names_one():
 
 
 @pytest.mark.parametrize(
-    ("environ", "impl"), [({}, "go"), ({"PGMI_IMPL": "go"}, "go"), ({"PGMI_IMPL": "rust"}, "rust")]
+    ("environ", "impl"), [({}, "rust"), ({"PGMI_IMPL": "go"}, "go"), ({"PGMI_IMPL": "rust"}, "rust")]
 )
 def test_implementation_comes_from_pgmi_impl(environ, impl):
     assert implementation(environ) == impl

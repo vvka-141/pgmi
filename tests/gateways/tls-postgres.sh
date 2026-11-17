@@ -5,7 +5,7 @@
 # sslmode=require, verify-full against ca.pem, and verify-full against
 # wrong-ca.pem, which must fail.
 #
-#   internal/scaffold/testdata/gateways/tls-postgres.sh 5460 /tmp/pgmi-tls
+#   tests/gateways/tls-postgres.sh 5460 /tmp/pgmi-tls
 set -euo pipefail
 port=$1
 dir=$2

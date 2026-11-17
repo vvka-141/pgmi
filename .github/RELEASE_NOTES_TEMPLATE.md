@@ -3,9 +3,9 @@
 A GitHub release page is a **public surface strangers reach from search and
 release feeds**. Most of them have never heard of pgmi. Write for them.
 
-Before tagging, add a section to `RELEASES.md` following the shape below. CI
-lifts that section verbatim to the top of the GitHub release; the commit log is
-collapsed underneath it. **The release build fails** if the section is missing or
+Before releasing, add a section to `RELEASES.md` following the shape below. The
+release workflow publishes that section verbatim as the GitHub release's text.
+**The release build fails** if the section is missing or
 empty, if the heading has no `YYYY-MM-DD` date, or if a `<!-- DRAFT -->` marker
 still sits above it — all deliberate. The narrative is not optional paperwork; it
 is the release.
@@ -54,8 +54,8 @@ leave the reader guessing. Name the session API contract version if it moved.>
    template to RDS" beats "Removed the DDL event trigger".
 2. **A stranger must understand it in 30 seconds.** They do not know what a
    `pgmi-meta` block is, and they will not read to find out.
-3. **Ticket IDs are not content.** They belong in the collapsed commit log,
-   which CI generates for you. Do not paste `(PGMI-142)` into the narrative.
+3. **Ticket IDs are not content.** They belong in the commit log. Do not paste
+   `(PGMI-142)` into the narrative.
 4. **Show, don't enumerate.** One runnable example is worth ten bullets.
 5. **Upgrade risk is the second thing a returning user looks for.** Never omit
    it. "No action needed" is an answer; silence is not.
@@ -64,30 +64,23 @@ leave the reader guessing. Name the session API contract version if it moved.>
 7. **Be honest about a thin release.** A maintenance release that says so earns
    more trust than one padded to look substantial.
 
-## The vulnerability gate
+## The dependency gate
 
-The release job runs `govulncheck ./...` at a pinned version before publishing
-anything. It blocks on **reachable** findings only — a vulnerable symbol in a
-module pgmi requires but never calls is reported and exits 0. That line is
-deliberate: a gate that fires on unreachable findings gets switched off within
-two releases, which is worse than having no gate.
+The release workflow runs `cargo deny --locked check` before it builds anything:
+security advisories, licences, banned crates and crate sources, with the
+policy in `deny.toml`. A red gate means a dependency pgmi ships has an advisory
+or a licence the policy does not allow. Upgrade or replace the crate; do not add
+an exception without writing down why in `deny.toml`.
 
-So when it goes red, something in pgmi's own call graph reaches the vulnerable
-function. Bump the module. Do not suppress the step.
+A release that ships with an accepted advisory says so under **Upgrading**, with
+the advisory ID and why it does not affect the operator. A suppressed finding
+nobody wrote down is indistinguishable from one nobody noticed.
 
-Findings that do *not* block still deserve a decision, not silence. If a release
-ships with a known unreachable finding — or with a reachable one you consciously
-accepted — say so under **Upgrading**, with the advisory ID and why it does not
-affect the operator. A suppressed finding nobody wrote down is indistinguishable
-from one nobody noticed.
-
-Run it yourself before tagging with `make vulncheck` (also part of
-`make release-ready`).
+Run it yourself before releasing with `make deny`.
 
 ## What CI does with it
 
 * `scripts/release-notes.sh <tag>` extracts the section for that tag.
-* `.github/workflows/release.yml` passes it to GoReleaser as `RELEASE_SUMMARY`.
-* `.goreleaser.yaml` renders it **above** the install instructions, then collapses
-  the auto-generated commit log into a `<details>` block below.
+* `.github/workflows/release-rust.yml` checks it in the verify job and publishes
+  it as the GitHub release's notes.
 * No section for the tag → the release job fails before publishing anything.

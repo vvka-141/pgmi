@@ -1,6 +1,7 @@
-description: the advanced template deployed by the reference binary redeploys with the binary under test
+description: the advanced template scaffolded and deployed by the reference binary (the last Go release) redeploys with the binary under test
 project:
   init: advanced
+  init_binary: reference
 steps:
   - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --param, env=dev]
     binary: reference

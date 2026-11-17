@@ -4,7 +4,7 @@
 # (clients_gateway / gateway) in the api role and one MCP tool.
 #
 #   PGMI_BIN=./pgmi PGMI_TEST_CONN=postgresql://postgres:postgres@127.0.0.1:5441/postgres \
-#     internal/scaffold/testdata/gateways/prepare.sh /tmp/project clients_e2e
+#     tests/gateways/prepare.sh /tmp/project clients_e2e
 set -euo pipefail
 : "${PGMI_BIN:?}" "${PGMI_TEST_CONN:?must end in /<maintenance database>}"
 project=$1

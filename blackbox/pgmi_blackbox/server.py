@@ -84,16 +84,15 @@ def wait_ready(server: Server, seconds: float = 60) -> None:
             time.sleep(0.5)
 
 
-def pgmi_binary(build_dir: Path) -> Path:
+def pgmi_binary() -> Path:
     given = os.environ.get("PGMI_BIN")
     if given:
         path = Path(given).resolve()
         if not path.is_file():
             raise FileNotFoundError(f"PGMI_BIN={given} is not a file")
         return path
-    out = build_dir / "pgmi"
-    subprocess.run(["go", "build", "-o", str(out), "./cmd/pgmi"], cwd=REPO, check=True)
-    return out
+    subprocess.run(["cargo", "build", "--locked", "--release", "-p", "pgmi"], cwd=REPO, check=True)
+    return REPO / "target" / "release" / "pgmi"
 
 
 def reference_binary() -> Path | None:

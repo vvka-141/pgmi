@@ -1,87 +1,46 @@
-.PHONY: test test-short test-integration blackbox test-connection test-azure test-all lint build release-ready vulncheck doctor build-clean sync-ai diagrams
+.PHONY: build test test-db lint deny blackbox differential check doctor sync-ai diagrams
 
-# The version CI lints with. Kept identical in .github/workflows/{ci,release}.yml —
-# TestLintVersionPinsAgree fails if the three drift apart. Lint findings are
-# version-dependent, and golangci-lint v1 rejects this v2 config outright.
-GOLANGCI_VERSION := v2.15.0
+GO_REFERENCE ?= target/pgmi-go-0.14.1
 
-test:                  ## Run unit tests only (no database, short mode)
-	go test -short -tags pgmi_testhooks ./...
+build:                 ## Build the release binary (target/release/pgmi)
+	cargo build --locked --release -p pgmi
 
-test-short:            ## Alias for `test` — kept for backward compat in CI scripts
-	go test -short -tags pgmi_testhooks ./...
+test:                  ## Run the Rust tests; database tests skip without PGMI_TEST_CONN
+	cargo test --locked --workspace
 
-test-integration:      ## Run the full suite including DB integration (uses testcontainers if PGMI_TEST_CONN not set; conntest/azure tags need their own targets)
-	PGMI_REQUIRE_DB=1 go test -tags pgmi_testhooks ./...
+test-db:               ## Run the Rust tests; a missing PGMI_TEST_CONN fails instead of skipping
+	PGMI_REQUIRE_DB=1 cargo test --locked --workspace
+	PGMI_REQUIRE_DB=1 cargo test --locked -p pgmi --features testhooks --test panic --test google_cloud_sql --test aws_credential_process_hang
 
-blackbox:              ## Run the black-box suite against PGMI_BIN (default: build ./cmd/pgmi); PostgreSQL from PGMI_TEST_CONN or Docker
-	cd blackbox && uv run --locked pytest
+lint:                  ## Format check and clippy, also with the test hooks
+	cargo fmt --all --check
+	cargo clippy --locked --workspace --all-targets -- -D warnings
+	cargo clippy --locked -p pgmi --features testhooks --all-targets -- -D warnings
 
-test-connection:       ## Run connection/security scenario tests (requires Docker)
-	go test -tags conntest -timeout 5m ./internal/db/conntest/...
+deny:                  ## Advisories, licences, banned crates, and no C compiler on any release target
+	cargo deny --locked check
+	rust/check-no-c.sh
 
-test-azure:            ## Run Azure Entra ID tests (requires Azure credentials)
-	go test -tags azure -timeout 10m ./internal/db/conntest/...
+blackbox: build        ## Run the black-box suite against target/release/pgmi (PostgreSQL from PGMI_TEST_CONN or Docker)
+	cd blackbox && PGMI_BIN=$(CURDIR)/target/release/pgmi uv run --locked pytest test_cases.py \
+		$$(sed -n 's|^\([^#[:space:]][^[:space:]]*\).*|--deselect=test_cases.py::test_case[cases/\1.yaml]|p' ../rust/blackbox-skip.txt)
 
-test-all: test test-connection  ## Run unit + connection tests
+$(GO_REFERENCE):
+	.github/scripts/go-reference.sh $@
 
-lint:                  ## Run linter (cross-platform: catches issues that only manifest on Linux)
-	golangci-lint run
-	GOOS=linux golangci-lint run
-	golangci-lint run -c .golangci-deadcode.yml
-	GOOS=linux golangci-lint run -c .golangci-deadcode.yml
+differential: build $(GO_REFERENCE)  ## Run pgmi and the last Go release (0.14.1) on the same inputs
+	cd blackbox && PGMI_BIN=$(CURDIR)/$(GO_REFERENCE) PGMI_BIN_OTHER=$(CURDIR)/target/release/pgmi uv run --locked pytest test_differential.py
 
-build:                 ## Build pgmi binary
-	go build -o pgmi ./cmd/pgmi
+check: lint deny test-db blackbox  ## The local release gate: everything CI's Rust jobs run on Linux
 
-release-ready:         ## Full pre-release gate: lint, full suite, connection tests, release notes, build. Requires TAG=vX.Y.Z.
-	@if [ -z "$$TAG" ]; then \
-		echo "release-ready: TAG is required (e.g. make release-ready TAG=v0.12.0)" >&2; \
-		exit 1; \
-	fi
-	$(MAKE) lint
-	$(MAKE) test-integration
-	$(MAKE) test-connection
-	./scripts/release-notes.sh "$$TAG" > /dev/null && echo "release notes: OK for $$TAG"
-	$(MAKE) vulncheck
-	@if command -v goreleaser > /dev/null 2>&1; then \
-		goreleaser check; \
-	else \
-		echo "goreleaser check: SKIPPED (not installed; CI runs it on the tag)"; \
-	fi
-	$(MAKE) build
-	@echo ""
-	@echo "Not covered here — the tag workflow runs these:"
-	@echo "  * the six end-to-end example gates (.github/workflows/examples.yml)"
-	@echo "  * the full snapshot build — archives, .deb, checksums for all 6 targets"
-	@echo "    (.github/workflows/snapshot.yml; goreleaser check here only reads the config)"
-	@echo "  * the race detector (needs CGO)"
-	@echo "  * the tag-is-on-main provenance check"
-
-vulncheck:             ## Scan dependencies for known vulnerabilities (blocks on reachable findings only)
-	go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
-
-doctor:                ## Smoke test development environment
-	@echo "=== pgmi Development Environment ==="
-	@echo ""
-	@printf "Go:           "; go version 2>/dev/null || echo "NOT INSTALLED"
-	@printf "Docker:       "; docker info --format '{{.ServerVersion}}' 2>/dev/null || echo "NOT AVAILABLE (tests will auto-skip)"
-	@printf "golangci-lint: "; \
-		if ! golangci-lint --version 2>/dev/null; then \
-			echo "NOT INSTALLED (lint will fail)"; \
-		elif ! golangci-lint --version 2>/dev/null | grep -q "version $(patsubst v%,%,$(GOLANGCI_VERSION)) "; then \
-			echo "  ^ CI lints with $(GOLANGCI_VERSION); findings will differ from CI"; \
-		fi
-	@printf "PGMI_TEST_CONN: "; if [ -n "$$PGMI_TEST_CONN" ]; then echo "$$PGMI_TEST_CONN"; else echo "NOT SET (will use testcontainers)"; fi
-	@echo ""
-	@echo "go vet:"; go vet ./... && echo "  OK" || echo "  ISSUES FOUND"
-
-build-clean:           ## Clean Go cache and rebuild (use after template changes)
-	go clean -cache
-	go build -o pgmi ./cmd/pgmi
+doctor:                ## Show the development tools and the test database
+	@printf "cargo:          "; cargo --version 2>/dev/null || echo "NOT INSTALLED (see rust-toolchain.toml)"
+	@printf "uv:             "; uv --version 2>/dev/null || echo "NOT INSTALLED (needed for the black-box suite)"
+	@printf "cargo-deny:     "; cargo deny --version 2>/dev/null || echo "NOT INSTALLED (cargo install --locked cargo-deny)"
+	@printf "Docker:         "; docker info --format '{{.ServerVersion}}' 2>/dev/null || echo "NOT AVAILABLE"
+	@printf "PGMI_TEST_CONN: "; if [ -n "$$PGMI_TEST_CONN" ]; then echo "$$PGMI_TEST_CONN"; else echo "NOT SET (database tests skip)"; fi
 
 sync-ai:               ## Refresh local .claude/skills/ from the scaffold skill trees
-	@echo "Refreshing local AI skills from tracked source..."
 	@bash scripts/sync-ai-content.sh
 
 diagrams:              ## Re-export docs/diagrams/*.drawio to .drawio.svg (requires draw.io Desktop)

@@ -187,7 +187,8 @@ def _drop(ws: Workspace) -> None:
 
 def _prepare_project(case: Case, ws: Workspace) -> None:
     if case.project.init:
-        argv = [str(ws.binary), "init", str(ws.project), "-t", case.project.init]
+        binary = ws.reference if case.project.init_reference and ws.reference else ws.binary
+        argv = [str(binary), "init", str(ws.project), "-t", case.project.init]
         done = subprocess.run(
             argv, env=ws.env({}), capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60
         )

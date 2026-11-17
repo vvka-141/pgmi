@@ -177,7 +177,8 @@ brew install --cask vvka-141/pgmi/pgmi
 Download the `.deb` for your architecture from [GitHub Releases](https://github.com/vvka-141/pgmi/releases), check it, and install it:
 
 ```bash
-gh attestation verify pgmi_<version>_linux_amd64.deb --repo vvka-141/pgmi
+gh attestation verify pgmi_<version>_linux_amd64.deb --repo vvka-141/pgmi \
+  --signer-workflow vvka-141/pgmi/.github/workflows/release-rust.yml --source-ref refs/heads/main
 sudo apt install ./pgmi_<version>_linux_amd64.deb
 ```
 
@@ -189,7 +190,7 @@ There is no APT repository, so `apt upgrade` does not pick up new releases; inst
 <details>
 <summary>Windows (direct download)</summary>
 
-Download the latest `.zip` from [GitHub Releases](https://github.com/vvka-141/pgmi/releases), check it with `gh attestation verify pgmi_<version>_windows_amd64.zip --repo vvka-141/pgmi`, extract it, and add the folder to your PATH.
+Download the latest `.zip` from [GitHub Releases](https://github.com/vvka-141/pgmi/releases), check it with `gh attestation verify pgmi_<version>_windows_amd64.zip --repo vvka-141/pgmi --signer-workflow vvka-141/pgmi/.github/workflows/release-rust.yml --source-ref refs/heads/main`, extract it, and add the folder to your PATH.
 </details>
 
 ---

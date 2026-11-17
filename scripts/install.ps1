@@ -102,7 +102,7 @@ function Install-Pgmi {
             throw "Checksum mismatch for ${fileName}: expected $expectedHash, got $actualHash"
         }
         Write-Ok "Checksum verified."
-        Write-Status "To check build provenance by hand: download $fileName and run gh attestation verify $fileName --repo $Repo"
+        Write-Status "To check build provenance by hand: download $fileName and run gh attestation verify $fileName --repo $Repo --signer-workflow $Repo/.github/workflows/release-rust.yml --source-ref refs/heads/main"
 
         Write-Status "Extracting to $InstallDir..."
         if (-not (Test-Path $InstallDir)) {

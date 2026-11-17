@@ -37,7 +37,7 @@ diagram items and the `examples.yml` item are done separately.
   (PGMI-915): document `PGMI_SERVE_HOSTS` in CLI.md (the `serve` section and
   the env table) with the text staged in `switch-day/serve-allowed-hosts.md`.
 
-- Checking a download with `gh attestation verify`, and the SBOM: the
+- (applied 2026-11-17) Checking a download with `gh attestation verify`, and the SBOM: the
   install pages and install scripts, with the text staged in
   `switch-day/verify-download.md` (PGMI-1004). README.md's direct-download
   block, `docs/QUICKSTART.md`, `docs/CICD.md`, `docs/LAKEBASE.md` and the hint

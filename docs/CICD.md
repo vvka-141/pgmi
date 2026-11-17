@@ -64,9 +64,10 @@ Why these choices:
 
 - **Pinned, checksum-verified binary** — no toolchain, reproducible runs, and the
   download is integrity-checked against the release `checksums.txt`. To also check
-  that the file was built by pgmi's release workflow, run
-  `gh attestation verify "${file}" --repo vvka-141/pgmi`. Never install
-  "latest": a new release would silently change your deploy.
+  that the file was built by pgmi's release workflow on main, run
+  `gh attestation verify "${file}" --repo vvka-141/pgmi --signer-workflow
+  vvka-141/pgmi/.github/workflows/release-rust.yml --source-ref refs/heads/main`.
+  Never install "latest": a new release would silently change your deploy.
 - **The pinned binary pins the session API.** Before pgmi 1.0 the session API
   may change in a minor release — a view, column or function added, renamed or
   removed — and every change is listed under **Upgrading** in that release's

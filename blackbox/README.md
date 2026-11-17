@@ -34,6 +34,7 @@ home:                    # optional: files written into the case's empty HOME
   .postgresql/root.crt: {content: "{ca_pem}", mode: "0644"}
 project:
   init: basic            # optional: pgmi init -t minimal|basic|advanced first
+  init_binary: reference # optional: scaffold with PGMI_REFERENCE_BIN instead of PGMI_BIN
   generate: {count: 3000, path: "gen/f{i}.sql", content: "SELECT {i};"}  # optional
   files:                 # optional: files written into the project (after init)
     deploy.sql: |

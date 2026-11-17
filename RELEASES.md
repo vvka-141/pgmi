@@ -1,21 +1,20 @@
 # Releases
 
-> **Writing a release?** Add the section here *before* tagging — CI lifts it to the
-> top of the GitHub release page. The tag build fails if the section is missing or
-> empty, if the heading carries no `YYYY-MM-DD` date, or if a `<!-- DRAFT -->`
-> marker still sits above it, so finish the notes and date the heading as the last
-> step before you tag. The shape and the rules are in
+> **Writing a release?** Add the section here *before* releasing — the release
+> workflow publishes it as the GitHub release's text. The release fails if the
+> section is missing or empty, if the heading carries no `YYYY-MM-DD` date, or if
+> a `<!-- DRAFT -->` marker still sits above it, so finish the notes and date the
+> heading as the last step. The shape and the rules are in
 > [`.github/RELEASE_NOTES_TEMPLATE.md`](.github/RELEASE_NOTES_TEMPLATE.md).
 > Write for a stranger who arrived from a search result.
 >
-> Before anything publishes, the snapshot build runs `scripts/verify-walkthrough.sh`
-> against a GoReleaser build of the tagged commit — the same config the release
-> job publishes with: the README "See it work" blocks as written, its failure
-> demo, and the Quickstart steps. Run it locally with
-> `scripts/verify-walkthrough.sh <binary>` (Docker required). About ten minutes
-> after the release publishes, and weekly, `verify-install.yml` installs it
-> through every documented channel and checks each serves the new version — look
-> at that run before announcing a release.
+> Before anything publishes, the release workflow runs
+> `scripts/verify-walkthrough.sh` against the static Linux binary it is about to
+> ship: the README "See it work" blocks as written, its failure demo, and the
+> Quickstart steps. Run it locally with `scripts/verify-walkthrough.sh <binary>`
+> (Docker required). After a release publishes, and weekly,
+> `verify-install.yml` installs it through every documented channel and checks
+> each serves the new version — look at that run before announcing a release.
 
 <!-- DRAFT -->
 ## v0.20.0 — TBD
