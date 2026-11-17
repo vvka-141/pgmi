@@ -294,8 +294,13 @@ Before the first run:
 - **`platform_operators` and `oidc_issuers` are synced on every deploy.** An
   operator left out of the list loses operator status, so pass both every
   time.
-- **A secret or variable that is not defined arrives empty.** pgmi names the
-  parameter and exits 10 before connecting.
+- **A secret or variable that is not defined arrives empty.** pgmi stops
+  before connecting, exit 10, and names the setting: a `PGMI_PARAM_*`
+  parameter, or a connection setting such as `PGHOST`, `PGPORT` or
+  `DATABASE_URL` (`the host from PGHOST is empty; write the host, or remove it
+  so the next source applies`). An empty connection setting is never read as
+  unset. Leave a variable out of the environments that do not need it rather
+  than set it to `''`.
 - **The basic template** needs only `PGMI_PARAM_ENV`; drop the other
   `PGMI_PARAM_*` lines.
 

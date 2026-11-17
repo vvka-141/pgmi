@@ -4,6 +4,11 @@ Collected by the docs review (PGMI-871, 2026-11-11). The public docs describe
 the Go binary until switch day (PGMI-835), so none of this is applied before.
 Line numbers are from main on 2026-11-11; re-check them on the day.
 
+Status on switch day (2026-11-17): every item is applied in `docs/` except
+the stricter `gh attestation verify` command (`--signer-workflow`,
+`--source-ref`), which waits until the release trigger is settled. The
+diagram items and the `examples.yml` item are done separately.
+
 ## Behaviour that changed on purpose (each a row in the 0.20 table)
 
 - `PGCLIENTENCODING` is honoured: CLI.md:776-804 (env table), CICD.md:239
@@ -56,10 +61,9 @@ Line numbers are from main on 2026-11-11; re-check them on the day.
 - CONNECTIONS.md:170-178, CICD.md:199-201, 230: pgx and its three options;
   Rust uses the simple protocol and unnamed statements (record 0004), so
   PGlite needs none of them.
-- CONNECTIONS.md:353-358, 456-471 and diagram d07: pool, `::int` probe,
+- CONNECTIONS.md:353-358, 456-471: pool, `::int` probe,
   `StandardConnector`, `TokenBasedConnector`, `azidentity`,
-  `rds/auth.BuildAuthToken`, `*pgx.Conn`; rewrite the section and the
-  diagram.
+  `rds/auth.BuildAuthToken`, `*pgx.Conn`; rewrite the section.
 - SECURITY.md:131: `set_config($1, $2, false)`; Rust binds one JSON value
   (still a bind parameter, so `log_parameter_max_length = 0` still hides it).
 - PRODUCTION.md:37, 42: "set in the Go core" becomes "set in pgmi".

@@ -993,6 +993,10 @@ pgmi respects standard PostgreSQL environment variables and its own:
 | `PGMI_DATABRICKS_ENDPOINT` | `deploy` | Lakebase endpoint for `--databricks` |
 | `DATABRICKS_HOST`, `DATABRICKS_TOKEN`, `DATABRICKS_CLIENT_ID`, `DATABRICKS_CLIENT_SECRET` | `deploy` | Workspace and sign-in for `--databricks` ([Lakebase](LAKEBASE.md#sign-in-with---databricks)) |
 
+A connection variable set to an empty value, or to white space only, is
+refused before connecting (exit 10), not read as unset: unset it to get the
+next source or the default. `PGPASSWORD` may be empty.
+
 pgmi does not use libpq, so not every libpq variable works: `PGSERVICE` is refused, `PGHOSTADDR` is ignored, and `PGSSLCRL`, `PGSSLCRLDIR` and `PGREQUIREPEER` are not checked: pgmi warns and goes on, and refuses a revocation list under `sslmode=verify-ca` or `verify-full`, or `require` with a root certificate (exit 10; not with `sslrootcert=system`). pgmi also reads `PGOPTIONS`, `PGTZ`, `PGTARGETSESSIONATTRS`, `PGREQUIREAUTH` and `PGCHANNELBINDING`. The full list, with which variables are secrets, what outranks each one and the cloud SDK variables, is the [environment reference](CICD.md#environment-reference).
 
 ### Precedence

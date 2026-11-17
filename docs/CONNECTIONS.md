@@ -257,6 +257,22 @@ prints one line naming both values, for TLS too, e.g.
 `sslmode: from PGSSLMODE (disable), not pgmi.yaml (verify-full)`. With a
 connection string, pgmi.yaml's `sslmode` does not apply at all, and pgmi says so.
 
+An empty value is not an unset one. A connection setting written empty or as
+white space only stops the deploy before connecting, exit 10: a key of a
+connection string in any form (`host=''`, `?sslmode=`, `Port=;`), a
+connection flag (`-h ''`), a `PG*` variable (`PGHOST=`), `DATABASE_URL`,
+`PGMI_CONNECTION_STRING`, or a `pgmi.yaml` value written as `""`. The message
+names the setting and where it was written:
+
+```
+pgmi: error: the host from PGHOST is empty; write the host, or remove it so the next source applies
+```
+
+To get the next source or the default, remove the setting or unset the
+variable. A password may be empty; that means no password. A variable that a
+nearer source replaces (`PGHOST=` next to `-h db`) is not read, so it is not
+refused.
+
 See [Configuration](CONFIGURATION.md) for the full pgmi.yaml schema.
 
 ---
