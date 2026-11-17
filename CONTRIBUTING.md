@@ -118,7 +118,7 @@ cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo clippy --locked -p pgmi --features testhooks --all-targets -- -D warnings
 cargo test --locked --workspace
-cargo test --locked -p pgmi --features testhooks --test panic --test google_cloud_sql
+cargo test --locked -p pgmi --features testhooks --test panic --test google_cloud_sql --test aws_credential_process_hang
 cargo deny --locked check          # advisories, licences, no C
 rust/check-no-c.sh                 # no C compiler on any release target
 rust/check-package.sh              # packaged shared files equal tracked files

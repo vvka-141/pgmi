@@ -43,6 +43,7 @@ fn github_yaml_parses() {
 
 const DATED: &str = "# Releases\n\n## v1.2.3 — 2026-07-26\n\nWhat changed, for a stranger.\n\n## v1.2.2 — 2026-01-01\n\nOlder.\n";
 
+#[cfg(unix)]
 #[test]
 fn release_notes_script_refuses_unfinished_sections() {
     if Command::new("bash").arg("-c").arg("true").output().is_err() {

@@ -273,6 +273,8 @@ Cloud auth (no password needed):
   --aws-region REGION    AWS region for RDS ($AWS_REGION)
   --google               Google Cloud SQL IAM authentication
   --google-instance NAME project:region:instance (required with --google)
+  --databricks           Databricks Lakebase (DATABRICKS_HOST or ~/.databrickscfg)
+  --databricks-endpoint NAME  projects/<p>/branches/<b>/endpoints/<e> ($PGMI_DATABRICKS_ENDPOINT)
 
 TLS:
   --sslcert PATH         Client certificate

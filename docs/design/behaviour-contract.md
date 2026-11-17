@@ -1723,3 +1723,21 @@ release notes take their "Behaviour changes" section from this table.
 
 No case of its own: each row's section above names its cases or its Rust unit
 test.
+
+### Compared with the released 0.14.1
+
+From switch day the Go comparison (differential, bad-weather and the
+cross-binary checksum cases) runs against the released Go 0.14.1 binary, not
+a Go build of this tree (owner, 2026-11-12). Two kinds of change reached the
+frozen Go line after 0.14.1 and ship in 0.20, so they show as differences
+against 0.14.1 and are accepted here:
+
+- **Embedded content.** The templates, the `pgmi ai` guide (served by
+  `pgmi serve` too) and the scaffold tree are 0.20's: the `deploy/` files of
+  the advanced template, `pg_temp.pgmi_run_file`, the advanced template's
+  preflight refusals and its refusal handlers, the basic template's provider
+  hook with `EXECUTE` revoked from `PUBLIC`, and the guide's Retries section.
+- **Flag value errors.** A bad `--port`, `--timeout` or boolean flag value is
+  explained in pgmi's own words (`must be an integer`, `must be a duration
+  like ...`, `must be true or false`), not with Go's `strconv`/`time` parser
+  text.

@@ -1040,7 +1040,11 @@ mod tests {
     #[tokio::test]
     async fn the_wizard_test_refuses_a_revocation_list_it_cannot_check_before_connecting() {
         let home = crate::testdir::TempDir::new("wizard-crl");
-        let dir = home.join(".postgresql");
+        let dir = home.join(if cfg!(windows) {
+            "postgresql"
+        } else {
+            ".postgresql"
+        });
         std::fs::create_dir_all(&dir).unwrap();
         let settings = Settings {
             host: Some("127.0.0.1".into()),
@@ -1052,13 +1056,17 @@ mod tests {
             ..Settings::default()
         };
         let h = home.path().display().to_string();
-        let env = Env::from_pairs(&[("HOME", h.as_str()), ("PGSSLCRL", "/etc/crl.pem")]);
+        let env = Env::from_pairs(&[
+            ("HOME", h.as_str()),
+            ("APPDATA", h.as_str()),
+            ("PGSSLCRL", "/etc/crl.pem"),
+        ]);
         let Err(TestError::Settings(e)) = test(settings.clone(), env).await else {
             panic!("PGSSLCRL under verify-ca was not refused")
         };
         assert!(e.to_string().contains("PGSSLCRL is set"), "{e}");
         std::fs::write(dir.join("root.crl"), "not read").unwrap();
-        let env = Env::from_pairs(&[("HOME", h.as_str())]);
+        let env = Env::from_pairs(&[("HOME", h.as_str()), ("APPDATA", h.as_str())]);
         let Err(TestError::Settings(e)) = test(settings, env).await else {
             panic!("a default root.crl under verify-ca was not refused")
         };

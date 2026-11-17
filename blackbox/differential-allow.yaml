@@ -491,3 +491,74 @@ accept:
     step: steps[7]
     field: stderr
     rust: Database "\{db\}" does not exist; creating
+  - row: Compared with the released 0.14.1
+    case: cases/(commands/ai|terminal/pager(-command|-not-interactive)?|serve/slow-reader-many-answers)\.yaml
+    field: stdout
+    rust: "## Retries"
+  - row: Compared with the released 0.14.1
+    case: cases/commands/init\.yaml
+    field: stdout
+    rust: "├── deploy/"
+  - row: Compared with the released 0.14.1
+    case: cases/deploy/advanced-template-(converges|preflight)\.yaml
+    field: db
+    rust: "."
+  - row: Compared with the released 0.14.1
+    case: cases/deploy/advanced-template-(converges|preflight)\.yaml
+    field: exit
+    rust: "."
+  - row: Compared with the released 0.14.1
+    case: cases/deploy/advanced-template-(converges|preflight)\.yaml
+    field: stderr
+    rust: "."
+  - row: Compared with the released 0.14.1
+    case: cases/deploy/advanced-template-(converges|preflight)\.yaml
+    field: json
+    rust: "."
+  - row: Compared with the released 0.14.1
+    case: cases/deploy/basic-template-provider-functions\.yaml
+    field: exit
+    go: "."
+  - row: Compared with the released 0.14.1
+    case: cases/deploy/basic-template-provider-functions\.yaml
+    field: stderr
+    go: "."
+  - row: Compared with the released 0.14.1
+    case: cases/deploy/basic-template-provider-functions\.yaml
+    field: json
+    go: "."
+  - row: Compared with the released 0.14.1
+    case: cases/deploy/basic-template-provider-functions\.yaml
+    field: db
+    go: "."
+  - row: Compared with the released 0.14.1
+    case: cases/deploy/pgmi-run-file\.yaml
+    field: exit
+    go: "."
+  - row: Compared with the released 0.14.1
+    case: cases/deploy/pgmi-run-file\.yaml
+    field: stderr
+    go: "."
+  - row: Compared with the released 0.14.1
+    case: cases/deploy/pgmi-run-file\.yaml
+    field: json
+    go: "."
+  - row: Compared with the released 0.14.1
+    case: cases/deploy/pgmi-run-file\.yaml
+    field: db
+    go: "."
+  - row: Compared with the released 0.14.1
+    case: cases/.*\.yaml
+    field: stderr
+    go: 'strconv\.ParseInt: parsing "[^"]*": invalid syntax'
+    go_as: must be an integer
+  - row: Compared with the released 0.14.1
+    case: cases/.*\.yaml
+    field: stderr
+    go: 'strconv\.ParseBool: parsing "[^"]*": invalid syntax'
+    go_as: must be true or false
+  - row: Compared with the released 0.14.1
+    case: cases/.*\.yaml
+    field: stderr
+    go: 'time: invalid duration "[^"]*"'
+    go_as: must be a duration like "<duration>" or "<duration>"

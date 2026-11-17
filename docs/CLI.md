@@ -42,7 +42,7 @@ in psql. `--verbose` prefixes every line with the elapsed time.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--connection` | `$PGMI_CONNECTION_STRING` or `$DATABASE_URL` | Full connection string: PostgreSQL URI, libpq keyword/value (`host=... dbname=...`), or ADO.NET. The flag is mutually exclusive with granular flags; the environment variables are ignored whenever `-h`, `-p`, `-U` or `--sslmode` is given. |
+| `--connection` | `$PGMI_CONNECTION_STRING` or `$DATABASE_URL` | Full connection string: PostgreSQL URI, libpq keyword/value (`host=... dbname=...`), or ADO.NET. The flag is mutually exclusive with granular flags. With `PGMI_CONNECTION_STRING` or `DATABASE_URL` set, `-h`, `-p` and `-U` are refused (exit 10) and `--sslmode` replaces the string's `sslmode`. |
 | `--host` | `$PGHOST` or `localhost` | PostgreSQL server host |
 | `-p, --port` | `$PGPORT` or `5432` | PostgreSQL server port |
 | `-U, --username` | `$PGUSER` or OS user | PostgreSQL user |
@@ -138,7 +138,7 @@ the only record of it: keep it as CI output.
   "pathsIgnored": 0,
   "ignoredPaths": [],
   "testMacros": 0,
-  "error": "execution failed: ERROR: function this_function_does_not_exist() does not exist (SQLSTATE 42883)",
+  "error": "ERROR: function this_function_does_not_exist() does not exist (SQLSTATE 42883)",
   "sqlstate": "42883",
   "hint": "No function matches the given name and argument types. You might need to add explicit type casts.",
   "script": "deploy.sql",
@@ -1145,7 +1145,7 @@ pgmi deploy ./myproject \
   --username deployer \
   -d "myapp_ci_${CI_JOB_ID}" \
   --overwrite --force \
-  --param env=ci \
+  --param env=test \
   --timeout 10m
 
 # Tests run via CALL pgmi_test() in deploy.sql
@@ -1161,7 +1161,7 @@ pgmi deploy ./myproject \
 ```bash
 export PGPASSWORD="postgres"
 # Deploy with tests (pgmi_test() in deploy.sql gates the commit)
-pgmi deploy . -d myapp_dev --overwrite --force
+pgmi deploy . -d myapp_dev --overwrite --force --param env=dev
 ```
 
 ### mTLS Client Certificate

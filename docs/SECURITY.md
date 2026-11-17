@@ -64,7 +64,7 @@ pgmi sets up its session objects under `search_path = pg_catalog, pg_temp`, call
 
 ## What pgmi Logs
 
-The **pgmi core CLI** logs **parameter counts only**, never keys or values — even in `--verbose` mode.
+The **pgmi core CLI** never prints a parameter **value**, even in `--verbose` mode. Progress lines give counts only:
 
 ```
 [VERBOSE] Loaded 3 parameter(s) from file (total: 3)
@@ -72,7 +72,7 @@ The **pgmi core CLI** logs **parameter counts only**, never keys or values — e
 Loaded 4 parameter(s)
 ```
 
-No parameter name, value, or hint about content ever appears in **pgmi's own (core CLI) output**.
+No parameter value, or hint about its content, ever appears in **pgmi's own (core CLI) output**. A parameter **key** can: an error about a bad key names it (`invalid parameter key 'api-key'`, `PGMI_PARAM_FOO is set but empty`), so keep secrets out of key names.
 
 ### Connection passwords in error messages
 

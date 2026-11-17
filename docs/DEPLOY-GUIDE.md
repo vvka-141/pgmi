@@ -154,7 +154,7 @@ reports it as `LOCATION:` on stderr and `failedFile` in `--json`. For parse and
 analysis errors it adds the line and column in that file:
 
 ```
-pgmi: error: execution failed: ERROR: syntax error at or near "SELEC" (SQLSTATE 42601)
+pgmi: error: ERROR: syntax error at or near "SELEC" (SQLSTATE 42601)
 LOCATION: ./migrations/004_orders.sql line 4, column 1
 LINE 4: SELEC 1;
         ^

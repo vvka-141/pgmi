@@ -375,7 +375,7 @@ What pgmi guarantees in CI, from a scheduler or under an agent; deploy.sql's tra
 - **Timeouts and signals cancel the running statement** on the server and roll back the open transaction: `--timeout` (default 3m) exits 16, SIGINT/SIGTERM 130.
 - **Deploys never interleave.** A second deploy against the same database exits 15 at once.
 - **Configuration checks run before connecting.** Path, parameter syntax, `--compat`, `pgmi.yaml` and an empty `PGMI_PARAM_*` secret exit 10, and nothing is created or changed. Required parameters (the templates' `env`) are checked by deploy.sql once connected.
-- **Transient failures are retried inside `--timeout`.** Up to four connection attempts per run. A deploy that reached the server and failed on a transient error (class 08, a deadlock, a server restart, `max_connections`) runs again from the start, waiting 1 s doubling to 30 s, as long as nothing has committed; any other error ends the run. `retry: false` in `pgmi.yaml` turns it off.
+- **Transient failures are retried inside `--timeout`.** Up to four connection attempts in each deploy attempt. A deploy that reached the server and failed on a transient error (class 08, a deadlock, a server restart, `max_connections`) runs again from the start, waiting 1 s doubling to 30 s, as long as nothing has committed; any other error ends the run. `retry: false` in `pgmi.yaml` turns it off.
 - **`--json` reports each run:** the failing file, line, SQLSTATE and what committed, with passwords redacted.
 - **Cloud authentication:** Azure and AWS tokens refresh for long deploys and never travel without TLS.
 - **`--overwrite`** restores the database's settings and privileges, or refuses before dropping anything.
