@@ -27,7 +27,7 @@ fi
 
 # Match "## v0.12.0" with or without a trailing " — date"; stop at the next "## ".
 body="$(awk -v tag="$tag" '
-    $0 ~ "^## " tag "([^0-9.]|$)" { found = 1; next }
+    $0 ~ "^## " tag "([^0-9.-]|$)" { found = 1; next }
     found && /^## / { exit }
     found { print }
 ' "$releases")"
@@ -48,14 +48,14 @@ fi
 
 # Extract the heading line for the date check.
 heading_line="$(awk -v tag="$tag" '
-    $0 ~ "^## " tag "([^0-9.]|$)" { print; exit }
+    $0 ~ "^## " tag "([^0-9.-]|$)" { print; exit }
 ' "$releases")"
 
 # Lines between the previous "## " heading (or file start) and the tag heading.
 # A DRAFT marker can sit here even with intervening blank lines.
 pre_heading="$(awk -v tag="$tag" '
-    /^## / && !($0 ~ "^## " tag "([^0-9.]|$)") { buf = ""; next }
-    $0 ~ "^## " tag "([^0-9.]|$)" { printf "%s", buf; exit }
+    /^## / && !($0 ~ "^## " tag "([^0-9.-]|$)") { buf = ""; next }
+    $0 ~ "^## " tag "([^0-9.-]|$)" { printf "%s", buf; exit }
     { buf = buf $0 "\n" }
 ' "$releases")"
 

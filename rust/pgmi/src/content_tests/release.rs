@@ -52,8 +52,14 @@ fn release_notes_script_refuses_unfinished_sections() {
     }
     let script = repo_root().join("scripts/release-notes.sh");
     let draft_preamble = "# Releases\n\n> **Writing a release?** The tag build fails if the heading carries no\n> `YYYY-MM-DD` date, or if a `<!-- DRAFT -->` marker still sits above it.\n\n## v1.2.3 — 2026-07-26\n\nWhat changed, for a stranger.\n";
-    let cases: [(&str, &str, &str, Option<&str>); 10] = [
+    let cases: [(&str, &str, &str, Option<&str>); 11] = [
         ("a dated, final section", DATED, "v1.2.3", None),
+        (
+            "a final section under its release candidate",
+            "# Releases\n\n## v1.2.3-rc.1 — 2026-07-25\n\nCandidate.\n\n## v1.2.3 — 2026-07-26\n\nWhat changed, for a stranger.\n",
+            "v1.2.3",
+            None,
+        ),
         (
             "a draft marker above the heading",
             "# Releases\n\n<!-- DRAFT — set the real date when tagging. -->\n## v1.2.3 — 2026-07-26\n\nBody.\n",
@@ -121,7 +127,9 @@ fn release_notes_script_refuses_unfinished_sections() {
         );
         match refusal {
             None => assert!(
-                out.status.success() && text.contains("What changed"),
+                out.status.success()
+                    && text.contains("What changed")
+                    && !text.contains("Candidate"),
                 "{name}: expected the section body, got:\n{text}"
             ),
             Some(reason) => assert!(
