@@ -18,5 +18,5 @@ while read -r target _; do
     env "CC_$target=/bin/false" "CXX_$target=/bin/false" "AR_$target=/bin/false" \
         "CC_$under=/bin/false" "CXX_$under=/bin/false" "AR_$under=/bin/false" \
         cargo check --locked --release --workspace --all-features --target "$target"
-done < rust/release/targets.txt
+done < packaging/targets.txt
 exit "$status"

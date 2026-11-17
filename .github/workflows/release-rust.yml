@@ -9,12 +9,12 @@ name: Release (Rust)
 #
 # Every target builds on its own native runner (record 0021: no C, Apple's
 # linker on macOS, MSVC on Windows, rust-lld for static Linux);
-# rust/release/package.sh writes the archives under the names
+# packaging/package.sh writes the archives under the names
 # scripts/install.sh and install.ps1 expect.
 on:
   push:
     branches-ignore: [main]
-    paths: ['.github/workflows/release-rust.yml', 'rust/release/**']
+    paths: ['.github/workflows/release-rust.yml', 'packaging/**']
   workflow_dispatch:
     inputs:
       tag:
@@ -49,7 +49,7 @@ jobs:
           if [ -z "$TAG" ]; then
             TAG="v$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version = "\(.*\)"$/\1/p}' Cargo.toml)"
           fi
-          echo "version=$(rust/release/check-version.sh "$TAG")" >> "$GITHUB_OUTPUT"
+          echo "version=$(packaging/check-version.sh "$TAG")" >> "$GITHUB_OUTPUT"
 
       - name: Commit is on main
         if: inputs.publish
@@ -79,9 +79,9 @@ jobs:
       - name: Dependencies (advisories, licences, no C)
         run: cargo deny --locked check
       - name: No C compiler on any release target
-        run: rust/check-no-c.sh
+        run: scripts/check-no-c.sh
       - name: Packaged files equal tracked files
-        run: rust/check-package.sh
+        run: scripts/check-package.sh
 
       - name: PostgreSQL for the tests
         run: |
@@ -286,7 +286,7 @@ jobs:
           chmod +x "$PGMI_BIN"
           python -m pip install --require-hashes -r blackbox/uv-requirements.txt
           cd blackbox
-          mapfile -t skip < <(sed -n 's|^\([^#[:space:]][^[:space:]]*\).*|--deselect=test_cases.py::test_case[cases/\1.yaml]|p' ../rust/blackbox-skip.txt)
+          mapfile -t skip < <(sed -n 's|^\([^#[:space:]][^[:space:]]*\).*|--deselect=test_cases.py::test_case[cases/\1.yaml]|p' skip.txt)
           uv run --locked pytest test_cases.py "${skip[@]}"
       - name: The README and Quickstart walkthrough, as written
         run: scripts/verify-walkthrough.sh "$RUNNER_TEMP/bin/x86_64-unknown-linux-musl/pgmi"
@@ -307,10 +307,10 @@ jobs:
       - name: Third-party licence notices
         run: |
           cargo install --locked --features cli cargo-about@0.9.3
-          rust/release/licenses.sh THIRD-PARTY-LICENSES
+          packaging/licenses.sh THIRD-PARTY-LICENSES
       - name: Archives and checksums
         run: |
-          rust/release/package.sh "$VERSION" bins dist
+          packaging/package.sh "$VERSION" bins dist
           for a in dist/*.tar.gz; do tar tzf "$a" | grep -qx THIRD-PARTY-LICENSES || { echo "$a lacks THIRD-PARTY-LICENSES"; exit 1; }; done
           for a in dist/*.zip; do unzip -Z1 "$a" | grep -qx THIRD-PARTY-LICENSES || { echo "$a lacks THIRD-PARTY-LICENSES"; exit 1; }; done
       - name: Debian packages
@@ -321,7 +321,7 @@ jobs:
             docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/src" -w /src \
               -e NFPM_ARCH="$arch" -e NFPM_VERSION="$VERSION" \
               goreleaser/nfpm@sha256:929e1056ba69bf1da57791e851d210e9d6d4f528fede53a55bd43cf85674450c \
-              package --config rust/release/nfpm.yaml --packager deb --target "dist/pgmi_${VERSION}_linux_${arch}.deb"
+              package --config packaging/nfpm.yaml --packager deb --target "dist/pgmi_${VERSION}_linux_${arch}.deb"
           done
       - name: SBOM
         run: |
@@ -334,7 +334,7 @@ jobs:
           docker run --rm -v "$PWD/dist:/d" debian:trixie-slim bash -c \
             "dpkg -i /d/pgmi_${VERSION}_linux_amd64.deb && pgmi --version | grep -q 'pgmi ${VERSION} ' && dpkg-deb -c /d/pgmi_${VERSION}_linux_amd64.deb | grep -q ' ./usr/share/doc/pgmi/THIRD-PARTY-LICENSES$'"
       - name: Homebrew cask
-        run: rust/release/cask.sh "$VERSION" dist/checksums.txt > dist/pgmi.rb
+        run: packaging/cask.sh "$VERSION" dist/checksums.txt > dist/pgmi.rb
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-${{ needs.verify.outputs.version }}

@@ -47,7 +47,7 @@ it embeds (templates, skills, the session SQL) in the `pgmi-shared` crate under
 
 - `rustup`; it installs the toolchain pinned in `rust-toolchain.toml`, with
   rustfmt and clippy. No C code is compiled: every dependency is pure Rust,
-  and `rust/check-no-c.sh` keeps it that way. The build needs only the
+  and `scripts/check-no-c.sh` keeps it that way. The build needs only the
   platform linker (`cc` on Linux, the Xcode command-line tools on macOS, the
   MSVC build tools on Windows). The minimum supported Rust
   version is `rust-version` in the root `Cargo.toml`.
@@ -63,7 +63,7 @@ The Makefile wraps the common commands:
 | `make test` | `cargo test --workspace`; database tests skip without `PGMI_TEST_CONN` |
 | `make test-db` | the same with `PGMI_REQUIRE_DB=1`: a missing database fails the run |
 | `make lint` | `cargo fmt --check` and clippy with `-D warnings`, also with `--features testhooks` |
-| `make deny` | `cargo deny check` and `rust/check-no-c.sh` |
+| `make deny` | `cargo deny check` and `scripts/check-no-c.sh` |
 | `make blackbox` | builds the binary and runs the black-box suite against it |
 | `make differential` | the Rust binary and the released Go 0.14.1 binary on the same input |
 | `make check` | `lint`, `deny`, `test-db` and `blackbox` |
@@ -107,7 +107,7 @@ PGMI_IMPL=rust PGMI_BIN="$PWD/../target/release/pgmi" uv run pytest -k 13-sql   
 ```
 
 `PGMI_IMPL=rust` applies a case's `expect.rust` keys. CI deselects the few
-cases listed in `rust/blackbox-skip.txt`.
+cases listed in `blackbox/skip.txt`.
 
 ### The gates CI runs
 
@@ -120,8 +120,8 @@ cargo clippy --locked -p pgmi --features testhooks --all-targets -- -D warnings
 cargo test --locked --workspace
 cargo test --locked -p pgmi --features testhooks --test panic --test google_cloud_sql --test aws_credential_process_hang
 cargo deny --locked check          # advisories, licences, no C
-rust/check-no-c.sh                 # no C compiler on any release target
-rust/check-package.sh              # packaged shared files equal tracked files
+scripts/check-no-c.sh                 # no C compiler on any release target
+scripts/check-package.sh              # packaged shared files equal tracked files
 ```
 
 Other jobs:

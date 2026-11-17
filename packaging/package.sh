@@ -6,7 +6,7 @@
 # so scripts/install.sh and install.ps1 work unchanged, plus checksums.txt.
 set -euo pipefail
 version="${1:?version}"; bins="$(cd "${2:?bin dir}" && pwd)"; out="${3:?out dir}"
-here="$(cd "$(dirname "$0")" && pwd)"; root="$(cd "$here/../.." && pwd)"
+here="$(cd "$(dirname "$0")" && pwd)"; root="$(cd "$here/.." && pwd)"
 mkdir -p "$out"; out="$(cd "$out" && pwd)"
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 [[ -s "$root/THIRD-PARTY-LICENSES" ]] || { echo "missing $root/THIRD-PARTY-LICENSES: run cargo about generate first" >&2; exit 1; }

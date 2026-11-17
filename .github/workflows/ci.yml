@@ -15,10 +15,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: scripts/check-docs-rust.sh
+      - run: scripts/check-docs.sh
 
   # The black-box suite runs the built binary from outside, as a user does:
-  # every case but those in rust/blackbox-skip.txt, with the last Go release
+  # every case but those in blackbox/skip.txt, with the last Go release
   # (0.14.1) as the reference for the cross-binary checksum cases. 15 is the
   # floor the binary enforces; the advanced-template cases skip below 18,
   # that template's own floor.
@@ -66,7 +66,7 @@ jobs:
         run: |
           python -m pip install --require-hashes -r blackbox/uv-requirements.txt
           cd blackbox
-          mapfile -t skip < <(sed -n 's|^\([^#[:space:]][^[:space:]]*\).*|--deselect=test_cases.py::test_case[cases/\1.yaml]|p' ../rust/blackbox-skip.txt)
+          mapfile -t skip < <(sed -n 's|^\([^#[:space:]][^[:space:]]*\).*|--deselect=test_cases.py::test_case[cases/\1.yaml]|p' skip.txt)
           uv run --locked pytest test_cases.py "${skip[@]}"
 
   # Fault injection (proxy, locks, signals, flaky sign-in) on pgmi and on the
@@ -211,7 +211,7 @@ jobs:
       - name: Dependencies (advisories, licences, no C)
         run: cargo deny --locked check
       - name: No C compiler on any release target
-        run: rust/check-no-c.sh
+        run: scripts/check-no-c.sh
       - name: Static Linux binaries with rust-lld only
         env:
           CC: /bin/false
@@ -223,12 +223,12 @@ jobs:
           file target/x86_64-unknown-linux-musl/release/pgmi target/aarch64-unknown-linux-musl/release/pgmi | tee /dev/stderr | grep -c "static" | grep -qx 2
           target/x86_64-unknown-linux-musl/release/pgmi --version
       - name: Packaged files equal tracked files
-        run: rust/check-package.sh
+        run: scripts/check-package.sh
       - name: Licence placeholder guards
-        run: rust/release/placeholders-test.sh
+        run: packaging/placeholders-test.sh
       - name: The musl notice is for the musl this toolchain links
         run: |
-          version="$(basename rust/release/notices/musl-*-COPYRIGHT | cut -d- -f2)"
+          version="$(basename packaging/notices/musl-*-COPYRIGHT | cut -d- -f2)"
           grep -aqF "$version" "$(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-musl/lib/self-contained/libc.a"
 
   fuzz:

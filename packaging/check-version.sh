@@ -3,7 +3,7 @@
 # Fails unless the tag is the version in the workspace Cargo.toml, prefixed with v.
 set -euo pipefail
 tag="${1:?usage: check-version.sh <tag>}"
-root="$(cd "$(dirname "$0")/../.." && pwd)"
+root="$(cd "$(dirname "$0")/.." && pwd)"
 version="$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version = "\(.*\)"$/\1/p}' "$root/Cargo.toml")"
 if [[ "$tag" != "v$version" ]]; then
   echo "tag $tag does not match the Cargo version $version (expected v$version)" >&2

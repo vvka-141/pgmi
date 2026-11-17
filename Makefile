@@ -19,11 +19,11 @@ lint:                  ## Format check and clippy, also with the test hooks
 
 deny:                  ## Advisories, licences, banned crates, and no C compiler on any release target
 	cargo deny --locked check
-	rust/check-no-c.sh
+	scripts/check-no-c.sh
 
 blackbox: build        ## Run the black-box suite against target/release/pgmi (PostgreSQL from PGMI_TEST_CONN or Docker)
 	cd blackbox && PGMI_BIN=$(CURDIR)/target/release/pgmi uv run --locked pytest test_cases.py \
-		$$(sed -n 's|^\([^#[:space:]][^[:space:]]*\).*|--deselect=test_cases.py::test_case[cases/\1.yaml]|p' ../rust/blackbox-skip.txt)
+		$$(sed -n 's|^\([^#[:space:]][^[:space:]]*\).*|--deselect=test_cases.py::test_case[cases/\1.yaml]|p' skip.txt)
 
 $(GO_REFERENCE):
 	.github/scripts/go-reference.sh $@

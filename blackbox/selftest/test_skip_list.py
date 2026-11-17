@@ -1,7 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SKIP = ROOT / "rust" / "blackbox-skip.txt"
+SKIP = ROOT / "blackbox" / "skip.txt"
 CASES = ROOT / "blackbox" / "cases"
 
 

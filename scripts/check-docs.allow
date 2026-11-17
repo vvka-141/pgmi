@@ -1,4 +1,4 @@
-# Allow-list for scripts/check-docs-rust.sh.
+# Allow-list for scripts/check-docs.sh.
 # A line with no colon exempts a whole file; "path:text" exempts the lines of
 # that file containing text. Each entry needs a reason in the comment above it.
 
