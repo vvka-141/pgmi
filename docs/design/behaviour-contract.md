@@ -1741,3 +1741,6 @@ against 0.14.1 and are accepted here:
   explained in pgmi's own words (`must be an integer`, `must be a duration
   like ...`, `must be true or false`), not with Go's `strconv`/`time` parser
   text.
+
+Cases: none; each accepted difference is an entry in
+`blackbox/differential-allow.yaml` that names this section.
