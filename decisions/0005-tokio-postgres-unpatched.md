@@ -35,7 +35,7 @@ pgmi needs two things tokio-postgres 0.7.18 does not offer:
 
 ## Spike (2026-11-10, branch `feature/pgmi-829-wire-tap-spike`)
 
-The layer was built on spike A's prototype (`rust/spikes/connection/`),
+The layer was built on spike A's prototype (`rust/spikes/connection/`, kept as tag `archive/spike-connection`),
 against tokio-postgres 0.7.18 from crates.io, with no `[patch]` and no fork.
 
 - **The layer:** `rust/spikes/connection/src/tap.rs`, 195 non-blank lines
