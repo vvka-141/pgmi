@@ -16,7 +16,10 @@
 > `verify-install.yml` installs it through every documented channel and checks
 > each serves the new version — look at that run before announcing a release.
 
-<!-- DRAFT -->
+## v0.20.0-rc.1 — 2026-11-17
+
+Release candidate for 0.20.0, published to prove the release pipeline: the archives, the `.deb` files, `checksums.txt` and the build attestation. It is a pre-release, so the install scripts and Homebrew keep serving 0.14.1. What 0.20 changes is in [RELEASES.md](https://github.com/vvka-141/pgmi/blob/main/RELEASES.md).
+
 ## v0.20.0 — TBD
 
 **pgmi is now one Rust program: a single static file, with the same commands, the same session API and the same deploy.sql you already have.** pgmi 0.20 replaces the Go implementation. Everything a pgmi project relies on stays as it was: the session views, `pg_temp.pgmi_*` functions, `CALL pgmi_test()`, the exit codes and the `--json` record. More than 350 black-box cases check the Rust binary, and every case that applies to Go passes on both; each difference that remains is deliberate and listed in Upgrading.
