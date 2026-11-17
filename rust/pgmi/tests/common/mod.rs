@@ -11,7 +11,7 @@ use tokio::runtime::Runtime;
 use tokio_postgres::types::{FromSqlOwned, ToSql};
 use tokio_postgres::{Config, NoTls, Row};
 
-fn var(name: &str) -> Option<String> {
+pub fn var(name: &str) -> Option<String> {
     std::env::vars_os()
         .find(|(k, _)| k == name)
         .and_then(|(_, v)| v.into_string().ok())

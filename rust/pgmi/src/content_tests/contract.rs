@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use regex_lite::Regex;
 use serde_json::Value;
 
-use super::{embedded, line_of, tree};
+use super::{embedded, line_of, tree, unguarded_plan_view_loops};
 use crate::commands::ai::CONTRACT;
 
 fn contract() -> Value {
@@ -155,28 +155,13 @@ fn every_emitted_test_event_is_declared() {
 
 #[test]
 fn embedded_plan_view_examples_filter_sql_files() {
-    let plan_view_query =
-        Regex::new(r"(?s)SELECT[^;]{0,400}?pgmi_plan_view[^;]{0,400}?(?:LOOP|\)\s*$)").unwrap();
-    let exact_path = Regex::new(r"path\s*=\s*'").unwrap();
-    let select_star = Regex::new(r"(?i)SELECT\s+(?:\w+\.)?\*").unwrap();
     let mut offenders = Vec::new();
     for (path, text) in tree("ai") {
         if !path.ends_with(".md") {
             continue;
         }
-        for m in plan_view_query.find_iter(&text) {
-            let q = m.as_str();
-            if (!q.contains("content") && !select_star.is_match(q)) || exact_path.is_match(q) {
-                continue;
-            }
-            if q.contains("is_sql_file") {
-                continue;
-            }
-            offenders.push(format!(
-                "{path}:{}  {}",
-                line_of(&text, m.start()),
-                q.split_whitespace().collect::<Vec<_>>().join(" ")
-            ));
+        for at in unguarded_plan_view_loops(&text) {
+            offenders.push(format!("{path}:{}", line_of(&text, at)));
         }
     }
     assert!(

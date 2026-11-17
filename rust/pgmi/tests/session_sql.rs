@@ -1617,3 +1617,120 @@ fn a_bad_or_unmatched_test_pattern_fails_fast() {
         out.fails(13).says(want);
     }
 }
+
+const SNAPSHOT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/testdata/session-api.snapshot"
+);
+
+#[test]
+fn session_api_columns_match_the_snapshot() {
+    let Some(pg) = pg() else { return };
+    let query = r#"SELECT to_jsonb(string_agg(format('%s.%s %s', c.relname, a.attname, format_type(a.atttypid, a.atttypmod)) || E'\n', '' ORDER BY c.relname COLLATE "C", a.attnum))
+    FROM pg_class c
+    JOIN pg_attribute a ON a.attrelid = c.oid
+    WHERE c.relnamespace = pg_my_temp_schema()
+      AND c.relkind = 'v'
+      AND c.relname LIKE 'pgmi\_%\_view'
+      AND a.attnum > 0 AND NOT a.attisdropped"#;
+    let (out, _db) = deploy(
+        &pg,
+        "pgmi_rs_c_api_snapshot",
+        &[("deploy.sql", &report("COLUMNS", query))],
+    );
+    let out = out.ok();
+    let got = reported(&out, "COLUMNS");
+    let got = got.as_str().expect("columns text");
+    if common::var("PGMI_UPDATE_SNAPSHOT").as_deref() == Some("1") {
+        std::fs::write(SNAPSHOT, got).expect("write snapshot");
+        return;
+    }
+    let want = std::fs::read_to_string(SNAPSHOT)
+        .expect("read snapshot")
+        .replace("\r\n", "\n");
+    assert!(
+        got == want,
+        "session API columns differ from {SNAPSHOT}. If the change is intended, rerun with PGMI_UPDATE_SNAPSHOT=1 and list it under Upgrading in RELEASES.md.\n--- want\n{want}--- got\n{got}"
+    );
+}
+
+#[test]
+fn pgmi_test_generate_refuses_a_callback_that_is_not_an_identifier() {
+    let Some(pg) = pg() else { return };
+    let deploy_sql = r#"DO $t$
+DECLARE
+    c text;
+    v_accepted text[] := '{}';
+    v_sql text;
+BEGIN
+    FOREACH c IN ARRAY ARRAY['x; DROP TABLE t; --', '"weird name"', 'a.b.c', '1abc', 'f(1)'] LOOP
+        BEGIN
+            PERFORM pg_temp.pgmi_test_generate(NULL, c);
+            v_accepted := v_accepted || c;
+        EXCEPTION WHEN invalid_parameter_value THEN
+            NULL;
+        END;
+    END LOOP;
+    v_sql := pg_temp.pgmi_test_generate(NULL, 'pg_temp.my_callback');
+    RAISE NOTICE 'CALLBACKS %', jsonb_build_object(
+        'accepted', to_jsonb(v_accepted),
+        'calls_qualified', strpos(v_sql, 'pg_temp.my_callback(') > 0)::text;
+END $t$;
+"#;
+    let (out, _db) = deploy(
+        &pg,
+        "pgmi_rs_c_callback_guard",
+        &[
+            ("deploy.sql", deploy_sql),
+            ("__test__/test_a.sql", "SELECT 1;\n"),
+        ],
+    );
+    let out = out.ok();
+    let got = reported(&out, "CALLBACKS");
+    assert_eq!(
+        got["accepted"],
+        serde_json::json!([]),
+        "callbacks spliced into generated SQL"
+    );
+    assert_eq!(
+        got["calls_qualified"],
+        Value::Bool(true),
+        "a qualified callback must be accepted and called"
+    );
+}
+
+#[test]
+fn pgmi_persist_test_plan_quotes_its_target_schema() {
+    let Some(pg) = pg() else { return };
+    let deploy_sql = r#"DO $t$
+DECLARE
+    v_hostile_refused boolean := false;
+    v_landed boolean;
+BEGIN
+    CREATE SCHEMA "weird schema";
+    CREATE TABLE public.pgmi_canary (id int);
+    PERFORM pg_temp.pgmi_persist_test_plan('weird schema');
+    v_landed := to_regclass('"weird schema".pgmi_test_plan') IS NOT NULL;
+    BEGIN
+        PERFORM pg_temp.pgmi_persist_test_plan('public.pgmi_x (a int); DROP TABLE public.pgmi_canary; CREATE TABLE public');
+    EXCEPTION WHEN invalid_schema_name THEN
+        v_hostile_refused := true;
+    END;
+    RAISE NOTICE 'PERSIST %', jsonb_build_object(
+        'landed', v_landed,
+        'hostile_refused', v_hostile_refused,
+        'canary', to_regclass('public.pgmi_canary') IS NOT NULL)::text;
+END $t$;
+"#;
+    let (out, _db) = deploy(
+        &pg,
+        "pgmi_rs_c_persist_quotes",
+        &[("deploy.sql", deploy_sql)],
+    );
+    let out = out.ok();
+    assert_eq!(
+        reported(&out, "PERSIST"),
+        serde_json::json!({"landed": true, "hostile_refused": true, "canary": true}),
+        "the plan table lands in a schema needing quotes, and a hostile name is a missing schema, never SQL"
+    );
+}

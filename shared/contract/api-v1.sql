@@ -6,7 +6,7 @@
 --
 -- This file is the public API that deploy.sql depends on. Every view names its
 -- columns, so a column added to an internal table (_pgmi_*) stays internal
--- until it is listed here. internal/contract/testdata/session-api.snapshot
+-- until it is listed here. rust/pgmi/tests/testdata/session-api.snapshot
 -- records the published columns; a view change is a deliberate diff there.
 --
 -- PUBLIC VIEWS:

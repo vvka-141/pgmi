@@ -448,6 +448,51 @@ mod tests {
     }
 
     #[test]
+    fn the_managed_cloud_note_names_every_extension_the_advanced_deploy_creates() {
+        let settings = String::from_utf8(
+            pgmi_shared::file("templates/advanced/deploy/settings.sql")
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        let list = regex_lite::Regex::new(r"\(VALUES (.*?)\) AS r\(name\)")
+            .unwrap()
+            .captures(&settings)
+            .expect("the extension list moved in advanced deploy/settings.sql");
+        let note = next_steps(Template::Advanced, "p", None)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let extensions: Vec<&str> = list[1].split('\'').skip(1).step_by(2).collect();
+        assert!(extensions.len() >= 5, "parsed only {extensions:?}");
+        for ext in extensions {
+            assert!(
+                note.contains(ext),
+                "the managed-cloud note leaves out {ext}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_advanced_default_database_is_the_one_its_readme_deploys() {
+        let readme = String::from_utf8(
+            pgmi_shared::file("templates/advanced/README.md")
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        let next = next_steps(Template::Advanced, "p", None);
+        let db = next
+            .split_once(" -d ")
+            .and_then(|(_, s)| s.split_whitespace().next())
+            .unwrap();
+        assert!(
+            readme.contains(&format!("--database {db} ")),
+            "init's Next: deploys -d {db}, which the advanced README never uses"
+        );
+    }
+
+    #[test]
     fn next_steps_quote_the_path_and_database_for_a_shell() {
         let text = next_steps(Template::Minimal, "a b/c\"d", Some("it's"));
         assert!(

@@ -228,8 +228,59 @@ behaviour is named where one plainly does.
 | docs TestOverviewNamesTheScaffoldedSkills | content_tests::templates::overview_names_the_scaffolded_skills |
 | docs TestReadmeAdvancedTemplateSize | content_tests::templates::readme_advanced_template_size_follows_the_code (the README states no counts today, so it returns early, as Go skipped) |
 | docs TestDocsNameEveryAdvancedExtension | content_tests::templates::docs_name_every_advanced_extension |
-| docs, other tests (stale claims, links, ticket refs, exit-code tables) | out of scope: their subject is `docs/`, not `shared/` |
+| docs, other tests (stale claims, links, ticket refs, exit-code tables) | see "Repository content guards" below |
 | metadata uniqueness tests | out of scope (Go metadata code) |
+
+### Repository content guards (PGMI-835)
+
+Go tests whose subject is `docs/`, `examples/`, `README.md`, `RELEASES.md`,
+the website, `scripts/` or `.github/` rather than Go code. Where Go checked
+content against Go code, the Rust test checks it against the Rust code. The
+disk-reading tests resolve paths from `CARGO_MANIFEST_DIR`; shipped content
+is read through `EmbeddedFs`.
+
+| Go test | Rust counterpart |
+|---|---|
+| docs TestArticleLinksResolve | content_tests::links::article_links_resolve (also scans `docs/` below depth 3) |
+| docs TestArticleLinksResolve_CatchesDeadLinks | content_tests::links::article_link_problems_catch_renames_without_alias_and_missing_headings (+ heading_anchors_follow_hugo) |
+| docs TestLLMSTxtLinksResolve | content_tests::links::llms_txt_links_resolve. One anchor rule for both link tests (Hugo's: keeps letters, digits, `-`, `_`; skips fenced code); Go's llms copy dropped `_` and read `#` lines inside fences |
+| docs TestCICDGuidePinsNewestRelease | content_tests::release::cicd_guide_pins_the_newest_release |
+| docs TestReleaseNotesScriptRejectsUnfinishedSections | content_tests::release::release_notes_script_refuses_unfinished_sections (skips without bash) |
+| docs TestDocumentationGitHubYAMLParses | content_tests::release::github_yaml_parses |
+| docs TestDocumentedDeploySummariesMatchTheRealFormat | content_tests::docs::documented_deploy_summaries_match_the_real_format (the Rust summary is the same `<icon> <database>: <detail>`, `output.rs`) |
+| docs TestHighlightsCountMatchesDocumentation | content_tests::docs::highlights_count_matches_documentation |
+| docs TestRollbackClaimsStayWithinPostgreSQLGuarantees | content_tests::docs::rollback_claims_stay_within_postgresql_guarantees |
+| docs TestDocsHaveNoStaleTemplateClaims | content_tests::docs::docs_have_no_stale_template_claims |
+| docs TestShippedContentCitesNoIssueKeys | content_tests::docs::shipped_content_cites_no_issue_keys |
+| docs TestDocsExampleFoldersExistOrAreDeclared | content_tests::docs::docs_example_folders_exist_or_are_declared |
+| docs TestDocsPlanViewLoopsFilterSQLFiles | content_tests::sql_guards::docs_plan_view_loops_filter_sql_files (the empty sweep-pending list is gone) |
+| docs TestExamplePlanViewLoopsFilterSQLFiles | content_tests::sql_guards::example_plan_view_loops_filter_sql_files (+ plan_view_guard_exemptions_still_exist) |
+| docs TestDocsDoNotTeachSQLSTATEFlatteningReraise | content_tests::sql_guards::docs_do_not_teach_sqlstate_flattening_reraise |
+| docs TestExitCodeTablesMatchTheConstants | content_tests::cli_docs::the_contract_publishes_exactly_the_exit_codes_pgmi_returns, the_cli_reference_lists_exactly_the_exit_codes_pgmi_returns, the_debug_skill_diagnoses_only_exit_codes_pgmi_returns, against `error::Kind::exit_code` instead of `pkg/pgmi` constants |
+| docs TestLintVersionPinsAgree | dropped: golangci-lint pins in the Makefile and Go workflows |
+| docs TestReleaseReadyParityWithMakefile | dropped: `make release-ready` and `scripts/release-ready.ps1` gate the Go build (golangci, go test, govulncheck, goreleaser) |
+| cli TestCLIReferenceDocumentsTopLevelCommands | content_tests::cli_docs::the_cli_reference_documents_every_top_level_command (the clap tree) |
+| cli TestArticlesNameOnlyExistingCommands | content_tests::cli_docs::articles_name_only_existing_commands (the clap tree) |
+| cli TestUnknownCommandsFindsRemovedCommands | content_tests::cli_docs::unknown_commands_finds_removed_commands_in_code_only |
+| cli TestQuickstartTreeMatchesInit | content_tests::cli_docs::quickstart_tree_matches_init (`Template::render`) |
+| cli TestManagedCloudCaveat_NamesEveryExtensionTheAdvancedDeployCreates | commands::init::tests::the_managed_cloud_note_names_every_extension_the_advanced_deploy_creates |
+| cli TestDefaultDatabase_MatchesTheAdvancedReadme | commands::init::tests::the_advanced_default_database_is_the_one_its_readme_deploys |
+| contract TestSessionAPI_ColumnSnapshot | session_sql::session_api_columns_match_the_snapshot; the snapshot moved to `rust/pgmi/tests/testdata/session-api.snapshot` (`PGMI_UPDATE_SNAPSHOT=1` rewrites it) |
+| contract TestPgmiTestGenerate_RejectsNonIdentifierCallback | session_sql::pgmi_test_generate_refuses_a_callback_that_is_not_an_identifier |
+| contract TestPersistTestPlan_QuotesTargetSchema | session_sql::pgmi_persist_test_plan_quotes_its_target_schema |
+| contract TestAPISQL_PgTempSchemaQualified | content_tests::session_api::the_api_reads_internal_tables_through_pg_temp |
+| contract TestAPISQL_ViewsAreIdempotent | content_tests::session_api::every_create_in_the_api_can_run_twice |
+| contract TestAPISQL_NoDollarQuoteInGeneratedTestSQL | content_tests::session_api::generated_test_sql_reads_the_path_from_a_setting_not_from_its_dollar_quoted_body |
+| contract TestAPISQL_CallbackNameValidated | dropped: a grep for the guard; the callback test above runs it |
+| contract TestAPISQL_PlanOrderIsByteOrdered | dropped: a grep for `COLLATE "C"`; session_sql::plan_view_orders_sort_keys_and_path_fallbacks_in_byte_order runs it |
+| contract TestAPIContainsExpectedObjects | dropped: content_tests::contract::contract_views_functions_types_and_events_exist_in_the_session_sql checks every declared object |
+| contract TestLoad_*, TestSupportedVersions, TestLatestVersion* | dropped: Go contract loader (`internal/contract`); Rust has one embedded `api-v1.sql` |
+
+Proved red by planting a violation: the snapshot (a line removed), the CLI
+exit-code table (16 renamed 17), the CICD pin, an llms.txt anchor, an article
+slug in the README, an issue key in a shipped skill, an unguarded plan-view
+loop in `examples/lock-safe-deploy`, a flattening re-raise in
+`docs/TESTING.md` and a renamed file in the QUICKSTART tree.
 
 ## Seeded violations
 
