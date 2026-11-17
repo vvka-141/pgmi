@@ -1,6 +1,7 @@
 # pgmi website
 
-Requires Hugo Extended 0.163.3 and Go. The GitHub Pages workflow pins the same Hugo version.
+Requires Hugo Extended 0.163.3, and Go because Hugo fetches the theme as a Go
+module (`website/go.mod`). The GitHub Pages workflow pins the same Hugo version.
 
 Preview locally:
 
@@ -25,7 +26,6 @@ add its old path to the article's front matter so old links keep working:
 aliases: [/articles/old-file-name/]
 ```
 
-`go test ./internal/docs -run TestArticleLinksResolve` fails when the README,
-`docs/` or a template README links to an article URL (or a heading inside it)
-that no article answers. Link to the article, not to a heading, unless the
-heading is stable.
+Link to the article, not to a heading, unless the heading is stable. The
+docs workflow's link check reaches article URLs only on the published site
+and does not check headings, so a renamed one breaks such a link silently.
