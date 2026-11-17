@@ -2,15 +2,14 @@
 
 Runs a pgmi binary from outside, the way a user does, and checks what it does:
 exit code, output, and what ends up in PostgreSQL. It imports nothing from
-pgmi, so the same cases test the Go binary today and the Rust binary later.
+pgmi, so the same cases run against the Rust binary that ships and against
+the last Go release, 0.14.1, for comparison. It is pgmi's executable contract.
 
 ```bash
-make blackbox                                  # build ./cmd/pgmi, start postgres:18 in Docker
-PGMI_BIN=/path/to/pgmi make blackbox           # any binary
+make blackbox                                  # build the Rust binary, start postgres:18 in Docker
 PGMI_REFERENCE_BIN=/path/to/go-pgmi make blackbox  # binary for steps marked binary: reference
-PGMI_TEST_CONN=postgresql://postgres:postgres@127.0.0.1:5432/postgres make blackbox
-PGMI_IMPL=rust PGMI_BIN=$PWD/target/release/pgmi make blackbox  # Rust expectations
-cd blackbox && uv run pytest -k 13-sql         # one case
+PGMI_TEST_CONN=postgresql://postgres:postgres@127.0.0.1:55961/postgres make blackbox
+cd blackbox && PGMI_IMPL=rust PGMI_BIN=$PWD/../target/release/pgmi uv run pytest -k 13-sql   # one case
 ```
 
 Each case gets its own database and an empty `HOME`, and runs with only
@@ -82,8 +81,8 @@ steps:
     database: maintenance             # or against the maintenance database ({db} does not exist yet)
 ```
 
-`PGMI_IMPL` (`go` or `rust`, default `go`; any other value fails the run)
-says which binary `PGMI_BIN` is. Under `rust`, a step's `expect.rust` keys
+`PGMI_IMPL` (`go` or `rust`; any other value fails the run) says which
+binary `PGMI_BIN` is. Under `rust`, a step's `expect.rust` keys
 replace the base keys of the same name; keys it does not set stay. Use it only
 where the owner decided the Rust binary differs, and name that section of
 `docs/design/behaviour-contract.md` in the case's description.
@@ -161,13 +160,14 @@ runner's schema validation.
 
 ## Differential run
 
-`test_differential.py` runs the Go and the Rust binary on the same input, each
-in its own workspace and database, and fails on every difference nothing
-explains. It is not in the default run.
+`test_differential.py` runs the Rust binary and the released Go 0.14.1
+binary on the same input, each in its own workspace and database, and fails
+on every difference nothing explains. It is not in the default run;
+`make differential` runs it.
 
 ```bash
 cd blackbox
-PGMI_BIN=~/go/bin/pgmi PGMI_BIN_OTHER=$PWD/../target/release/pgmi uv run pytest test_differential.py
+PGMI_BIN=/path/to/pgmi-0.14.1 PGMI_BIN_OTHER=$PWD/../target/release/pgmi uv run pytest test_differential.py
 PGMI_DIFF_EXAMPLES=200 ...                     # more generated variants (default 20 per kind)
 ```
 

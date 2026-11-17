@@ -40,8 +40,10 @@ For security vulnerabilities, please see [SECURITY.md](SECURITY.md). Do not open
 
 ## Development setup
 
-pgmi is one Rust binary, `rust/pgmi`, with the files it embeds (templates,
-skills, the session SQL) in the `shared` crate. You need:
+pgmi is written in Rust: one binary, built from `rust/pgmi`, with the files
+it embeds (templates, skills, the session SQL) in the `pgmi-shared` crate under
+`shared/`. The crate layout and its main abstractions are described in
+[record 0022](rust/docs/decisions/0022-library-layout-and-seams.md). You need:
 
 - `rustup`; it installs the toolchain pinned in `rust-toolchain.toml`, with
   rustfmt and clippy. No C code is compiled: every dependency is pure Rust,
@@ -51,14 +53,23 @@ skills, the session SQL) in the `shared` crate. You need:
   version is `rust-version` in the root `Cargo.toml`.
 - `cargo-deny` 0.20.2 (`cargo install --locked cargo-deny@0.20.2`)
 - A PostgreSQL 18 server for the database tests, named by `PGMI_TEST_CONN`
-- `uv` for the black-box suite
+- `uv` and Docker for the black-box suite
 
-Start with:
+The Makefile wraps the common commands:
 
-```bash
-cargo build --locked --release -p pgmi     # target/release/pgmi
-cargo test --locked --workspace            # database tests skip without PGMI_TEST_CONN
-```
+| Target | What it runs |
+|---|---|
+| `make build` | `cargo build --release -p pgmi`; the binary is `target/release/pgmi` |
+| `make test` | `cargo test --workspace`; database tests skip without `PGMI_TEST_CONN` |
+| `make test-db` | the same with `PGMI_REQUIRE_DB=1`: a missing database fails the run |
+| `make lint` | `cargo fmt --check` and clippy with `-D warnings`, also with `--features testhooks` |
+| `make deny` | `cargo deny check` and `rust/check-no-c.sh` |
+| `make blackbox` | builds the binary and runs the black-box suite against it |
+| `make differential` | the Rust binary and the released Go 0.14.1 binary on the same input |
+| `make check` | `lint`, `deny`, `test-db` and `blackbox` |
+| `make doctor` | checks the development environment |
+| `make sync-ai` | refreshes the local `.claude/skills/` mirror from the scaffold skill trees |
+| `make diagrams` | exports the draw.io diagrams |
 
 The tests that deploy templates take more locks than PostgreSQL allows by
 default, so start the test server with `-c max_locks_per_transaction=256`:
@@ -76,11 +87,11 @@ common defaults):
 
 | Port | Used by |
 |---|---|
-| 55961 | the development and test server above (`PGMI_TEST_CONN`, `.env.example`, the VS Code launch configurations) |
+| 55961 | the development and test server above (`PGMI_TEST_CONN`, `.env.example`) |
 | 55962 | the throwaway server `scripts/verify-walkthrough.sh` starts to run the README's "See it work" blocks (`WALKTHROUGH_PORT` overrides it) |
 
-Tests that start their own server (testcontainers, the black-box fakes) take
-a free port from the system and need neither.
+The black-box suite's extra servers and fakes take a free port from the
+system and need neither.
 
 ### The black-box suite
 
@@ -89,6 +100,7 @@ exit codes, output and database state. A change in what pgmi does from a
 user's point of view gets a case there ([blackbox/README.md](blackbox/README.md)):
 
 ```bash
+make blackbox                                    # build, then run every case
 cd blackbox
 PGMI_IMPL=rust PGMI_BIN="$PWD/../target/release/pgmi" uv run pytest
 PGMI_IMPL=rust PGMI_BIN="$PWD/../target/release/pgmi" uv run pytest -k 13-sql   # one case
@@ -112,15 +124,22 @@ rust/check-no-c.sh                 # no C compiler on any release target
 rust/check-package.sh              # packaged shared files equal tracked files
 ```
 
-Other jobs run the black-box suite on PostgreSQL 18 and 15, check the
-workspace with the minimum Rust version, run the unit tests on macOS and
-Windows, and fuzz the parsers for two minutes each with a pinned nightly
-(`cd rust/pgmi/fuzz && cargo +nightly fuzz run conn_parse`; the targets are
-in `rust/pgmi/fuzz/fuzz_targets/`). The design records behind the code are in
-[rust/docs/decisions/](rust/docs/decisions/README.md).
+Other jobs:
 
-The Go 0.14 sources are kept until switch day for reference; they will move to
-the `go-legacy` tag.
+- the black-box suite on PostgreSQL 18 and 15;
+- `cargo check` with the minimum Rust version (`rust-version` in `Cargo.toml`);
+- the unit tests on macOS and Windows;
+- fuzzing: each parser for two minutes with a pinned nightly
+  (`cd rust/pgmi/fuzz && cargo +nightly fuzz run conn_parse`; the targets are
+  in `rust/pgmi/fuzz/fuzz_targets/`);
+- the differential run and the bad-weather cases (fault injection, locks,
+  signals) against the last Go release, 0.14.1. They do not block a merge;
+  a difference nothing explains, or a Rust result worse than Go's in bad
+  weather, is a finding.
+
+The design records behind the code are in
+[rust/docs/decisions/](rust/docs/decisions/README.md). The Go implementation
+ended with 0.14.1; its sources are at the `go-legacy` tag.
 
 ## Code Style
 
@@ -193,23 +212,23 @@ Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`
 
 Examples:
 - `feat(cli): add --timeout flag to deploy command`
-- `fix(resolver): handle empty PGPORT environment variable`
-- `refactor(services): extract SessionManager from DeploymentService`
-- `test(resolver): add connection resolution test cases`
+- `fix(rust): refuse a PGPORT that is empty`
+- `refactor(rust): typed causes for resolve refusals`
+- `test(blackbox): a frozen server still ends the run with exit 16`
 
 ## Pull Requests
 
 1. Create a feature branch from `main`
 2. Implement your changes with tests
-3. Run the gates above, with `PGMI_TEST_CONN` and `PGMI_REQUIRE_DB=1` set
-4. Run the black-box suite against your build
-5. If the change affects scaffolding templates, embedded SQL, or deploy/test
+3. Run `make check` with `PGMI_TEST_CONN` set: the gates above with
+   `PGMI_REQUIRE_DB=1`, and the black-box suite against your build
+4. If the change affects scaffolding templates, embedded SQL, or deploy/test
    execution, the template tests in `cargo test` must have run against a
    database, not skipped (`cargo test --locked -p pgmi --test template_deploy`)
-6. Update documentation in the same change as the behavior it describes
-7. Submit a PR to `main` with a clear description and verification notes
+5. Update documentation in the same change as the behavior it describes
+6. Submit a PR to `main` with a clear description and verification notes
 
-The same commands work in PowerShell on Windows.
+The cargo commands work the same in PowerShell on Windows.
 
 ## Reading release download counts
 

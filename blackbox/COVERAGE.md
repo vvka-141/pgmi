@@ -14,7 +14,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | 0 | success | ✓ `exit-codes/0-success` |
 | 1 | general error | ✓ `commands/init-unwritable` (the only trigger found: a filesystem failure) |
 | 2 | usage error | ✓ `exit-codes/2-usage` |
-| 3 | internal panic | ✗ a release binary has no way to panic on purpose; the Go unit tests (`pgmi_testhooks`) cover the mapping |
+| 3 | internal panic | ✗ a release binary has no way to panic on purpose; `rust/pgmi/tests/panic.rs` (`--features testhooks`) covers the mapping |
 | 10 | invalid configuration | ✓ `exit-codes/10-invalid-config` (empty `PGMI_PARAM_*`), `flags/params-file`, `flags/granular-flags`, `flags/compat`, `env/connection-string-vars-refuse-flags`, `env/pgservice-refused`, `config/pgmi-yaml-invalid`, `commands/metadata-invalid`, `commands/metadata-duplicate`, `commands/info` |
 | 11 | connection failed | ✓ `exit-codes/11-connection-failed`; `--timeout` and `PGCONNECT_TIMEOUT` while connecting ✓ `env/pgconnect-timeout` |
 | 12 | overwrite denied | ✓ `exit-codes/12-overwrite-denied` |
@@ -154,7 +154,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | 6 | `CALL pgmi_test()` without `BEGIN` = 25P01; inside a block a failing test fails the deploy | ✓ `execution/pgmi-test-needs-begin`, `execution/pgmi-test-in-block` |
 | 7 | loader at scale, unicode, missing description, plan order | ✓ `execution/loader-at-scale` (3000 files) |
 | 7a | session tables analysed after loading (planner statistics) | ✓ `deploy/session-tables-analyzed` |
-| 8 | PGlite single-session server | ✗ needs a PGlite server; the Go integration test against PGlite and the manual check in `docs/CONNECTIONS.md` cover it |
+| 8 | PGlite single-session server | ✗ needs a PGlite server; pgmi sends only unnamed statements (record 0004), so one shared session needs no option (`docs/CONNECTIONS.md`) |
 | 9 | NOTICE streamed while the statement runs | ✓ `notices/streaming` |
 | 10 | severities, DETAIL, HINT, LOG hidden; LOG and DEBUG shown when `deploy.sql` lowers `client_min_messages` | ✓ `notices/severity`, `notices/deploy-sql-message-level`; localized server messages ✗ (no non-English locale in the image) |
 | 11 | a notice before an error prints before it | ✓ `notices/severity` |
@@ -169,7 +169,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | 16c | `--timeout` running out while connecting keeps "raise it, or pass --timeout 0 for no limit" (exit 11) | ✓ `errors/timeout-while-connecting` |
 | 17 | `--timeout` cancels on the server, no backend left | ✓ `cancel/timeout-cancels` |
 | 18 | cancel over TLS and over direct TLS negotiation | ✓ `cancel/timeout-over-tls` |
-| 19 | cancel request blocked by a firewall | ✗ needs a firewall between client and server; `internal/db/cancel_integration_test.go` covers it |
+| 19 | cancel request blocked by a firewall | ✓ `bad-weather/frozen-server-timeout` (the proxy answers neither the session nor the cancel request) |
 | 20 | SIGINT twice = 130 at once | ✓ `cancel/sigint-twice` |
 | 21 | unreachable host with a connect timeout = 11, not 16; a timeout beyond Go's range | ✓ `env/pgconnect-timeout`, `connection/connect-timeout-range` |
 | 22 | URI, keyword/value and ADO.NET forms; a string that does not parse is not echoed; percent escapes, URI fragments, an option after a password | ✓ `flags/connection-forms`, `errors/connection-string-secrets`, `errors/connection-string-password-rest` |
