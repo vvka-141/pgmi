@@ -9,7 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4.10"
-pgmi = { path = "..", features = ["fuzzing"] }
+pgmi = { path = "../crates/pgmi", features = ["fuzzing"] }
 serde_json = { version = "1.0.145", features = ["raw_value"] }
 
 [[bin]]

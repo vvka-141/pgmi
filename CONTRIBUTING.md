@@ -40,9 +40,9 @@ For security vulnerabilities, please see [SECURITY.md](SECURITY.md). Do not open
 
 ## Development setup
 
-pgmi is written in Rust: one binary, built from `rust/pgmi`, with the files
+pgmi is written in Rust: one binary, built from `crates/pgmi`, with the files
 it embeds (templates, skills, the session SQL) in the `pgmi-shared` crate under
-`shared/`. The crate layout and its main abstractions are described in
+`crates/pgmi-shared/`. The crate layout and its main abstractions are described in
 [record 0022](rust/docs/decisions/0022-library-layout-and-seams.md). You need:
 
 - `rustup`; it installs the toolchain pinned in `rust-toolchain.toml`, with
@@ -130,8 +130,8 @@ Other jobs:
 - `cargo check` with the minimum Rust version (`rust-version` in `Cargo.toml`);
 - the unit tests on macOS and Windows;
 - fuzzing: each parser for two minutes with a pinned nightly
-  (`cd rust/pgmi/fuzz && cargo +nightly fuzz run conn_parse`; the targets are
-  in `rust/pgmi/fuzz/fuzz_targets/`);
+  (`cd fuzz && cargo +nightly fuzz run conn_parse`; the targets are
+  in `fuzz/fuzz_targets/`);
 - the differential run and the bad-weather cases (fault injection, locks,
   signals) against the last Go release, 0.14.1. They do not block a merge;
   a difference nothing explains, or a Rust result worse than Go's in bad
@@ -146,22 +146,22 @@ ended with 0.14.1; its sources are at the `go-legacy` tag.
 ### Errors
 
 Every failure is a `crate::error::Error` with a `Kind`, and the kind alone
-decides the exit code (`rust/pgmi/src/error.rs`; record
+decides the exit code (`crates/pgmi/src/error.rs`; record
 [0002](rust/docs/decisions/0002-errors-and-exit-codes.md)). A message gives
 context first and names the next step; secrets never reach it.
 
 ### Testing
 
 - Unit tests sit next to the code; tests that need a database or the built
-  binary are in `rust/pgmi/tests/` and use the helpers in `tests/common/`.
+  binary are in `crates/pgmi/tests/` and use the helpers in `tests/common/`.
 - Test names say the behaviour: `a_token_without_an_expiry_is_fetched_for_every_connection`.
 - A regression test fails without the fix: prove it once by reverting the fix.
 
 ### Agent skills
 
 pgmi ships skills that coding agents copy from: the shared scaffold skills
-(`shared/skills/`) and each template's own (`.agents/skills/` under
-`shared/templates/<name>/`). An agent writes whatever a skill shows, so a
+(`crates/pgmi-shared/skills/`) and each template's own (`.agents/skills/` under
+`crates/pgmi-shared/templates/<name>/`). An agent writes whatever a skill shows, so a
 change that removes, renames or reshapes an API updates every skill that names
 it **in the same commit**:
 
@@ -171,11 +171,11 @@ it **in the same commit**:
 2. Rewrite each hit to the new shape, or drop it. Do not keep the old name as a
    "retired" note; say what to do now.
 3. Add each removed name to `RETIRED_APIS` in
-   `rust/pgmi/src/content_tests/snippets.rs`, with one planted line in
+   `crates/pgmi/src/content_tests/snippets.rs`, with one planted line in
    `retired_api_hits_flags_each_term`. `skills_name_no_retired_api` then keeps
    it out of every shipped skill.
 4. A test or SQL example that changed runs: mark it `sql runnable target=...`
-   so `rust/pgmi/tests/skill_blocks.rs` deploys it, or check it against a live
+   so `crates/pgmi/tests/skill_blocks.rs` deploys it, or check it against a live
    database.
 5. Examples that teach template patterns use project, task and document.
 6. Run `make sync-ai` to refresh the local mirror in `.claude/skills/` from the
@@ -250,4 +250,4 @@ adoption.
 
 By contributing to pgmi, you agree that your contributions will be licensed under:
 - **MPL-2.0** for tool code
-- **MIT** for template code (in `shared/templates/`)
+- **MIT** for template code (in `crates/pgmi-shared/templates/`)

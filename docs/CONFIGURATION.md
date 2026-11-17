@@ -168,7 +168,7 @@ Name the fields you need in the string, or use `-d` and the granular flags,
 which do compose. Pinned by the unit tests
 `a_string_replaces_the_pgmi_yaml_connection_block` and
 `a_string_takes_what_it_omits_from_the_environment` in
-`rust/pgmi/src/conn/resolve_tests.rs`.
+`crates/pgmi/src/conn/resolve_tests.rs`.
 
 pgmi reads no libpq service files: `service=` in a connection string and a set
 `PGSERVICE` are refused with exit 10 rather than ignored.

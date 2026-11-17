@@ -3,7 +3,7 @@ name: Rust build
 on:
   push:
     branches: [main]
-    paths: ['rust/**', 'shared/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'deny.toml', '.github/workflows/rust-build.yml']
+    paths: ['crates/**', 'fuzz/**', 'rust/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'deny.toml', '.github/workflows/rust-build.yml']
   workflow_dispatch:
 
 permissions:

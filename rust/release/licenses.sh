@@ -18,7 +18,7 @@ out="${1:?output file}"
 here="$(cd "$(dirname "$0")" && pwd)"; root="$(cd "$here/../.." && pwd)"
 without_notice="asn1-rs-impl objc2-core-foundation objc2-system-configuration p12-keystore"
 cd "$root"
-cargo about generate --locked --fail -m rust/pgmi/Cargo.toml about.hbs -o "$out"
+cargo about generate --locked --fail -m crates/pgmi/Cargo.toml about.hbs -o "$out"
 placeholder='Copyright (c) <year> <copyright holders>'
 under="$(awk -v p="$placeholder" '
   /^Used by:$/ { n = 0; listing = 1; next }

@@ -20,7 +20,7 @@ permissions:
   contents: read
 
 env:
-  GATEWAYS: shared/templates/advanced/gateways
+  GATEWAYS: crates/pgmi-shared/templates/advanced/gateways
 
 jobs:
   pgmi:

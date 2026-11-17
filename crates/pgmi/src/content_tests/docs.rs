@@ -43,7 +43,10 @@ fn highlights_count_matches_documentation() {
         ("docs/README.md", repo_file("docs/README.md")),
         ("docs/HIGHLIGHTS.md", body.clone()),
         ("docs/STYLE.md", repo_file("docs/STYLE.md")),
-        ("shared/ai/overview.md", embedded("ai/overview.md")),
+        (
+            "crates/pgmi-shared/ai/overview.md",
+            embedded("ai/overview.md"),
+        ),
     ];
     let silent: Vec<&str> = pages
         .iter()
@@ -77,17 +80,20 @@ fn rollback_claims_stay_within_postgresql_guarantees() {
             "examples/test-gated-deploy/README.md",
             repo_file("examples/test-gated-deploy/README.md"),
         ),
-        ("shared/ai/overview.md", embedded("ai/overview.md")),
         (
-            "shared/skills/pgmi-sql/SKILL.md",
+            "crates/pgmi-shared/ai/overview.md",
+            embedded("ai/overview.md"),
+        ),
+        (
+            "crates/pgmi-shared/skills/pgmi-sql/SKILL.md",
             embedded("skills/pgmi-sql/SKILL.md"),
         ),
         (
-            "shared/templates/advanced/README.md",
+            "crates/pgmi-shared/templates/advanced/README.md",
             embedded("templates/advanced/README.md"),
         ),
         (
-            "shared/templates/advanced/__test__/README.md",
+            "crates/pgmi-shared/templates/advanced/__test__/README.md",
             embedded("templates/advanced/__test__/README.md"),
         ),
     ];
@@ -163,7 +169,7 @@ fn shipped_content_cites_no_issue_keys() {
         .flat_map(|p| {
             tree(p)
                 .into_iter()
-                .map(|(path, text)| (format!("shared/{path}"), text))
+                .map(|(path, text)| (format!("crates/pgmi-shared/{path}"), text))
         })
         .chain(repo_tree("examples"));
     let mut offenders = Vec::new();

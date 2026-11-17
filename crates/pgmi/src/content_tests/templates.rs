@@ -582,7 +582,10 @@ fn docs_name_every_advanced_extension() {
         ("docs/PRODUCTION.md", "| advanced template |"),
         ("docs/PRODUCTION.md", "**`CREATE EXTENSION`** for"),
         ("docs/templates.md", "- Extensions:"),
-        ("shared/templates/advanced/README.md", "| `extensions` |"),
+        (
+            "crates/pgmi-shared/templates/advanced/README.md",
+            "| `extensions` |",
+        ),
     ] {
         let body = repo_file(file);
         let line = body

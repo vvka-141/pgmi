@@ -43,7 +43,7 @@ Before this change, deploy.sql scripts referenced internal tables like `pg_temp.
 
 ## Pre-Implementation State (Historical)
 
-### Internal Tables (in `shared/session/schema.sql`)
+### Internal Tables (in `crates/pgmi-shared/session/schema.sql`)
 
 | Table | Purpose | Used By |
 |-------|---------|---------|
@@ -79,9 +79,9 @@ Before this change, deploy.sql scripts referenced internal tables like `pg_temp.
 ### File Structure
 
 ```
-shared/session/
+crates/pgmi-shared/session/
   schema.sql          # Internal tables (_pgmi_*) and most functions, always executes first
-shared/contract/
+crates/pgmi-shared/contract/
   api-v1.sql          # V1 views and pgmi_test_generate
   api-v2.sql          # Future: V2 contract (when needed)
 ```
@@ -235,7 +235,7 @@ Called by the preprocessor, returns a DO block as TEXT.
 Part of the versioned API contract - v1 generates code referencing v1 internal tables.';
 ```
 
-> **Implementation Note:** The actual implementation in `api-v1.sql` differs from this proposal. Instead of generating a single DO block containing SAVEPOINT commands (which would fail because PL/pgSQL doesn't support savepoints), the actual implementation generates a series of top-level SQL statements where SAVEPOINT/ROLLBACK are at the SQL level and each fixture or test runs through a constant `DO` block that `EXECUTE`s its content (the path is passed through `set_config('pgmi_test.path', …)`, never inside the dollar quote). See `shared/contract/api-v1.sql` for the working implementation.
+> **Implementation Note:** The actual implementation in `api-v1.sql` differs from this proposal. Instead of generating a single DO block containing SAVEPOINT commands (which would fail because PL/pgSQL doesn't support savepoints), the actual implementation generates a series of top-level SQL statements where SAVEPOINT/ROLLBACK are at the SQL level and each fixture or test runs through a constant `DO` block that `EXECUTE`s its content (the path is passed through `set_config('pgmi_test.path', …)`, never inside the dollar quote). See `crates/pgmi-shared/contract/api-v1.sql` for the working implementation.
 
 ### Expansion flow
 
@@ -255,7 +255,7 @@ as bind parameters, and puts the returned SQL in the macro's place.
 
 ## Implementation
 
-The binary embeds one contract file per version (`shared/contract/api-v1.sql`).
+The binary embeds one contract file per version (`crates/pgmi-shared/contract/api-v1.sql`).
 `--compat` names the version; an empty value means the latest, and a version
 the binary does not ship is refused before connecting (exit 10,
 `unsupported API version "99"; supported: 1`). After `schema.sql`, pgmi runs
@@ -380,7 +380,7 @@ its internal table holds.
 
 11. **Update documentation:**
     - CLAUDE.md - reference views, not tables
-    - `shared/ai/` - update embedded docs
+    - `crates/pgmi-shared/ai/` - update embedded docs
     - Template README files
 
 12. **Add version-specific tests:**

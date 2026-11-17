@@ -63,7 +63,7 @@ line rule after the `.env` WARNING, the expected `<pgmi-meta>` layout after
 malformed XML, and `--force` when the overwrite prompt gets no input.
 
 Cases: `flags/repeated-flags`, `flags/bool-forms`, `flags/port-values`, `commands/usage-errors`, `commands/usage-error-lines`, `errors/next-step-hints`, `exit-codes/0-success`, `exit-codes/2-usage`, `exit-codes/10-invalid-config`, `exit-codes/11-connection-failed`, `exit-codes/12-overwrite-denied`, `exit-codes/13-sql-failed`, `exit-codes/14-no-deploy-sql`, `exit-codes/15-concurrent-deploy`, `exit-codes/16-timeout`, `exit-codes/130-interrupted`, `exit-codes/130-sigterm`, `commands/init-unwritable`, `commands/short-help-and-sslmode-value`.
-Exit 3: no case; a release binary cannot panic on purpose. The Rust build proves it with its `testhooks` feature (`rust/pgmi/tests/panic.rs`): a panic exits 3 with the `--json` record, and a panicking serve tool answers `isError` with exit code 3.
+Exit 3: no case; a release binary cannot panic on purpose. The Rust build proves it with its `testhooks` feature (`crates/pgmi/tests/panic.rs`): a panic exits 3 with the `--json` record, and a panicking serve tool answers `isError` with exit code 3.
 
 ## Commands
 
@@ -104,7 +104,7 @@ Cases: `terminal/init-wizard-esc-and-ctrl-c`, `commands/init-next-step-quoted`, 
 
 The basic and advanced templates, as `init` writes them, deploy into a new
 database with `--param env=dev` and redeploy over it without error. The
-templates themselves are shared files (`shared/templates/`), so this checks the
+templates themselves are shared files (`crates/pgmi-shared/templates/`), so this checks the
 binary's half: loading, the session API, the execution contract and the test
 macro under real projects.
 
@@ -257,7 +257,7 @@ SIGPIPE's default action, so serve dies of the signal (a shell reports 141). Rus
 `a_slow_steady_reader_gets_every_answer_after_the_input_ends`,
 `a_client_that_never_reads_ends_two_seconds_after_its_input`,
 `a_steady_reader_behind_a_buffering_stdout_gets_a_huge_answer_whole`; Rust
-integration tests over the real binary's pipes (`rust/pgmi/tests/serve_pipes.rs`):
+integration tests over the real binary's pipes (`crates/pgmi/tests/serve_pipes.rs`):
 `a_reader_taking_8_kb_a_second_gets_every_answer_after_the_input_ends`,
 `a_huge_answer_reaches_a_reader_taking_800_kb_a_second_whole`,
 `a_burst_of_3000_requests_with_a_reader_gets_every_answer`,
@@ -356,7 +356,7 @@ Cases: `dialect/pgmiignore`, `dialect/pgmiignore-characters`, `dialect/root-depl
 ### Session API
 
 The temporary tables, views and functions `deploy.sql` sees are defined by
-`shared/session/schema.sql` and `shared/contract/api-v1.sql`; every binary
+`crates/pgmi-shared/session/schema.sql` and `crates/pgmi-shared/contract/api-v1.sql`; every binary
 embeds these files unchanged, so they are the contract. `pgmi ai contract`
 prints the same as JSON. `--compat 1` selects this interface version (the only
 one); any other value is exit 10, checked after the connection and the
@@ -370,7 +370,7 @@ pgmi's own plan queries see statistics (case `deploy/session-tables-analyzed`). 
 #### `pg_temp.pgmi_run_file` (owner 2026-11-13, PGMI-974)
 
 Both binaries create it with the rest of the session API
-(`shared/contract/api-v1.sql`) before deploy.sql runs:
+(`crates/pgmi-shared/contract/api-v1.sql`) before deploy.sql runs:
 
 ```sql
 pg_temp.pgmi_run_file(p_path text) RETURNS void
@@ -965,7 +965,7 @@ Cases: `cloud/azure-msi-retry`, `cloud/azure-cli`, `cloud/azure-managed-identity
 Service principal and the real Cloud SQL connector: no case; neither can be
 pointed at a local fake from the Go binary (see `blackbox/COVERAGE.md` "Cloud
 sign-in"); the Rust binary is checked against the runner's fakes by Rust
-integration tests (`rust/pgmi/tests/google_cloud_sql.rs`, and
+integration tests (`crates/pgmi/tests/google_cloud_sql.rs`, and
 `azure_client_secret.rs` for a service principal with `AZURE_CLIENT_SECRET`). The
 default sslmodes: no case; the fakes need an explicit sslmode to be reached.
 
@@ -1194,7 +1194,7 @@ reading client is served in full. Rust unit tests
 `a_reader_taking_256_bytes_a_second_through_a_one_page_pipe_gets_every_answer`,
 `cancelled_deploys_reading_a_pipe_that_never_ends_give_their_threads_back`,
 `deploys_cancelled_while_a_pipe_has_no_writer_keep_their_places_until_it_opens`
-(`rust/pgmi/tests/serve_pipes.rs`), and unit tests
+(`crates/pgmi/tests/serve_pipes.rs`), and unit tests
 `a_reader_slower_than_a_line_per_drain_keeps_its_session_while_the_backlog_moves`,
 `blocking_work_keeps_the_slot_after_its_caller_stops_waiting`,
 `a_wait_on_a_named_pipe_ends_when_it_is_cancelled`.

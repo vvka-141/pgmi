@@ -14,7 +14,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | 0 | success | ✓ `exit-codes/0-success` |
 | 1 | general error | ✓ `commands/init-unwritable` (the only trigger found: a filesystem failure) |
 | 2 | usage error | ✓ `exit-codes/2-usage` |
-| 3 | internal panic | ✗ a release binary has no way to panic on purpose; `rust/pgmi/tests/panic.rs` (`--features testhooks`) covers the mapping |
+| 3 | internal panic | ✗ a release binary has no way to panic on purpose; `crates/pgmi/tests/panic.rs` (`--features testhooks`) covers the mapping |
 | 10 | invalid configuration | ✓ `exit-codes/10-invalid-config` (empty `PGMI_PARAM_*`), `flags/params-file`, `flags/granular-flags`, `flags/compat`, `env/connection-string-vars-refuse-flags`, `env/pgservice-refused`, `config/pgmi-yaml-invalid`, `commands/metadata-invalid`, `commands/metadata-duplicate`, `commands/info` |
 | 11 | connection failed | ✓ `exit-codes/11-connection-failed`; `--timeout` and `PGCONNECT_TIMEOUT` while connecting ✓ `env/pgconnect-timeout` |
 | 12 | overwrite denied | ✓ `exit-codes/12-overwrite-denied` |
@@ -247,7 +247,7 @@ Numbers are the parity cases in the driver research (`research-pg-driver.md`,
 | AWS IAM token shape, region from `--aws-region` / `AWS_REGION` / both, missing = 10 | ✓ `cloud/aws-iam-token` (a recording PostgreSQL front captures the token) |
 | AWS profile `credential_source` (`Ec2InstanceMetadata`, `EcsContainer`) with `role_arn` | ✓ `cloud/aws-credential-source` (fake IMDS, container endpoint and STS through `AWS_ENDPOINT_URL_STS`); `Environment` has no case, since environment keys win before the profile in both SDKs |
 | AWS console sign-in (`login_session`) | ✗ needs the sign-in service and its DPoP-bound cache; aws-config's `credentials-login` is enabled in Rust |
-| Google: `--google-instance` required; missing credentials | ✓ `cloud/google-arguments`; the dialer: no case, since Go's connector offers no Admin API endpoint override. The `fakes` server carries a Cloud SQL Admin API (`connectSettings`, `generateEphemeralCert`, an `authorized_user` token endpoint) and a TLS 1.3 instance port on `127.0.0.x:3307` that requires the ephemeral client certificate; the Rust integration test `rust/pgmi/tests/google_cloud_sql.rs` drives the Rust binary through it (`CLOUDSDK_API_ENDPOINT_OVERRIDES_SQLADMIN`) |
+| Google: `--google-instance` required; missing credentials | ✓ `cloud/google-arguments`; the dialer: no case, since Go's connector offers no Admin API endpoint override. The `fakes` server carries a Cloud SQL Admin API (`connectSettings`, `generateEphemeralCert`, an `authorized_user` token endpoint) and a TLS 1.3 instance port on `127.0.0.x:3307` that requires the ephemeral client certificate; the Rust integration test `crates/pgmi/tests/google_cloud_sql.rs` drives the Rust binary through it (`CLOUDSDK_API_ENDPOINT_OVERRIDES_SQLADMIN`) |
 | `.env` AWS keys and region reach the token | ✓ `cloud/dotenv-feeds-sdk` |
 | Lakebase (a token passed as the password) | ✓ no separate path: the password and TLS cases cover it |
 | Lakebase native sign-in (`--databricks`, Rust only, `impl: rust`): credential request shape, PAT, endpoint from flag or `PGMI_DATABRICKS_ENDPOINT`, one credential per deploy, no token in output or `--json` | ✓ `cloud/databricks-pat` (fake workspace API on `{fake_https}`, trusted through `SSL_CERT_FILE`) |

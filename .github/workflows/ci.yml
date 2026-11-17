@@ -183,8 +183,8 @@ jobs:
         run: cargo clippy --locked -p pgmi --features testhooks --all-targets -- -D warnings
       - name: Format and clippy (fuzz crate)
         run: |
-          cargo fmt --manifest-path rust/pgmi/fuzz/Cargo.toml --check
-          cargo clippy --locked --manifest-path rust/pgmi/fuzz/Cargo.toml --all-targets -- -D warnings
+          cargo fmt --manifest-path fuzz/Cargo.toml --check
+          cargo clippy --locked --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
       # The template deployment tests run in parallel; each advanced deploy
       # takes more locks than the default max_locks_per_transaction allows
       # several of at once, and a services container cannot pass -c.
@@ -240,7 +240,7 @@ jobs:
       NIGHTLY: nightly-2026-10-28
     defaults:
       run:
-        working-directory: rust/pgmi/fuzz
+        working-directory: fuzz
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # A download that fails is retried here; a crash in a fuzz run below
@@ -281,7 +281,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fuzz-artifacts
-          path: rust/pgmi/fuzz/artifacts/
+          path: fuzz/artifacts/
           if-no-files-found: ignore
 
   # The rust-version Cargo.toml declares, not the pinned toolchain, so the

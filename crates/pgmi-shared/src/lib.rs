@@ -1,6 +1,6 @@
 include!(concat!(env!("OUT_DIR"), "/files.rs"));
 
-/// The embedded file at `path`, relative to `shared/` with `/` separators
+/// The embedded file at `path`, relative to `crates/pgmi-shared/` with `/` separators
 /// (`templates/basic/deploy.sql`); `None` when nothing is embedded there.
 #[must_use]
 pub fn file(path: &str) -> Option<&'static [u8]> {

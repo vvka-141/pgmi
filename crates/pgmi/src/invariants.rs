@@ -1,7 +1,7 @@
 //! Invariants of the parsers that read untrusted text: connection strings,
 //! SQL (lexer, statement splitter, `pgmi_test` macros), `<pgmi-meta>` blocks,
 //! `.env` files and `.pgpass` lines. The proptests below and the cargo-fuzz
-//! targets in `rust/pgmi/fuzz` run the same checks. A check returns the first
+//! targets in `fuzz` run the same checks. A check returns the first
 //! invariant its input breaks; a panic inside one is a panic in the parser.
 
 use std::fmt::Write as _;

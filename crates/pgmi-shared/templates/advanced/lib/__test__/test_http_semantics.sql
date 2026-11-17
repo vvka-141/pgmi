@@ -218,7 +218,7 @@ END $$;
 -- precondition to fix (428). Neither branch is assertable from here -- reaching
 -- the handler at all requires the transaction access mode the deploy cannot
 -- change mid-run -- so both live in pgmi's own suite, in
--- rust/pgmi/tests/advanced_transactions.rs.
+-- crates/pgmi/tests/advanced_transactions.rs.
 
 -- ############################################################################
 -- RPC PARSE - an unparseable RPC body is -32700

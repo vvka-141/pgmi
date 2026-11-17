@@ -326,8 +326,8 @@ jobs:
       - name: SBOM
         run: |
           cargo install --locked cargo-cyclonedx@0.5.9
-          cargo cyclonedx --manifest-path rust/pgmi/Cargo.toml -f json --target all --spec-version 1.5 --override-filename pgmi-sbom -q
-          mv rust/pgmi/pgmi-sbom.json "dist/pgmi_${VERSION}_sbom.cdx.json"
+          cargo cyclonedx --manifest-path crates/pgmi/Cargo.toml -f json --target all --spec-version 1.5 --override-filename pgmi-sbom -q
+          mv crates/pgmi/pgmi-sbom.json "dist/pgmi_${VERSION}_sbom.cdx.json"
           (cd dist && sha256sum pgmi_* | sort -k2 > checksums.txt && cat checksums.txt)
       - name: Install the .deb and run it
         run: |

@@ -15,7 +15,7 @@
 -- The harness runs at the deploy transaction's isolation (read committed) and
 -- cannot raise it, so the "open at the resolved level" path at real stronger
 -- levels — including SERIALIZABLE READ ONLY DEFERRABLE — is proven by the
--- driver-level test in rust/pgmi/tests/advanced_transactions.rs.
+-- driver-level test in crates/pgmi/tests/advanced_transactions.rs.
 -- transaction_read_only CAN be turned on mid-transaction (only the reverse is
 -- restricted), which is what the accept-path block below relies on; the
 -- savepoint rollback around each test file reverts it.

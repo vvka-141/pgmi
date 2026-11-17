@@ -72,7 +72,7 @@ fn docs_do_not_teach_sqlstate_flattening_reraise() {
         .chain(["ai", "templates"].into_iter().flat_map(|p| {
             tree(p)
                 .into_iter()
-                .map(|(path, text)| (format!("shared/{path}"), text))
+                .map(|(path, text)| (format!("crates/pgmi-shared/{path}"), text))
         }))
         .filter(|(p, _)| p.ends_with(".md") || p.ends_with(".sql"));
     let mut offenders = Vec::new();
