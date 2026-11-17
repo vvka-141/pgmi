@@ -3,7 +3,7 @@
 // write your own tests for the gateway you write.
 //
 // TLS_DATABASE_URL names a TLS-only server with sslmode=require
-// (internal/scaffold/testdata/gateways/tls-postgres.sh in the pgmi repository);
+// (tests/gateways/tls-postgres.sh in the pgmi repository);
 // TLS_CA and TLS_WRONG_CA are its CA and an unrelated one.
 // Without them the test returns early and says so; CI sets REQUIRE_TLS_TEST.
 

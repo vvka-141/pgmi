@@ -144,7 +144,7 @@ The failed statement rolls back to the exception block's implicit savepoint,
 but the transaction stays alive and **commits**. The handler's write silently
 vanishes while the client is told "internal error." Verified with a live
 two-transaction conflict test
-(`internal/scaffold/serialization_retry_integration_test.go`).
+(`rust/pgmi/tests/serialization_retry.rs` in the pgmi repository).
 
 A savepoint cannot refresh the snapshot, which is frozen for the transaction's
 life under `repeatable read` / `serializable` — so an in-transaction retry

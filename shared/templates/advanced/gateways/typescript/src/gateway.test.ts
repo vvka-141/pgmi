@@ -3,7 +3,7 @@
 // from, not a library.
 //
 // Unit tests run anywhere and cover what the end-to-end harness
-// (internal/scaffold/testdata/gateways/e2e in the pgmi repository) cannot
+// (tests/gateways/e2e in the pgmi repository) cannot
 // reach: the retry rules, the interceptor pipeline's failure and timeout
 // paths, the rate limiter's clock. The database tests need an env=dev deploy
 // and DATABASE_URL as a login in the api role; without it they are skipped.

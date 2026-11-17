@@ -1,7 +1,7 @@
 -- ============================================================================
 -- PGMI Session Schema (Internal Tables)
 -- ============================================================================
--- Executed once per session by Go before deploy.sql runs.
+-- Executed once per session by pgmi before deploy.sql runs.
 -- Creates internal temp tables (prefixed with _) and helper functions.
 -- Public API views are created by api-v1.sql after file loading.
 --
@@ -190,7 +190,7 @@ CREATE INDEX ix_pgmi_test_directory_parent ON pg_temp._pgmi_test_directory(paren
 GRANT SELECT ON TABLE pg_temp._pgmi_test_directory TO PUBLIC;
 
 COMMENT ON TABLE pg_temp._pgmi_test_directory IS
-    'Hierarchical test directory structure. Populated by Go, used by pgmi_test_plan() function.';
+    'Hierarchical test directory structure. Populated by pgmi, used by pgmi_test_plan() function.';
 
 -- §_pgmi_test_source ──────────────────────────────────────────────────────────
 -- Populated by: Go for files inside __test__/ directories
@@ -212,7 +212,7 @@ CREATE INDEX ix_pgmi_test_source_directory ON pg_temp._pgmi_test_source(director
 GRANT SELECT ON TABLE pg_temp._pgmi_test_source TO PUBLIC;
 
 COMMENT ON TABLE pg_temp._pgmi_test_source IS
-    'Test file content for pgmi_test() macro. Populated by Go from __test__/ directories.';
+    'Test file content for pgmi_test() macro. Populated by pgmi from __test__/ directories.';
 
 
 -- §pgmi_test_event ────────────────────────────────────────────────────────────
@@ -453,7 +453,7 @@ BEGIN
     -- so an editor backup ('notes.txt~') or a punctuation tail extracted a value
     -- the CHECK then rejected, aborting the whole registration; a trailing dot
     -- ('notes.') matched '\.' but captured nothing, yielding NULL against a
-    -- NOT NULL column. Both are reachable — the Go scanner does no name filtering.
+    -- NOT NULL column. Both are reachable — pgmi's file scan does no name filtering.
     -- No match (no extension, punctuation tail, trailing dot) means '' — no
     -- extension — which is what those filenames have.
     v_row.extension          := COALESCE(

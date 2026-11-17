@@ -242,7 +242,7 @@ minutes. A rate limit on `/auth/`. A Content-Security-Policy on the pages you
 serve, since any script on your origin can read `__Host-csrf`. Refresh of the
 provider's discovery document if it can change while the gateway runs.
 
-**Tests.** The end-to-end harness in `internal/scaffold/testdata/gateways/e2e/`
+**Tests.** The end-to-end harness in `tests/gateways/e2e/`
 deploys the template (`env=dev`) into PostgreSQL 18, runs a mock OIDC provider
 and a reference gateway, and checks the happy path and every refusal above:
 state, replay and cross-browser callbacks, the provider's `error=`, PKCE,

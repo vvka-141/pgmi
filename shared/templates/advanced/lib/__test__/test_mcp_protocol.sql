@@ -596,8 +596,8 @@ BEGIN
     RAISE DEBUG '  + malformed request ids rejected with -32600 and a null id';
 END $$;
 
--- The rejection must not swallow valid ids. Numbers stay numbers: the Go server
--- (internal/mcp) accepts any JSON number, and the two surfaces must agree.
+-- The rejection must not swallow valid ids. Numbers stay numbers: pgmi serve's
+-- MCP server accepts any JSON number, and the two surfaces must agree.
 DO $$
 DECLARE
     v_case      record;

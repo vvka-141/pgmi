@@ -210,7 +210,7 @@ Without the header, and with OAuth not configured, the client sees only
 Transport-level behavior (the header checks, the status of each answer, the
 retryable error, what is intentionally not implemented) is specified on the
 [protocol page](MCP-PROTOCOL.md#transport-behavior). The end-to-end tests are
-the `mcp` suite of `internal/scaffold/testdata/gateways/e2e/` in the pgmi
+the `mcp` suite of `tests/gateways/e2e/` in the pgmi
 repository.
 
 ## MCP Identity

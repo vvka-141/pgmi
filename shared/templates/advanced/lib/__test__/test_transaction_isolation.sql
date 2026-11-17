@@ -14,7 +14,7 @@
 -- path for STRONGER-than-current levels is proven at the unit level by the rank
 -- tests in lib/api/00-transaction-isolation.sql and, end to end at a real
 -- stronger level, by the driver-level test in
--- internal/scaffold/integration_test.go (TestTemplateTransactionIsolation).
+-- rust/pgmi/tests/advanced_transactions.rs (transaction_isolation).
 -- Here we exercise: floor satisfied (NULL / read committed) => dispatch;
 -- floor too weak (repeatable read / serializable) => reject.
 -- ============================================================================

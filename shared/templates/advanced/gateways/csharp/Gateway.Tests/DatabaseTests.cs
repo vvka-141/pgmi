@@ -4,7 +4,7 @@
 // Against a deployed template: an env=dev deploy and DATABASE_URL as a login
 // in the api role (../README.md). Without DATABASE_URL these return early and
 // say so (xunit 2 has no runtime skip). pgmi's end-to-end harness
-// (internal/scaffold/testdata/gateways/e2e) checks the full wire contract;
+// (tests/gateways/e2e) checks the full wire contract;
 // these check the same gateway from inside, the way a project's CI would.
 
 using System.Net;
@@ -245,7 +245,7 @@ public class DatabaseTests(SignedInGateway gateway, ITestOutputHelper output) : 
     }
 }
 
-// TLS_DATABASE_URL names a TLS-only server (testdata/gateways/tls-postgres.sh)
+// TLS_DATABASE_URL names a TLS-only server (tests/gateways/tls-postgres.sh in the pgmi repository)
 // with sslmode=require; TLS_CA and TLS_WRONG_CA are its CA and an unrelated one.
 // Without them the test returns early and says so; CI sets REQUIRE_TLS_TEST.
 public class TlsTests(ITestOutputHelper output)

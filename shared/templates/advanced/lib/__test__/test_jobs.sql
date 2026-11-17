@@ -3,8 +3,8 @@
 -- ============================================================================
 -- What runs inside the deploy's transaction: the driver's refusals, which come
 -- before it takes any lock, and the run-log writers. The committing loop and
--- two sessions racing for one job are in
--- internal/scaffold/advanced_jobs_integration_test.go.
+-- two sessions racing for one job are in pgmi's own suite, in
+-- rust/pgmi/tests/advanced_sessions.rs.
 -- ============================================================================
 
 CREATE FUNCTION pg_temp.job_locks_held()

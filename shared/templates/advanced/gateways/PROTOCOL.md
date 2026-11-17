@@ -483,5 +483,5 @@ one deployment recipe fit them all:
 `GET /health` answers 200 `{"status": "healthy"}` once the process serves
 requests. Any path the gateway does not serve is 404 `pgmi.not_found`.
 
-The end-to-end harness in `internal/scaffold/testdata/gateways/e2e/` of the
+The end-to-end harness in `tests/gateways/e2e/` of the
 pgmi repository checks these rules against a running gateway in any language.

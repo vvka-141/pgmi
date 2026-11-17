@@ -387,7 +387,8 @@ Beyond standard PostgreSQL auth (connection strings, `PGPASSWORD`, `.pgpass`), p
 
 ## Contributing
 
-Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for development
+Contributions welcome. pgmi is written in Rust; see
+[CONTRIBUTING.md](CONTRIBUTING.md) for the build, the tests and the
 guidelines, [SUPPORT.md](SUPPORT.md) for questions and issue routing, and the
 [Code of Conduct](CODE_OF_CONDUCT.md) for community standards.
 

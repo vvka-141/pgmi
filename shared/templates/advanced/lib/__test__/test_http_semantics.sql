@@ -217,8 +217,8 @@ END $$;
 -- undeclared route dispatched inside a READ ONLY transaction is the caller's
 -- precondition to fix (428). Neither branch is assertable from here -- reaching
 -- the handler at all requires the transaction access mode the deploy cannot
--- change mid-run -- so both live in the Go suite, in
--- internal/scaffold/transaction_policy_test.go.
+-- change mid-run -- so both live in pgmi's own suite, in
+-- rust/pgmi/tests/advanced_transactions.rs.
 
 -- ############################################################################
 -- RPC PARSE - an unparseable RPC body is -32700

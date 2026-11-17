@@ -2,12 +2,13 @@
 -- PGMI Session API v1
 -- ============================================================================
 -- Creates public views and functions for deploy.sql to use.
--- Executed by Go after schema.sql and file loading.
+-- Executed by pgmi after schema.sql and file loading.
 --
 -- This file is the public API that deploy.sql depends on. Every view names its
 -- columns, so a column added to an internal table (_pgmi_*) stays internal
 -- until it is listed here. rust/pgmi/tests/testdata/session-api.snapshot
--- records the published columns; a view change is a deliberate diff there.
+-- records the published columns, and rust/pgmi/tests/session_sql.rs fails when
+-- a view changes them, so a view change is a deliberate diff there.
 --
 -- PUBLIC VIEWS:
 --   pgmi_source_view          - Source files
@@ -154,7 +155,7 @@ GRANT SELECT ON pg_temp.pgmi_plan_view TO PUBLIC;
 -- §pgmi_test_generate ────────────────────────────────────────────────────────
 -- Generates SQL for test execution with savepoint isolation.
 -- Uses parallel arrays instead of hstore (no extension dependency).
--- Called by Go preprocessor to expand pgmi_test() macro.
+-- Called by pgmi's preprocessor to expand the pgmi_test() macro.
 CREATE OR REPLACE FUNCTION pg_temp.pgmi_test_generate(
     p_pattern TEXT DEFAULT NULL,
     p_callback TEXT DEFAULT 'pg_temp.pgmi_test_callback'
@@ -320,7 +321,7 @@ Parameters:
 Returns: SQL string ready for EXECUTE that runs the test suite.
          When the plan contains no test, the returned SQL raises no_data_found
          instead: a test-gated deploy that gated on nothing must not report success.
-Used by: Go preprocessor to expand pgmi_test() macro calls.';
+Used by: pgmi''s preprocessor to expand pgmi_test() macro calls.';
 
 -- ============================================================================
 -- pgmi_run_file: run one project file by its path
