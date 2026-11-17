@@ -5,6 +5,8 @@ Ticket: PGMI-835. Builds on 0001 (crate layout), 0010 (embedded assets),
 0018 (release), 0022 (library layout). Supersedes the folder list in 0001.
 Checked on b83c1a2f, 2026-11-17. 0.20.0 then shipped through
 `release-rust.yml` before any move, so that workflow keeps its name.
+The moves below were made on 2026-11-17; the paths in this record are
+the paths of that day.
 
 ## Context
 
