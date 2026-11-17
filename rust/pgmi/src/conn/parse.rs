@@ -110,7 +110,7 @@ pub(crate) enum ParseError {
     KeyWithoutEquals,
     UnterminatedQuote,
     PartWithoutEquals,
-    SslMode(String),
+    SslMode,
 }
 
 impl fmt::Display for ParseError {
@@ -158,7 +158,10 @@ impl fmt::Display for ParseError {
                 f,
                 "invalid connection string ({HIDDEN}): a part has no \"=\""
             ),
-            ParseError::SslMode(v) => write!(f, "invalid SSL Mode \"{v}\""),
+            ParseError::SslMode => write!(
+                f,
+                "invalid SSL Mode ({HIDDEN}): use Disable, Allow, Prefer, Require, VerifyCA or VerifyFull"
+            ),
         }
     }
 }
@@ -537,7 +540,7 @@ fn npgsql_sslmode(v: &str) -> Result<String> {
         "require" => "require",
         "verifyca" => "verify-ca",
         "verifyfull" => "verify-full",
-        _ => return Err(ParseError::SslMode(v.to_string())),
+        _ => return Err(ParseError::SslMode),
     };
     Ok(m.to_string())
 }
@@ -983,8 +986,10 @@ mod tests {
             "5"
         );
         let e = parse("Host=h;SSL Mode=Sometimes").unwrap_err();
-        assert_eq!(e, ParseError::SslMode("Sometimes".into()));
-        assert_eq!(e.to_string(), "invalid SSL Mode \"Sometimes\"");
+        assert_eq!(e, ParseError::SslMode);
+        assert!(!e.to_string().contains("Sometimes"), "{e}");
+        let e = parse("host=h dbname=d password=S3cr;sslmode=etX tail").unwrap_err();
+        assert!(!e.to_string().contains("etX"), "{e}");
         for key in ["Pooling", "Trust Server Certificate"] {
             let e = parse(&format!("Host=h;Database=d;{key}=true")).unwrap_err();
             assert_eq!(e, ParseError::UnknownKey(key.into()));

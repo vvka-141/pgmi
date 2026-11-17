@@ -496,6 +496,11 @@ accept:
     field: stdout
     rust: "## Retries"
   - row: Compared with the released 0.14.1
+    case: cases/commands/ai\.yaml
+    step: steps[1]
+    field: stdout
+    rust: '"name": "pgmi_run_file"'
+  - row: Compared with the released 0.14.1
     case: cases/commands/init\.yaml
     field: stdout
     rust: "├── deploy/"
@@ -550,7 +555,7 @@ accept:
   - row: Compared with the released 0.14.1
     case: cases/.*\.yaml
     field: stderr
-    go: 'strconv\.ParseInt: parsing "[^"]*": invalid syntax'
+    go: 'strconv\.ParseInt: parsing "[^"]*": (invalid syntax|value out of range)'
     go_as: must be an integer
   - row: Compared with the released 0.14.1
     case: cases/.*\.yaml
