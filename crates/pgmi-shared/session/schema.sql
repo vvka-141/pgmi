@@ -6,10 +6,10 @@
 -- Public API views are created by api-v1.sql after file loading.
 --
 -- DATA FLOW:
---   CLI flags ──► Go ──► _pgmi_parameter (--param key=value)
---   Binary version ──► Go ──► _pgmi_runtime (pgmi and contract version)
---   Project files ──► Go ──► _pgmi_source (via pgmi_register_file)
---   Test files ──► Go ──► _pgmi_test_directory + _pgmi_test_source
+--   CLI flags ──► pgmi ──► _pgmi_parameter (--param key=value)
+--   Binary version ──► pgmi ──► _pgmi_runtime (pgmi and contract version)
+--   Project files ──► pgmi ──► _pgmi_source (via pgmi_register_file)
+--   Test files ──► pgmi ──► _pgmi_test_directory + _pgmi_test_source
 --   api-v1.sql ──► Creates public views (pgmi_source_view, pgmi_plan_view, etc.)
 --   deploy.sql ──► queries views ──► EXECUTE content
 --
@@ -58,7 +58,7 @@ END $$;
 
 
 -- §_pgmi_parameter ───────────────────────────────────────────────────────────
--- Populated by: Go CLI (--param k=v)
+-- Populated by: pgmi (--param k=v)
 -- Used by: deploy.sql via pgmi_parameter_view or current_setting('pgmi.key', true)
 CREATE TEMP TABLE pg_temp._pgmi_parameter
 (
@@ -71,7 +71,7 @@ GRANT SELECT ON TABLE pg_temp._pgmi_parameter TO PUBLIC;
 
 
 -- §_pgmi_runtime ─────────────────────────────────────────────────────────────
--- Populated by: Go, one row per session (the binary's version, the applied contract)
+-- Populated by: pgmi, one row per session (the binary's version, the applied contract)
 -- Used by: deploy.sql via pgmi_runtime_view
 CREATE TEMP TABLE pg_temp._pgmi_runtime
 (
@@ -86,7 +86,7 @@ GRANT SELECT ON TABLE pg_temp._pgmi_runtime TO PUBLIC;
 
 
 -- §_pgmi_source ──────────────────────────────────────────────────────────────
--- Populated by: Go via pgmi_register_file() for each discovered file
+-- Populated by: pgmi via pgmi_register_file() for each discovered file
 -- Used by: pgmi_plan_view, deploy.sql queries
 -- Excludes: deploy.sql itself and __test__/ files (see chk_path_is_not_test)
 -- Path columns here and in the test tables are COLLATE "C": ORDER BY path is
@@ -152,7 +152,7 @@ GRANT SELECT ON TABLE pg_temp._pgmi_source TO PUBLIC;
 
 
 -- §_pgmi_source_metadata ──────────────────────────────────────────────────────
--- Populated by: Go parser when <pgmi-meta> XML blocks found in SQL files
+-- Populated by: pgmi when <pgmi-meta> XML blocks found in SQL files
 -- Used by: pgmi_plan_view (LEFT JOIN for optional metadata)
 -- Files without metadata: use path as fallback sort key (see plan view)
 CREATE TEMP TABLE _pgmi_source_metadata (
@@ -175,7 +175,7 @@ COMMENT ON TABLE pg_temp._pgmi_source_metadata IS
 GRANT SELECT ON TABLE pg_temp._pgmi_source_metadata TO PUBLIC;
 
 -- §_pgmi_test_directory ───────────────────────────────────────────────────────
--- Populated by: Go when discovering __test__/ directories
+-- Populated by: pgmi when discovering __test__/ directories
 -- Used by: pgmi_test_plan() for depth-first traversal via parent_path
 CREATE TEMP TABLE pg_temp._pgmi_test_directory
 (
@@ -193,7 +193,7 @@ COMMENT ON TABLE pg_temp._pgmi_test_directory IS
     'Hierarchical test directory structure. Populated by pgmi, used by pgmi_test_plan() function.';
 
 -- §_pgmi_test_source ──────────────────────────────────────────────────────────
--- Populated by: Go for files inside __test__/ directories
+-- Populated by: pgmi for files inside __test__/ directories
 -- Used by: pgmi_test_plan() and pgmi_test() macro execution
 -- is_fixture: true for _setup.sql/_setup.psql (run before tests in same directory)
 CREATE TEMP TABLE pg_temp._pgmi_test_source
@@ -412,7 +412,7 @@ AS $$
 $$;
 
 -- §pgmi_register_file ─────────────────────────────────────────────────────────
--- Called by: Go for each discovered file
+-- Called by: pgmi for each discovered file
 -- Does: normalize path (backslash→/, ensure ./), compute derived fields, INSERT
 CREATE OR REPLACE FUNCTION pg_temp.pgmi_register_file(
     in_path TEXT,
