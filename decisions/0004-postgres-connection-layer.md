@@ -90,7 +90,7 @@ above the wire protocol:
   looked at, exit 11 (contract reworded 2026-11-10).
 - `default_query_exec_mode` is one of the three PGlite keys; its value is
   accepted and ignored, since pgmi has one execution mode.
-- Go speaks protocol 3.2 when `max_protocol_version=3.2` is set, including
+- Go 0.14.1 speaks protocol 3.2 when `max_protocol_version=3.2` is set, including
   the longer 3.2 cancel key (`connection/protocol-version`, PGMI-830).
   tokio-postgres always sends 3.0. The case passes as long as the keys are
   accepted, but `min_protocol_version=3.2` then means a 3.0 session the

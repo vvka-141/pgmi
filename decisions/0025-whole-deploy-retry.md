@@ -11,7 +11,7 @@ connection errors only). `--timeout` (default 3m, `0` = no limit, flag beats
 `pgmi.yaml`) bounds everything after the arguments and `pgmi.yaml` are read:
 loading, sign-in, connecting, the overwrite prompt, the session and
 deploy.sql. Expiring while connecting is exit 11; while SQL runs, pgmi
-cancels the statement, rolls back and exits 16. Same in Go and Rust except a
+cancels the statement, rolls back and exits 16. Same in Go 0.14.1 and Rust except a
 frozen server (PGMI-887). Full report: PGMI-882 comment of 2026-11-12.
 
 ## Decision
@@ -105,13 +105,13 @@ own property (owner choice 1).
 
 ### Docs plan
 
-One section, "Time box and retries", staged as
-`rust/docs/switch-day/timeout-and-retry.md`, the single source linked from
-CLI.md (`--timeout`), CICD.md and PRODUCTION.md ("Running unattended"): the
+One section, [Time box and retries](../docs/CLI.md#time-box-and-retries) in
+`docs/CLI.md`, the single source linked from the `--timeout` row, CICD.md
+and PRODUCTION.md ("Running unattended"): the
 time box, what is retried and what never is, backoff, exit codes, `--json`
 attempts, and a GitHub Actions job with no retry step. A row in the
 contract's "Behaviour changes in 0.20" table and a line in
-`rust/docs/release-notes-0.20.md`.
+the 0.20.0 section of `RELEASES.md`.
 
 ## Owner's choices (2026-11-12)
 
@@ -121,7 +121,7 @@ contract's "Behaviour changes in 0.20" table and a line in
 
 ## Consequences
 
-- Rust only (Go is feature-frozen); a 0.20 improvement over Go.
+- Rust only (Go was feature-frozen, then removed in 0.20); a 0.20 improvement over Go 0.14.1.
 - Built in PGMI-886 on the fault-injection suite (PGMI-885): one test per
   table row, plus the time-box cases (stop at the deadline with 16, a wait cut
   short, Ctrl-C during a wait gives 130, a failing test never retried).
@@ -150,7 +150,7 @@ contract's "Behaviour changes in 0.20" table and a line in
 - `--json` names an attempt's start `startedAt`, as the record's own.
 - Owner decision PGMI-909 (option A): only a run whose attempt reached the
   server (opened its session) is retried. A first attempt that never
-  connects, or whose sign-in gives up, fails at once as Go does; the last two
+  connects, or whose sign-in gives up, fails at once as Go 0.14.1 did; the last two
   table rows apply only after an earlier attempt connected.
 
 ## Changed by PGMI-918 (owner, 2026-11-12): no retry after a commit
@@ -186,7 +186,7 @@ still retried.
 `CREATE INDEX CONCURRENTLY` commits its catalog entry before it builds. A
 build that failed with a retried error (a lock timeout, a deadlock) left an
 INVALID index; the retry ran `CREATE INDEX CONCURRENTLY IF NOT EXISTS`
-again, which skipped it, and the deploy exited 0 where Go exits 13. A
+again, which skipped it, and the deploy exited 0 where Go 0.14.1 exited 13. A
 failed unit that ran `CREATE [UNIQUE] INDEX CONCURRENTLY`,
 `REINDEX ... CONCURRENTLY`, `DROP INDEX CONCURRENTLY` or
 `ALTER TABLE ... DETACH PARTITION ... CONCURRENTLY` now ends the run,

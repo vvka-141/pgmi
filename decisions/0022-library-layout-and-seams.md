@@ -40,6 +40,9 @@ Option 3.
 
 ### Layout
 
+Record 0027 later moved `rust/pgmi/` to `crates/pgmi/` and `rust/blackbox-skip.txt`
+to `blackbox/skip.txt`; the Go code named below is kept at tag `go-legacy`.
+
     rust/pgmi/
       Cargo.toml            [lib] name = "pgmi"; [[bin]] name = "pgmi"
       src/main.rs           sigpipe, panic hook, catch_unwind, Env snapshot,
@@ -146,7 +149,7 @@ The lib target is not published as a library API (0001 still holds).
 
 Each step is one commit; after each: `cargo fmt --check`, `cargo clippy
 -D warnings`, `cargo test --workspace`, `cargo deny check`,
-`rust/check-no-c.sh`, `rust/check-package.sh`, and the black-box suite on
+`scripts/check-no-c.sh`, `scripts/check-package.sh`, and the black-box suite on
 the Rust binary with the same passing list as before (135/141 today; no
 case may move from pass to fail). Behaviour fixes are separate tickets and
 land before or between steps, each with a black-box case.
@@ -312,7 +315,7 @@ unit groups (2, 3, 4, 10, 12, wizards; done 2026-11-11, PGMI-863, mapped in
 `conn::parse` (done 2026-11-11 with the lexer, splitter, metadata, `.env` and
 `.pgpass` targets, PGMI-864 and PGMI-870: proptests in `invariants.rs`, one
 cargo-fuzz target per parser, the CI job `fuzz` blocking); port the content linters and the template deployment tests
-of `internal/scaffold` and `internal/services` to `rust/pgmi/tests/` before
+of Go's `internal/scaffold` and `internal/services` to `crates/pgmi/tests/` before
 switch day. That port landed 2026-11-11 (PGMI-862): linters in
 `src/content_tests/`, deployments in `tests/`, mapped in
 [test-parity-shared.md](test-parity-shared.md).
@@ -482,7 +485,7 @@ independent Codex review of 58bad99f. What changed:
   `template1`) and fails closed when the role settings do not decode.
 - **Summary.** `deploy::summary` returns `output::Summary { Done, Failed }`.
 - **CI.** The `blackbox-rust` job is blocking: every case passes but those
-  `rust/blackbox-skip.txt` names with a reason, so a new case gates at once.
+  `blackbox/skip.txt` names with a reason, so a new case gates at once.
 - **Serve back-pressure.** The reader answers through `deliver()`, which
   waits for room in the answer queue, racing the session and `DRAIN`. A full
   queue no longer means the client stopped reading; only a client that takes
@@ -599,7 +602,7 @@ The fourth gate review (`.private/reviews/rust-gates-2026-11-12c.md`) and a
 Codex review of 6f94c1ad. Three rounds had moved serve's end-of-session bug
 instead of removing it, because the transport tests used an in-memory duplex
 with tiny lines, unlike a real stdout pipe. This round wrote the tests first:
-`rust/pgmi/tests/serve_pipes.rs` runs the real binary over OS pipes (an
+`crates/pgmi/tests/serve_pipes.rs` runs the real binary over OS pipes (an
 8 KB/s and an 800 KB/s reader, a 3.5 MB answer, a paced client that never
 reads, a 3000-request burst, a non-reading client after EOF, two signals),
 and the unit tests gained `StdoutLike`, a transport that takes a 2 MiB write
