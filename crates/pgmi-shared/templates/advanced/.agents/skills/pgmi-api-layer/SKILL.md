@@ -18,6 +18,12 @@ skill adds what this template names and enforces, and the third layer.
 
 - **Entities**: `object_id core.entity_id`, `organization_id`, row-level
   security forced through `core.apply_org_rls` (pgmi-endpoint).
+- **Two tenant column names.** Your entity tables name the organization
+  `organization_id`. The template's membership tables (`membership/`) name it
+  `organization_object_id`, so a key to `membership.organization_membership`
+  is `(organization_object_id, object_id)`. Both are tenant columns to the
+  deploy's guards (`pg_temp.tenant_column()` in `deploy/settings.sql`); copy
+  the name from the table you reference, never the other one.
 - **A foreign key between two organizations' tables is composite**,
   `(organization_id, project_id) REFERENCES core.project (organization_id, object_id)`,
   and the target has `UNIQUE (organization_id, object_id)`. A foreign-key
