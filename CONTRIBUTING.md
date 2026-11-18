@@ -177,6 +177,9 @@ it **in the same commit**:
 4. A test or SQL example that changed runs: mark it `sql runnable target=...`
    so `crates/pgmi/tests/skill_blocks.rs` deploys it, or check it against a live
    database.
+   Every SQL block, runnable or not, must also name only schemas, tables,
+   columns and functions the advanced template has or a skill creates:
+   `crates/pgmi/tests/skill_schema.rs` checks that against a deployed template.
 5. Examples that teach template patterns use project, task and document.
 6. Run `make sync-ai` to refresh the local mirror in `.claude/skills/` from the
    scaffold trees.
