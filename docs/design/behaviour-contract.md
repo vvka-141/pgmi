@@ -97,8 +97,13 @@ as POSIX shell words, single-quoted unless plain (`pgmi deploy 'a b' -d mydb`).
 Esc on the template screen is `init cancelled`, exit 12 (Go steps back to a
 path screen first; the Rust binary has none, so its first Esc cancels);
 Ctrl-C on any init screen is `init interrupted`, exit 130.
+The basic and advanced templates write every skill under `.agents/skills/` and
+the same files under `.claude/skills/`, where Claude Code reads skills (Rust
+only, new in 0.20.x). A target inside a git repository below its root gets one
+more note on stderr: a Claude Code session started at the root loads the
+skills only after it reads a file in the project.
 
-Cases: `terminal/init-wizard-esc-and-ctrl-c`, `commands/init-next-step-quoted`, `commands/init`, `commands/init-unwritable`, `commands/init-unlistable`, `terminal/init-wizard`, `terminal/non-interactive`, `commands/init-project-name`, `terminal/init-wizard-connection`, `terminal/init-wizard-connection-esc`.
+Cases: `commands/init-claude-skills`, `terminal/init-wizard-esc-and-ctrl-c`, `commands/init-next-step-quoted`, `commands/init`, `commands/init-unwritable`, `commands/init-unlistable`, `terminal/init-wizard`, `terminal/non-interactive`, `commands/init-project-name`, `terminal/init-wizard-connection`, `terminal/init-wizard-connection-esc`.
 
 ### Template deployments
 
@@ -164,8 +169,14 @@ one per line with a tab and its description, `__completeNoDesc` without, then
 `:<directive>`). They offer subcommands, flags (`-` typed), `--sslmode`
 values, `init --template` and `templates describe` names, the `completion`
 shells, and directories for a project path.
+`ai check [path] [--fix]` (Rust only, new in 0.20.x) prints one line per skill
+in `.agents/skills/` that Claude Code cannot see or reads an old copy of (no
+`SKILL.md`, a missing `.claude/skills/<name>`, one that is not a directory, one
+whose files differ), then a summary, and exits 1 if there was any; `--fix`
+first copies `.agents/skills/<name>/` over each such copy. No skills is exit 0;
+a path that does not exist is exit 10.
 
-Cases: `commands/bare-not-interactive`, `commands/deploy-help-exit-codes`, `commands/completion-words`, `commands/templates`, `commands/version`, `commands/ai`, `commands/completion`, `commands/help`, `commands/bare`, `commands/deploy-help-text`.
+Cases: `commands/ai-check`, `commands/bare-not-interactive`, `commands/deploy-help-exit-codes`, `commands/completion-words`, `commands/templates`, `commands/version`, `commands/ai`, `commands/completion`, `commands/help`, `commands/bare`, `commands/deploy-help-text`.
 
 ### Verbose output
 
