@@ -34,6 +34,11 @@ contract and refuses a deploy that breaks it.
 | restrict which rows or functions a role can reach | `README.md` (privileges) and `.agents/skills/pgmi-api-layer/SKILL.md` first; `.agents/skills/postgres-security/SKILL.md` explains the mechanism |
 | build a client, gateway or service in any language that talks to this database | `gateways/README.md`, then `gateways/PROTOCOL.md` |
 
+The same skills are in `.claude/skills/` for Claude Code, which loads them by
+name; other agents read `.agents/skills/`. Edit `.agents/skills/`, then run
+`pgmi ai check --fix` so the copy matches. When you hand work to a subagent,
+name in its brief the skills the task needs: it may never read this table.
+
 ## Gateways
 
 If you build a client, gateway or service in any language that talks to this
@@ -67,4 +72,6 @@ Instruction files load only for the folder an agent works in. If this project
 sits inside a larger workspace, add one line to the workspace root `AGENTS.md`
 (create it if missing): "The PostgreSQL project in `<path>` has its own
 `AGENTS.md`; read it before working there, and read `<path>/gateways/` before
-building a client, gateway or service for it."
+building a client, gateway or service for it." Claude Code started at the
+workspace root loads this project's `.claude/skills/` only after it reads a
+file here: start it in this folder, or run `/add-dir <path>` in the session.

@@ -259,6 +259,8 @@ myapp/
 ├── CLAUDE.md
 ├── .agents/
 │   └── skills/             ← Project-owned agent skills
+├── .claude/
+│   └── skills/             ← The same skills for Claude Code (pgmi ai check --fix refreshes them)
 ├── README.md
 ├── .gitignore
 └── .pgmiignore             ← Files pgmi does not load (parameter files)

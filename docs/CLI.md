@@ -511,7 +511,11 @@ Scaffold a new pgmi project.
 pgmi init [target_path] [flags]
 ```
 
-Creates a ready-to-deploy project. Without `--template` (and without a TTY to run the wizard) it writes the **minimal** project: `deploy.sql`, `hello_world.sql` and a `.pgmiignore` that keeps parameter files and backup copies out of the session, nothing else. The `basic` and `advanced` templates add a directory layout and a README, and also write agent guidance the project owns: `AGENTS.md` (a routing table for AI assistants), `CLAUDE.md` (which imports `AGENTS.md`) and `.agents/skills/` in the [Agent Skills](https://agentskills.io/specification) format. Commit them and edit them as your conventions change; they point to `pgmi ai contract` for facts that change with the pgmi version.
+Creates a ready-to-deploy project. Without `--template` (and without a TTY to run the wizard) it writes the **minimal** project: `deploy.sql`, `hello_world.sql` and a `.pgmiignore` that keeps parameter files and backup copies out of the session, nothing else. The `basic` and `advanced` templates add a directory layout and a README, and also write agent guidance the project owns: `AGENTS.md` (a routing table for AI assistants), `CLAUDE.md` (which imports `AGENTS.md`) and `.agents/skills/` in the [Agent Skills](https://agentskills.io/specification) format, with a copy in `.claude/skills/`, the only project folder Claude Code reads skills from. Commit them and edit them as your conventions change; edit `.agents/skills/` and refresh the copy with [`pgmi ai check --fix`](#pgmi-ai-check). They point to `pgmi ai contract` for facts that change with the pgmi version.
+
+The copy is plain files, not symlinks: a symlink needs Developer Mode on Windows and turns into a text file in a checkout with `core.symlinks=false`, and Claude Code then sees no skill.
+
+**A project inside a bigger repository** (say `db/` of an application repo): Claude Code loads `.claude/skills/` from the directory it starts in and its parents, and a nested `db/.claude/skills/` only after it reads a file in `db/`. `pgmi init` says so when the target is below a git repository's root. Start Claude Code in `db/`, or run `/add-dir db` in the session; pgmi writes nothing outside the target.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -937,8 +941,27 @@ Outputs an overview document similar to llms.txt format, explaining:
 - Key SQL conventions
 
 The rest of the agent guidance belongs to the project: `pgmi init` writes
-`AGENTS.md` and skills in `.agents/skills/`, and the advanced template adds
-reference gateways in `gateways/`.
+`AGENTS.md` and skills in `.agents/skills/` (copied to `.claude/skills/` for
+Claude Code), and the advanced template adds reference gateways in `gateways/`.
+
+### pgmi ai check
+
+```bash
+pgmi ai check [path] [--fix]
+```
+
+Checks that every skill in `.agents/skills/` is where Claude Code finds it, a
+matching copy in `.claude/skills/`. It reports a skill with no `SKILL.md`, a
+missing copy, a copy that is not a directory (a symlink checked out as a
+file), and a copy that differs from `.agents/skills/`. For a project below a
+git repository's root it adds a note: a session started at the root sees the
+skills only after it reads a file in the project.
+
+`--fix` copies `.agents/skills/<name>/` over each missing, broken or old copy
+first. It never touches a `.claude/skills/` entry with no `.agents/skills/`
+counterpart, so your own Claude Code skills stay.
+
+Exit 0 when Claude Code finds every skill, 1 otherwise.
 
 ### pgmi ai contract
 

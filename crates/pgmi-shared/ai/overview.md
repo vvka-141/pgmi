@@ -197,8 +197,9 @@ Full list with honest competitor lines and code links:
 ## Project Skills
 
 `pgmi init -t basic` and `-t advanced` write the project's agent guidance:
-`AGENTS.md` and skills in `.agents/skills/` (the default minimal template writes
-none). Both get `pgmi-workflow`, `pgmi-sql`,
+`AGENTS.md` and skills in `.agents/skills/`, copied to `.claude/skills/` for
+Claude Code (the default minimal template writes none). `pgmi ai check` reports
+a skill Claude Code cannot find; `--fix` refreshes the copy. Both get `pgmi-workflow`, `pgmi-sql`,
 `pgmi-testing`, `pgmi-metadata`, `pgmi-debug-deploy`, `pgmi-design`,
 `pgmi-layers` and the PostgreSQL recipes `postgres-analytics`,
 `postgres-change-capture`, `postgres-concurrency`, `postgres-indexing`,
@@ -373,6 +374,6 @@ The CLI never decides what SQL to run; your deploy.sql orchestrates everything i
 
 ## Learn More
 
-- `.agents/skills/` in a scaffolded project — SQL, testing and design conventions
+- `.agents/skills/` in a scaffolded project (`.claude/skills/` for Claude Code) — SQL, testing and design conventions
 - `pgmi ai contract` — the exact session API of this binary
 - [Documentation](https://vvka-141.github.io/pgmi/docs/readme/)

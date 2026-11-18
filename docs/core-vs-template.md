@@ -16,7 +16,7 @@ A pgmi project has four parts. Only the first one is pgmi.
 |---|---|---|---|
 | [pgmi core](#pgmi-core) | The binary, its session API, the execution contract, the test macro, `pgmi ai`, `pgmi serve` | pgmi; upgrades with the binary | Deploy time |
 | [Template code](#template-code) | The files `pgmi init` wrote: minimal, basic or advanced | You, from the moment it lands | Deploy time, through your `deploy.sql` |
-| [Agent guidance](#agent-guidance) | `AGENTS.md`, `CLAUDE.md` and `.agents/skills/` (basic and advanced only) | You | While an agent develops the project |
+| [Agent guidance](#agent-guidance) | `AGENTS.md`, `CLAUDE.md`, `.agents/skills/` and its copy `.claude/skills/` (basic and advanced only) | You | While an agent develops the project |
 | [Application features](#application-features) | The advanced template's handlers, sessions, row-level security and gateways | You | Runtime, on every request |
 
 ## pgmi core
@@ -76,8 +76,11 @@ not a framework: pgmi never checks that your project still follows it.
 
 The basic and advanced templates also write an `AGENTS.md` (a routing table
 for coding agents), a `CLAUDE.md` that imports it, and skills under
-`.agents/skills/`. These are project files, not part of pgmi: commit them and
-change them to match your conventions. A pgmi upgrade does not touch them.
+`.agents/skills/`, copied to `.claude/skills/` because Claude Code reads skills
+from no other project folder. These are project files, not part of pgmi:
+commit them and change them to match your conventions; after editing
+`.agents/skills/`, `pgmi ai check --fix` refreshes the copy. A pgmi upgrade
+does not touch them.
 The facts that must match the binary come from `pgmi ai contract` instead.
 
 ## Application features

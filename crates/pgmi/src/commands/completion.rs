@@ -501,7 +501,7 @@ mod tests {
             (&["templates", "describe", ""], "advanced basic minimal", 4),
             (&["templates", "describe", "basic", ""], "", 4),
             (&["templates", "nosuch", ""], "", 0),
-            (&["ai", ""], "contract", 4),
+            (&["ai", ""], "check contract", 4),
             (&["completion", ""], "bash zsh fish powershell", 4),
             (&["completion", "bash", ""], "", 0),
             (

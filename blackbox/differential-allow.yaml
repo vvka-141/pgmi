@@ -505,6 +505,31 @@ accept:
     field: stdout
     rust: "├── deploy/"
   - row: Compared with the released 0.14.1
+    case: cases/commands/(init|init-next-step-quoted|init-project-name|verbose-lines)\.yaml
+    field: stdout
+    rust: '├── \.claude/\n│   └── skills/  \(\d+ skills, for Claude Code\)\n'
+    rust_as: ''
+  - row: Compared with the released 0.14.1
+    case: cases/commands/(init|init-next-step-quoted|init-project-name|verbose-lines)\.yaml
+    field: stderr
+    rust: '\[VERBOSE\] Creating file: \.claude/skills/[^\n]*\n'
+    rust_as: ''
+  - row: Compared with the released 0.14.1
+    case: cases/commands/(init|init-next-step-quoted|init-project-name|verbose-lines)\.yaml
+    field: stderr
+    rust: '\.claude/skills/ is the same skills for Claude Code, which reads no other\nproject folder\. Commit all three\. Edit \.agents/skills/ as your conventions\nchange, then run "pgmi ai check --fix" to refresh the copy\. Run "pgmi ai"\nfor the docs that match this pgmi version\.\n'
+    rust_as: 'commit them, and edit them as your conventions change. Run "pgmi ai" for the\ndocs that match this pgmi version.\n'
+  - row: Compared with the released 0.14.1
+    case: cases/commands/init\.yaml
+    field: stderr
+    rust: '\(blocking: \[\.agents \.claude '
+    rust_as: '(blocking: [.agents '
+  - row: Compared with the released 0.14.1
+    case: cases/deploy/basic-template-converges\.yaml
+    field: stderr
+    rust: '(\d+ files loaded, )4( paths ignored)'
+    rust_as: '\g<1>3\g<2>'
+  - row: Compared with the released 0.14.1
     case: cases/deploy/advanced-template-(converges|preflight)\.yaml
     field: db
     rust: "."

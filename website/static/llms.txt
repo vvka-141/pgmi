@@ -8,7 +8,7 @@ Key facts:
 - `CALL pgmi_test()` runs `__test__/` tests inside the deployment transaction; each test rolls back to its directory's fixture state. Called before COMMIT, a failing test aborts that transaction (exit code 13); anything an earlier COMMIT applied stays
 - Templates are optional, project-owned starting points: minimal (the default: a deploy.sql loop), basic (run-once ledger, re-run views and functions, test gate; the application stays outside PostgreSQL), advanced (an application backend in PostgreSQL with runtime REST/RPC/MCP endpoints, separate from `pgmi serve`). A hand-written deploy.sql needs no template
 - One transaction is the recommended pattern, not a rule: pgmi needs one session, and how many transactions you run in it is up to you. It requires a direct connection or session-mode pooler; transaction-mode poolers (PgBouncer txn mode, RDS Proxy) are incompatible
-- The pgmi binary embeds machine-readable guidance for coding agents: run `pgmi ai` and `pgmi ai contract`; `pgmi init` writes AGENTS.md and project skills in `.agents/skills/`; `pgmi serve` exposes pgmi commands over MCP (stdio)
+- The pgmi binary embeds machine-readable guidance for coding agents: run `pgmi ai` and `pgmi ai contract`; `pgmi init` writes AGENTS.md and project skills in `.agents/skills/` (copied to `.claude/skills/` for Claude Code; `pgmi ai check` reports a skill Claude Code cannot find); `pgmi serve` exposes pgmi commands over MCP (stdio)
 
 ## Docs
 

@@ -9,6 +9,17 @@ use crate::vfs::{self, EmbeddedFs};
 
 const PLACEHOLDER: &str = "{{PROJECT_NAME}}";
 
+/// Where agents that follow the Agent Skills layout read a project's skills.
+pub(crate) const SKILLS: &str = ".agents/skills/";
+/// Where Claude Code reads them; `pgmi init` writes a copy of [`SKILLS`] here.
+pub(crate) const CLAUDE_SKILLS: &str = ".claude/skills/";
+
+/// The `.claude/skills/` path of a `.agents/skills/` path, if it is one.
+pub(crate) fn claude_copy(rel: &str) -> Option<String> {
+    rel.strip_prefix(SKILLS)
+        .map(|p| format!("{CLAUDE_SKILLS}{p}"))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Template {
     Minimal,
@@ -54,7 +65,8 @@ impl Template {
     }
 
     /// What a scaffold writes, in the order `pgmi init -v` names it: the
-    /// template's files by their embedded names, then the shared skills.
+    /// template's files by their embedded names, then the shared skills,
+    /// then the `.claude/skills/` copy of every skill.
     pub(crate) fn sources(self) -> io::Result<Vec<Source>> {
         let names = |root: &str| -> io::Result<Vec<String>> {
             Ok(vfs::files(&EmbeddedFs::new(root))?
@@ -70,9 +82,14 @@ impl Template {
             out.extend(
                 names("skills")?
                     .into_iter()
-                    .map(|p| Source::Shared(format!(".agents/skills/{p}"))),
+                    .map(|p| Source::Shared(format!("{SKILLS}{p}"))),
             );
         }
+        let copies: Vec<Source> = out
+            .iter()
+            .filter_map(|s| claude_copy(s.path()).map(Source::Shared))
+            .collect();
+        out.extend(copies);
         Ok(out)
     }
 
@@ -80,7 +97,8 @@ impl Template {
     /// bytes)`: the embedded template with `{{PROJECT_NAME}}` filled in,
     /// `.scaffold` suffixes dropped, a first line in `deploy.sql` naming
     /// `version` and the template, and the shared skills under
-    /// `.agents/skills/` for every template but `minimal`.
+    /// `.agents/skills/` for every template but `minimal`, each skill also
+    /// copied to `.claude/skills/`.
     pub(crate) fn render(self, project: &str, version: &str) -> io::Result<Vec<(String, Vec<u8>)>> {
         let mut files = vfs::files(&EmbeddedFs::new(&format!("templates/{self}")))?;
         if files.is_empty() {
@@ -90,10 +108,10 @@ impl Template {
             files.extend(
                 vfs::files(&EmbeddedFs::new("skills"))?
                     .into_iter()
-                    .map(|(p, b)| (format!(".agents/skills/{p}"), b)),
+                    .map(|(p, b)| (format!("{SKILLS}{p}"), b)),
             );
         }
-        Ok(files
+        let mut out: Vec<(String, Vec<u8>)> = files
             .into_iter()
             .map(|(rel, bytes)| {
                 let rel = rel.strip_suffix(".scaffold").unwrap_or(&rel).to_string();
@@ -108,7 +126,13 @@ impl Template {
                     (rel, bytes)
                 }
             })
-            .collect())
+            .collect();
+        let copies: Vec<(String, Vec<u8>)> = out
+            .iter()
+            .filter_map(|(rel, bytes)| claude_copy(rel).map(|c| (c, bytes.clone())))
+            .collect();
+        out.extend(copies);
+        Ok(out)
     }
 }
 
@@ -253,6 +277,40 @@ mod tests {
         assert!(has_skills(Template::Basic));
         assert!(has_skills(Template::Advanced));
         assert!(!has_skills(Template::Minimal));
+    }
+
+    #[test]
+    fn every_skill_is_also_written_where_claude_code_reads_skills() {
+        for t in Template::ALL {
+            let files = t.render("x", "0").unwrap();
+            let agents: Vec<_> = files
+                .iter()
+                .filter(|(p, _)| p.starts_with(SKILLS))
+                .collect();
+            let claude: Vec<_> = files
+                .iter()
+                .filter(|(p, _)| p.starts_with(CLAUDE_SKILLS))
+                .collect();
+            assert_eq!(agents.len(), claude.len(), "{t}");
+            for (p, b) in agents {
+                let copy = claude_copy(p).unwrap();
+                assert!(
+                    files.iter().any(|(q, c)| *q == copy && c == b),
+                    "{t}: {copy} is not a copy of {p}"
+                );
+            }
+            let sources: Vec<String> = t
+                .sources()
+                .unwrap()
+                .iter()
+                .map(|s| s.path().to_string())
+                .collect();
+            let mut rendered: Vec<String> = files.iter().map(|(p, _)| p.clone()).collect();
+            let mut listed = sources.clone();
+            rendered.sort();
+            listed.sort();
+            assert_eq!(rendered, listed, "{t}: sources() and render() disagree");
+        }
     }
 
     #[test]

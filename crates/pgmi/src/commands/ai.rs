@@ -9,11 +9,17 @@ use crate::error::Result;
 pub(crate) const CONTRACT: &str = include_str!("contract.json");
 
 pub(crate) fn run(a: &AiArgs, env: &Env) -> Result<()> {
-    let text = match a.command {
+    let text = match &a.command {
         None => pgmi_shared::file("ai/overview.md")
             .and_then(|b| std::str::from_utf8(b).ok())
             .unwrap_or_default(),
         Some(AiCommand::Contract) => CONTRACT,
+        Some(AiCommand::Check(c)) => {
+            let path = c.path.clone().unwrap_or_else(|| ".".into());
+            let (text, failure) = super::skills::run(&path, c.fix)?;
+            stdout(&text)?;
+            return failure.map_or(Ok(()), Err);
+        }
     };
     page(text, env)
 }

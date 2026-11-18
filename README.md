@@ -237,8 +237,9 @@ model) gets tools from pgmi and stays in control of what to change:
   ```
 
 - `pgmi init --template basic` or `--template advanced` writes an `AGENTS.md`
-  that routes agents to 14 project skills under `.agents/skills/`, and a
-  `CLAUDE.md` that imports it. The skills cover the pgmi workflow (deploy,
+  that routes agents to 14 project skills under `.agents/skills/` (copied to
+  `.claude/skills/`, where Claude Code finds them), and a `CLAUDE.md` that
+  imports it. The skills cover the pgmi workflow (deploy,
   test, debug a failed deploy, metadata), two-layer schema design, and a
   PostgreSQL recipe library (indexing, integrity, concurrency, security, time,
   analytics, change capture) whose SQL deploys in pgmi's CI. The advanced

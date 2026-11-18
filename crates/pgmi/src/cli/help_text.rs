@@ -132,9 +132,30 @@ pub(super) const AI: &str =
 
   pgmi ai                       Overview and index (this is the entrypoint)
   pgmi ai contract              Session-API contract as JSON
+  pgmi ai check [path]          Does Claude Code find the project's skills?
 
-Both print to stdout for piping. A project's own agent guidance
-(AGENTS.md and .agents/skills/) is written by pgmi init.";
+The first two print to stdout for piping. A project's own agent guidance
+(AGENTS.md, .agents/skills/ and its copy .claude/skills/) is written by
+pgmi init.";
+
+pub(super) const AI_CHECK: &str =
+    "Check that every skill in .agents/skills/ is where Claude Code finds it.
+
+pgmi init writes each skill to .agents/skills/ (read by Codex and other agents
+that follow the Agent Skills layout) and copies it to .claude/skills/, the
+only project folder Claude Code reads skills from. This reports a skill with
+no SKILL.md, a missing copy, a copy that is not a directory (a symlink
+checked out as a plain file), and a copy that differs from .agents/skills/.
+
+For a project in a subdirectory of a git repository it also notes that a
+Claude Code session started at the repository root sees the skills only
+after it reads a file in that subdirectory.
+
+  pgmi ai check                 The project in the current directory
+  pgmi ai check ./db            A project in ./db
+  pgmi ai check --fix           Copy .agents/skills/ over every broken copy
+
+Exit 0 when Claude Code finds every skill, 1 otherwise.";
 
 pub(super) const AI_CONTRACT: &str =
     "Print the pgmi session-API contract as JSON. Agents should query this

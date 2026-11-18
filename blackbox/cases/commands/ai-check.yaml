@@ -1,0 +1,26 @@
+description: Rust only (new in 0.20.x, PGMI-1113). ai check reports a skill Claude Code cannot see or reads an old copy of, exits 1, and --fix copies .agents/skills/ over the copy
+impl: rust
+project:
+  init: basic
+  files:
+    .claude/skills/pgmi-sql/SKILL.md: "an old copy\n"
+steps:
+  - pgmi: [ai, check, "{project}"]
+    expect:
+      exit: 1
+      stdout: ['^pgmi-sql: \.claude/skills/pgmi-sql/ differs from \.agents/skills/pgmi-sql/, so Claude Code reads an old copy\n$']
+      stderr: ['1 of \d+ skills have a problem; pgmi ai check --fix']
+  - pgmi: [ai, check, "{project}", --fix]
+    expect:
+      exit: 0
+      stdout: ['^copied \.agents/skills/pgmi-sql/ to \.claude/skills/pgmi-sql/\n\d+ skills; Claude Code finds every one\.\n$']
+      files:
+        project/.claude/skills/pgmi-sql/SKILL.md: ["^---\nname: pgmi-sql"]
+  - pgmi: [ai, check, "{workdir}"]
+    expect:
+      exit: 0
+      stdout: ['^no skills in ']
+  - pgmi: [ai, check, "{workdir}/nosuch"]
+    expect:
+      exit: 10
+      stderr: ['does not exist']

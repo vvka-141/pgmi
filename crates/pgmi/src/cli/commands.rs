@@ -70,6 +70,15 @@ pub(crate) struct AiArgs {
 pub(crate) enum AiCommand {
     #[command(about = "Print the machine-readable session-API contract", long_about = help_text::AI_CONTRACT)]
     Contract,
+    #[command(about = "Check that Claude Code finds the project's skills", long_about = help_text::AI_CHECK)]
+    Check(AiCheckArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct AiCheckArgs {
+    pub(crate) path: Option<PathBuf>,
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value = "false", value_parser = go_bool, help = "Copy .agents/skills/ over missing, broken or old .claude/skills/ copies")]
+    pub(crate) fix: bool,
 }
 
 #[derive(Debug, Args)]

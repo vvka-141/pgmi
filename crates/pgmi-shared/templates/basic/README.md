@@ -145,7 +145,9 @@ Pass it on every deploy: `--param env=dev` locally, `PGMI_PARAM_ENV` in CI.
 the two layers, deploying, testing, SQL and PostgreSQL recipes. They belong to
 this project: commit them, and change them when your conventions change.
 They are opinions, not pgmi rules: delete or rewrite any skill that does not
-fit how you build.
+fit how you build. `.claude/skills/` holds the same skills for Claude Code,
+which reads no other project folder; after editing `.agents/skills/`, run
+`pgmi ai check --fix` to refresh it.
 
 For the session API of the installed pgmi, run `pgmi ai contract`.
 

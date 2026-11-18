@@ -1123,7 +1123,10 @@ before it writes any SQL.
 `AGENTS.md` routes an assistant to this README and to the skills in
 `.agents/skills/`: endpoints, the table, kernel and view layers, handler
 bodies, the API's design and MCP tools, as well as deploying, testing, SQL
-and PostgreSQL recipes. `CLAUDE.md` imports it for Claude Code. They belong to this project: commit them, and change them
+and PostgreSQL recipes. `CLAUDE.md` imports it for Claude Code, and
+`.claude/skills/` holds the same skills for Claude Code, which reads no other
+project folder; after editing `.agents/skills/`, run `pgmi ai check --fix` to
+refresh it. They belong to this project: commit them, and change them
 when your conventions change. To read the endpoint recipe yourself:
 `.agents/skills/pgmi-endpoint/SKILL.md`.
 

@@ -29,6 +29,11 @@ what order, and inside which transaction.
 The skills are this project's opinions, not pgmi rules. Its owner may delete or
 rewrite any of them; follow the ones present.
 
+The same skills are in `.claude/skills/` for Claude Code, which loads them by
+name; other agents read `.agents/skills/`. Edit `.agents/skills/`, then run
+`pgmi ai check --fix` so the copy matches. When you hand work to a subagent,
+name in its brief the skills the task needs: it may never read this table.
+
 ## Where things are
 
 - `deploy.sql` — the deployment: refuses a changed run-once file, a `physical/` file without the run-once header and an SQL file outside `physical/`, `semantic/` and `__test__/`, runs the files in path order, then the tests.
@@ -47,6 +52,15 @@ They match the installed pgmi version; do not copy them into this project.
 
 Learn pgmi from this file, the skills and `deploy.sql`, not by searching the
 web or other projects.
+
+## Workspace root
+
+Instruction files and skills load only for the folder an agent works in. If
+this project sits inside a larger workspace, add one line to the workspace
+root `AGENTS.md` (create it if missing): "The PostgreSQL project in `<path>`
+has its own `AGENTS.md`; read it before working there." Claude Code started at
+the workspace root loads this project's `.claude/skills/` only after it reads
+a file here: start it in this folder, or run `/add-dir <path>` in the session.
 
 ## Workspace root
 

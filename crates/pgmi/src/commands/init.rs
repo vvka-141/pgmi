@@ -113,6 +113,11 @@ pub(crate) fn run(
         }
     }
     super::stderr(&next_steps(template, &target.display().to_string(), db));
+    if template != Template::Minimal
+        && let Some(note) = nested_note(&target)
+    {
+        super::stderr(&note);
+    }
     Ok(())
 }
 
@@ -170,7 +175,19 @@ fn writable(
     })
 }
 
-const AGENTS_NOTE: &str = "AGENTS.md and .agents/skills/ tell an AI assistant how this project works;\ncommit them, and edit them as your conventions change. Run \"pgmi ai\" for the\ndocs that match this pgmi version.\n";
+const AGENTS_NOTE: &str = "AGENTS.md and .agents/skills/ tell an AI assistant how this project works;\n.claude/skills/ is the same skills for Claude Code, which reads no other\nproject folder. Commit all three. Edit .agents/skills/ as your conventions\nchange, then run \"pgmi ai check --fix\" to refresh the copy. Run \"pgmi ai\"\nfor the docs that match this pgmi version.\n";
+
+/// For a project inside a bigger git repository: where Claude Code looks
+/// for its skills, since a session started at the repository root loads a
+/// nested `.claude/skills/` only after it reads a file there.
+fn nested_note(target: &Path) -> Option<String> {
+    let repo = super::skills::enclosing_repo(target)?;
+    let rel = std::path::absolute(target).ok()?;
+    let rel = rel.strip_prefix(&repo).ok()?.display().to_string();
+    Some(format!(
+        "\nThis project is in {rel}/ of a git repository. Claude Code started at the\nrepository root loads its skills only after it reads a file in {rel}/:\nstart Claude Code in {rel}/, or run /add-dir {rel} in the session.\n"
+    ))
+}
 
 /// `s` as one POSIX shell word: as is when plain, else in single quotes.
 fn shell_quote(s: &str) -> String {
@@ -238,11 +255,16 @@ fn draw(fs: &impl Vfs, rel: &str, indent: &str, out: &mut String) {
         if name == ".git" {
             continue;
         }
-        if name == ".agents" && indent.is_empty() {
+        if (name == ".agents" || name == ".claude") && indent.is_empty() {
             let skills = fs.read_dir(&format!("{child}/skills")).map_or(0, |e| {
                 e.iter().filter(|e| e.stat.kind == FileKind::Dir).count()
             });
-            let _ = writeln!(out, "{indent}{more}└── skills/  ({skills} skills)");
+            let whose = if name == ".claude" {
+                ", for Claude Code"
+            } else {
+                ""
+            };
+            let _ = writeln!(out, "{indent}{more}└── skills/  ({skills} skills{whose})");
             continue;
         }
         draw(fs, &child, &format!("{indent}{more}"), out);
@@ -426,12 +448,14 @@ mod tests {
             .file(".agents/skills/a/SKILL.md", "")
             .file(".agents/skills/a/references/ref.md", "")
             .file(".agents/skills/b/SKILL.md", "")
+            .file(".claude/skills/a/SKILL.md", "")
+            .file(".claude/skills/b/SKILL.md", "")
             .file("lib/x.sql", "");
         let mut out = String::new();
         draw(&fs, "", "", &mut out);
         assert_eq!(
             out,
-            "├── .agents/\n│   └── skills/  (2 skills)\n├── .git/\n├── deploy.sql\n└── lib/\n    └── x.sql\n"
+            "├── .agents/\n│   └── skills/  (2 skills)\n├── .claude/\n│   └── skills/  (2 skills, for Claude Code)\n├── .git/\n├── deploy.sql\n└── lib/\n    └── x.sql\n"
         );
     }
 

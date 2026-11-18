@@ -1,0 +1,24 @@
+description: Rust only (new in 0.20.x, PGMI-1113). init copies every skill of .agents/skills/ to .claude/skills/, where Claude Code reads skills; inside a git repository it says how Claude Code finds the skills of a project in a subdirectory
+impl: rust
+project:
+  files:
+    .git/HEAD: "ref: refs/heads/main\n"
+steps:
+  - pgmi: [init, "{workdir}/advanced", -t, advanced]
+    expect:
+      exit: 0
+      stdout: ['\.claude/\n.*skills/  \(\d+ skills, for Claude Code\)']
+      files:
+        advanced/.agents/skills/pgmi-layers/SKILL.md: ["^---\nname: pgmi-layers"]
+        advanced/.claude/skills/pgmi-layers/SKILL.md: ["^---\nname: pgmi-layers"]
+        advanced/.claude/skills/pgmi-endpoint/references/example.md: ["organization_id"]
+      stderr: ['pgmi ai check --fix']
+      stderr_not: ['of a git repository']
+  - pgmi: [init, "{workdir}/minimal"]
+    expect:
+      exit: 0
+      absent: [minimal/.claude, minimal/.agents]
+  - pgmi: [init, "{project}/db", -t, basic]
+    expect:
+      exit: 0
+      stderr: ['This project is in db/ of a git repository', 'run /add-dir db in the session']

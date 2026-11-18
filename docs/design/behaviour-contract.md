@@ -1737,6 +1737,9 @@ against 0.14.1 and are accepted here:
   the advanced template, `pg_temp.pgmi_run_file`, the advanced template's
   preflight refusals and its refusal handlers, the basic template's provider
   hook with `EXECUTE` revoked from `PUBLIC`, and the guide's Retries section.
+  `pgmi init` also copies the skills to `.claude/skills/` for Claude Code,
+  names that copy in its tree and `-v` lines, and says how to refresh it
+  (`pgmi ai check --fix`, new in 0.20).
 - **Flag value errors.** A bad `--port`, `--timeout` or boolean flag value is
   explained in pgmi's own words (`must be an integer`, `must be a duration
   like ...`, `must be true or false`), not with Go's `strconv`/`time` parser
