@@ -2389,7 +2389,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "pgmi"
-version = "0.20.0"
+version = "0.20.1"
 dependencies = [
  "aes",
  "async-trait",
@@ -2451,7 +2451,7 @@ dependencies = [
 
 [[package]]
 name = "pgmi-shared"
-version = "0.20.0"
+version = "0.20.1"
 
 [[package]]
 name = "phf"

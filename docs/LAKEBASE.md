@@ -162,13 +162,13 @@ resources:
 import argparse, hashlib, os, platform, subprocess, tarfile, tempfile, urllib.parse, urllib.request
 from databricks.sdk import WorkspaceClient
 
-VERSION = "0.20.0"
+VERSION = "0.20.1"
 BASE = f"https://github.com/vvka-141/pgmi/releases/download/v{VERSION}"
 ASSET = {"aarch64": f"pgmi_{VERSION}_linux_arm64.tar.gz",
          "x86_64": f"pgmi_{VERSION}_linux_amd64.tar.gz"}[platform.machine()]
 # From the release's checksums.txt, after `gh attestation verify <archive> -R vvka-141/pgmi --signer-workflow vvka-141/pgmi/.github/workflows/release-rust.yml --source-ref refs/heads/main`.
-SHA256 = {"pgmi_0.20.0_linux_arm64.tar.gz": "<sha256>",
-          "pgmi_0.20.0_linux_amd64.tar.gz": "<sha256>"}
+SHA256 = {"pgmi_0.20.1_linux_arm64.tar.gz": "<sha256>",
+          "pgmi_0.20.1_linux_amd64.tar.gz": "<sha256>"}
 
 p = argparse.ArgumentParser()
 for a in ("--db-dir", "--endpoint", "--database"):

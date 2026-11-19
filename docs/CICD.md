@@ -38,7 +38,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      PGMI_VERSION: v0.20.0         # pin to a specific release tag
+      PGMI_VERSION: v0.20.1         # pin to a specific release tag
       DB_NAME: myapp
     steps:
       - uses: actions/checkout@v5
@@ -324,7 +324,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     env:
-      PGMI_VERSION: v0.20.0
+      PGMI_VERSION: v0.20.1
       DB_NAME: myapp
     steps:
       - uses: actions/checkout@v5
@@ -438,7 +438,7 @@ deploy-db:
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   variables:
-    PGMI_VERSION: v0.20.0
+    PGMI_VERSION: v0.20.1
     DB_NAME: myapp
     PGMI_PARAM_ENV: prod
     PGMI_PARAM_UPGRADE: "true"
@@ -469,10 +469,10 @@ The three steps — install, connect via secret, `pgmi deploy … --compat 1` �
 anywhere. Alternatives for the install step:
 
 - **Install script, pinned:**
-  `curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | PGMI_VERSION=v0.20.0 bash`
+  `curl -sSL https://raw.githubusercontent.com/vvka-141/pgmi/main/scripts/install.sh | PGMI_VERSION=v0.20.1 bash`
   (verifies the download against `checksums.txt`). The `PGMI_VERSION` prefix must sit on
   `bash`, not `curl`, or the script falls back to the latest release.
 - **Debian/Ubuntu runners (.deb from the release):**
-  `gh release download v0.20.0 -R vvka-141/pgmi -p 'pgmi_*_linux_amd64.deb' -p checksums.txt && sha256sum --ignore-missing -c checksums.txt && sudo apt install -y ./pgmi_*_linux_amd64.deb`.
+  `gh release download v0.20.1 -R vvka-141/pgmi -p 'pgmi_*_linux_amd64.deb' -p checksums.txt && sha256sum --ignore-missing -c checksums.txt && sudo apt install -y ./pgmi_*_linux_amd64.deb`.
 
 For a complete GitLab CI job, see [GitLab CI](#gitlab-ci).

@@ -75,7 +75,7 @@ These views and functions are the API for deploy.sql. Use these instead of query
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `pgmi_version` | text | The binary's version, as `pgmi version` prints it (`0.20.0`) |
+| `pgmi_version` | text | The binary's version, as `pgmi version` prints it (`0.20.1`) |
 | `contract_version` | text | Session API version applied: `--compat`, or the latest the binary ships |
 
 The PostgreSQL version is already in SQL: `current_setting('server_version_num')`.

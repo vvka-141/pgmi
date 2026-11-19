@@ -16,6 +16,32 @@
 > `verify-install.yml` installs it through every documented channel and checks
 > each serves the new version — look at that run before announcing a release.
 
+## v0.20.1 — 2026-11-19
+
+**Claude Code now finds the agent skills `pgmi init` writes.** Since 0.14, `pgmi init` has put its skills (how to add a table, an endpoint, a test, and the PostgreSQL recipes) in `.agents/skills/`. Codex and other agents read that folder; Claude Code does not, so in Claude Code a new project had no pgmi skills at all. pgmi 0.20.1 also writes a copy of every skill to `.claude/skills/`, where Claude Code looks, and a new command checks that the two stay in step.
+
+### What you can do now
+
+In a project made with 0.20.0 or earlier, add the Claude Code copies:
+
+```bash
+pgmi ai check --fix
+```
+
+`pgmi ai check` without `--fix` lists every skill Claude Code cannot find or whose copy differs from `.agents/skills/`, and exits 1 if there is one. `--fix` copies `.agents/skills/` over the missing and changed copies and leaves your own Claude Code skills alone. Edit a skill in `.agents/skills/`, then run `--fix`.
+
+### Upgrading
+
+No action needed for deploys: the session API contract is still version 1, and nothing about `pgmi deploy` changed. To give Claude Code the skills in an existing project, run `pgmi ai check --fix` there and commit `.claude/skills/`.
+
+If your pgmi project sits in a subfolder of a larger repository (for example `db/`), Claude Code started at the repository root loads its skills only after it reads a file in `db/`. Start Claude Code in `db/`, or run `/add-dir db` in the session.
+
+### Also in this release
+
+- The copies are plain files, not links: a link needs Developer Mode on Windows, and a checkout with `core.symlinks=false` turns it into a text file Claude Code cannot read.
+- The `pgmi-api-layer` skill now says which tenant column each table uses: your entity tables carry `organization_id`, the advanced template's membership tables carry `organization_object_id`, so a foreign key from one to the other names both.
+- Every SQL example in the skills is now checked in CI against the deployed advanced template, so a skill cannot teach a table, column or function the template does not have.
+
 ## v0.20.0-rc.1 — 2026-11-17
 
 Release candidate for 0.20.0, published to prove the release pipeline: the archives, the `.deb` files, `checksums.txt` and the build attestation. It is a pre-release, so the install scripts and Homebrew keep serving 0.14.1. What 0.20 changes is in [RELEASES.md](https://github.com/vvka-141/pgmi/blob/main/RELEASES.md).

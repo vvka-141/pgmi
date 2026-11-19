@@ -121,7 +121,7 @@ the only record of it: keep it as CI output.
   "status": "failed",
   "exitCode": 13,
   "schemaVersion": 1,
-  "pgmiVersion": "0.20.0",
+  "pgmiVersion": "0.20.1",
   "contractVersion": "1",
   "serverVersion": "18.1",
   "tls": {"enabled": true, "version": "TLS 1.3", "sslmode": "verify-full"},

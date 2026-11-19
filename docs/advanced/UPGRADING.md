@@ -63,7 +63,7 @@ git switch --orphan pgmi-template
 cp -r /tmp/base/myapp/. .
 git add -A && git commit -m "template: advanced, pgmi 0.14.1"
 git rm -rq . && cp -r /tmp/target/myapp/. .
-git add -A && git commit -m "template: advanced, pgmi 0.20.0"
+git add -A && git commit -m "template: advanced, pgmi 0.20.1"
 
 git switch main
 git cherry-pick pgmi-template
