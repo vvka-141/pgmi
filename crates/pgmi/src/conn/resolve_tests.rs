@@ -428,14 +428,17 @@ fn settings_parse_to_their_values_and_refuse_others() {
         assert_eq!(tsa.as_str(), text);
     }
     for (bad, want) in [
-        ("sslmode=Require", "invalid sslmode value: \"Require\""),
+        (
+            "sslmode=Require",
+            "invalid sslmode value: \"Require\" (valid: disable, allow, prefer, require, verify-ca, verify-full)",
+        ),
         (
             "channel_binding=on",
-            "invalid channel_binding value: \"on\"",
+            "invalid channel_binding value: \"on\" (valid: disable, prefer, require)",
         ),
         (
             "target_session_attrs=master",
-            "invalid target_session_attrs value: \"master\"",
+            "invalid target_session_attrs value: \"master\" (valid: any, read-write, read-only, primary, standby, prefer-standby)",
         ),
         (
             "sslnegotiation=direct sslmode=prefer",
@@ -612,9 +615,33 @@ fn pgport_edge_cases() {
     for bad in ["abc", "-1", "999999", "0", "not-a-number"] {
         assert_eq!(
             refused(port(bad)).to_string(),
-            format!("invalid port \"{bad}\"")
+            format!("invalid port \"{bad}\" from PGPORT: want a number from 1 to 65535")
         );
     }
+}
+
+#[test]
+fn a_bad_port_names_the_source_that_wrote_it() {
+    let yaml = |port: &str| Connection {
+        host: Some("h".into()),
+        port: Some(port.into()),
+        database: Some("d".into()),
+        ..Connection::default()
+    };
+    let e = refused(resolve(
+        &flags(),
+        &Env::from_pairs(&[("PGPORT", "abc")]),
+        Some(&yaml("5432")),
+    ));
+    assert_eq!(
+        e.to_string(),
+        "invalid port \"abc\" from PGPORT: want a number from 1 to 65535"
+    );
+    let e = refused(resolve(&flags(), &Env::default(), Some(&yaml("abc"))));
+    assert_eq!(
+        e.to_string(),
+        "invalid port \"abc\" from pgmi.yaml connection.port: want a number from 1 to 65535"
+    );
 }
 
 #[test]
@@ -928,6 +955,44 @@ fn a_string_replaces_the_pgmi_yaml_connection_block() {
     let s = resolve(&flags(), &Env::default(), Some(&y)).unwrap();
     assert_eq!(first(&s), ("yamlhost", 5434));
     assert_eq!(s.sslmode(), SslMode::Require);
+}
+
+#[test]
+fn a_string_still_takes_the_databases_and_certificate_files_from_pgmi_yaml() {
+    let y = Connection {
+        maintenance_database: Some("admin".into()),
+        sslcert: Some("/yaml/client.crt".into()),
+        sslkey: Some("/yaml/client.key".into()),
+        sslrootcert: Some("/yaml/ca.crt".into()),
+        ..yaml()
+    };
+    let s = resolve(&conn("postgresql://stringhost"), &Env::default(), Some(&y)).unwrap();
+    assert_eq!(
+        (s.target_db.as_str(), s.maintenance_db.as_str()),
+        ("yamldb", "admin")
+    );
+    assert_eq!(
+        (
+            s.sslcert.as_deref(),
+            s.sslkey.as_deref(),
+            s.sslrootcert.as_deref()
+        ),
+        (
+            Some("/yaml/client.crt"),
+            Some("/yaml/client.key"),
+            Some("/yaml/ca.crt")
+        )
+    );
+    let env = Env::from_pairs(&[("PGSSLROOTCERT", "/env/ca.crt")]);
+    let s = resolve(&conn("postgresql://stringhost"), &env, Some(&y)).unwrap();
+    assert_eq!(s.sslrootcert.as_deref(), Some("/env/ca.crt"));
+    let s = resolve(
+        &conn("postgresql://stringhost?sslrootcert=/string/ca.crt"),
+        &env,
+        Some(&y),
+    )
+    .unwrap();
+    assert_eq!(s.sslrootcert.as_deref(), Some("/string/ca.crt"));
 }
 
 #[test]

@@ -1,0 +1,33 @@
+description: Rust only (contract "Whole-deployment retry"). retry and retry_after_commit read the YAML 1.1 spellings - retry off turns retrying off, retry_after_commit y lets a failure after a commit run the deploy again
+impl: rust
+project:
+  files:
+    off/pgmi.yaml: "retry: off\n"
+    off/deploy.sql: |
+      DO $$ BEGIN RAISE EXCEPTION 'conflict' USING ERRCODE = '40001'; END $$;
+    on/pgmi.yaml: "retry_after_commit: y\n"
+    on/deploy.sql: |
+      BEGIN;
+      CREATE TABLE IF NOT EXISTS ledger (note text);
+      INSERT INTO ledger VALUES ('deployed');
+      COMMIT;
+      DO $$ BEGIN
+        IF (SELECT count(*) FROM ledger) < 2 THEN
+          RAISE EXCEPTION 'conflict' USING ERRCODE = '40001';
+        END IF;
+      END $$;
+steps:
+  - pgmi: [deploy, "{project}/off", --connection, "{conn}", -d, "{db}", --json]
+    timeout: 30
+    expect:
+      exit: 13
+      stderr_not: ["retrying in"]
+      stdout: ['"attempts": \[\s*\{[^}]*\}\s*\]']
+  - pgmi: [deploy, "{project}/on", --connection, "{conn}", -d, "{db}"]
+    timeout: 30
+    expect:
+      exit: 0
+      stderr: ["retrying in"]
+      sql:
+        - query: SELECT count(*) FROM ledger
+          rows: [[2]]

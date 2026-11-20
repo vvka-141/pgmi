@@ -7,6 +7,7 @@ use serde::Serialize;
 use super::{json, stdout};
 use crate::cli::InfoArgs;
 use crate::config::yaml::ProjectConfig;
+use crate::conn::resolve::{self, Flags, ResolveError};
 use crate::env::Env;
 use crate::error::Result;
 use crate::project::{metadata, walk};
@@ -44,6 +45,35 @@ fn directory(path: &str) -> String {
     }
 }
 
+/// Loads `pgmi.yaml` and judges its values as deploy does, on their own:
+/// no flag, variable or other source replaces one.
+fn checked(project: &impl Vfs) -> Result<Option<ProjectConfig>> {
+    let Some(cfg) = ProjectConfig::load(project)? else {
+        return Ok(None);
+    };
+    cfg.timeout()?;
+    let judge = |database: Option<String>| {
+        let flags = Flags {
+            database,
+            ..Flags::default()
+        };
+        resolve::resolve(&flags, &Env::default(), Some(&cfg.connection))
+    };
+    match judge(None) {
+        Err(ResolveError::NoDatabase) => judge(Some("postgres".into())),
+        resolved => resolved,
+    }?;
+    Ok(Some(cfg))
+}
+
+fn config_file(project: &impl Vfs) -> String {
+    match checked(project) {
+        Ok(None) => "absent".to_string(),
+        Ok(Some(_)) => "ok".to_string(),
+        Err(e) => format!("error: {}", e.text()),
+    }
+}
+
 pub(crate) fn run(a: &InfoArgs, env: &Env) -> Result<()> {
     let root = a.path.clone().unwrap_or_else(|| PathBuf::from("."));
     let fs = crate::vfs::OsFs::project(&root)?;
@@ -53,11 +83,7 @@ pub(crate) fn run(a: &InfoArgs, env: &Env) -> Result<()> {
         .map_err(walk::scan_failed(None))?;
     let shown = std::path::absolute(&root).unwrap_or_else(|_| root.clone());
     let detected = scaffolded(&fs);
-    let config_file = match ProjectConfig::load(&fs) {
-        Ok(None) => "absent".to_string(),
-        Ok(Some(_)) => "ok".to_string(),
-        Err(e) => format!("error: {}", e.text()),
-    };
+    let config_file = config_file(&fs);
     let mut dirs: BTreeMap<String, usize> = BTreeMap::new();
     let paths = project
         .sources
@@ -115,4 +141,38 @@ pub(crate) fn run(a: &InfoArgs, env: &Env) -> Result<()> {
         let _ = writeln!(text, "  {dir:<30} {n} files");
     }
     stdout(&text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vfs::MemFs;
+
+    #[test]
+    fn pgmi_yaml_is_ok_only_when_deploy_would_accept_it() {
+        assert_eq!(config_file(&MemFs::default()), "absent");
+        for good in [
+            "",
+            "connection:\n  host: h\n  port: 5433\n",
+            "timeout: 90s\n",
+        ] {
+            assert_eq!(
+                config_file(&MemFs::default().file("pgmi.yaml", good)),
+                "ok",
+                "{good:?}"
+            );
+        }
+        for (bad, says) in [
+            ("connection:\n  port: abc\n", "connection.port"),
+            ("connection:\n  port: 0\n", "connection.port"),
+            ("connection:\n  sslmode: bogus\n", "verify-full"),
+            ("timeout: 1d\n", "timeout"),
+        ] {
+            let status = config_file(&MemFs::default().file("pgmi.yaml", bad));
+            assert!(
+                status.starts_with("error: ") && status.contains(says),
+                "{bad:?}: {status}"
+            );
+        }
+    }
 }

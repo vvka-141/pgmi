@@ -23,7 +23,7 @@ use tokio::runtime::Runtime;
 use tokio_postgres::error::ErrorPosition;
 
 use crate::config::params::{self, Sources};
-use crate::config::yaml::ProjectConfig;
+use crate::config::yaml::{self, ProjectConfig};
 use crate::conn::cloud::{self, Provider};
 use crate::conn::dial::{Dialer, Session};
 use crate::conn::overrides::{Override, overrides};
@@ -419,10 +419,20 @@ impl Run {
         let contract = ContractVersion::of(ctx.request.compat.as_deref());
         self.st.contract = contract.as_ref().ok().copied();
         let project = ctx.request.project.clone();
-        let yaml = guard::before_guard(&stop, move || {
-            ProjectConfig::load(&OsFs::project(&project)?)
+        let (yaml, misnamed) = guard::before_guard(&stop, move || {
+            let fs = OsFs::project(&project)?;
+            let cfg = ProjectConfig::load(&fs)?;
+            let misnamed = cfg.is_none().then(|| yaml::misnamed(&fs)).flatten();
+            Ok((cfg, misnamed))
         })
         .await?;
+        if let Some(line) = misnamed {
+            reporter.line(&line);
+            self.log
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .warn(line);
+        }
         let yaml_timeout = yaml.as_ref().map(ProjectConfig::timeout).transpose()?;
         let asked = ctx.request.timeout.or(yaml_timeout.flatten());
         let timeout = limit(asked);

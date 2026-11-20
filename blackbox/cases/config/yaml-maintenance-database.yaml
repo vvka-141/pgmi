@@ -1,0 +1,32 @@
+description: pgmi.yaml maintenance_database is the database pgmi connects to when the target does not exist - a missing one fails the connect naming it, an existing one creates the target
+project:
+  files:
+    missing/deploy.sql: SELECT 1;
+    missing/pgmi.yaml: |
+      connection:
+        host: "{host}"
+        port: {port}
+        username: "{user}"
+        database: "{db}"
+        maintenance_database: "{db}_absent"
+    present/deploy.sql: CREATE TABLE marker (n int);
+    present/pgmi.yaml: |
+      connection:
+        host: "{host}"
+        port: {port}
+        username: "{user}"
+        database: "{db}"
+        maintenance_database: template1
+steps:
+  - pgmi: [deploy, "{project}/missing"]
+    env: {PGPASSWORD: "{password}"}
+    expect:
+      exit: 11
+      stderr: ['{db}_absent']
+  - pgmi: [deploy, "{project}/present"]
+    env: {PGPASSWORD: "{password}"}
+    expect:
+      exit: 0
+      sql:
+        - query: SELECT to_regclass('marker') IS NOT NULL
+          rows: [[true]]

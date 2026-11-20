@@ -75,9 +75,13 @@ the same as an object. A missing path is exit 10. It scans the project as
 `deploy` and `metadata` do: a `<pgmi-meta>` block that does not parse, or a
 `.pgmiignore` that hides `deploy.sql`, is exit 10 (`failed to scan
 directory: ...`); `metadata plan`, `validate` and `scaffold` refuse that
-`.pgmiignore` the same way.
+`.pgmiignore` the same way. In the Rust binary `pgmi.yaml: ok` means the file
+also passes the checks deploy runs on its values, judged on their own with no
+flag or variable replacing one (the connection values, the timeout);
+otherwise the line is `pgmi.yaml: error: <the refusal>`, exit 0. Go reports
+only a file that does not parse.
 
-Cases: `commands/info`, `commands/info-without-directories`, `commands/info-scaffolded-by`, `commands/info-metadata-refusals`.
+Cases: `commands/info`, `commands/info-without-directories`, `commands/info-scaffolded-by`, `commands/info-metadata-refusals`, `commands/info-pgmi-yaml-values`.
 
 ### init
 
@@ -499,7 +503,7 @@ or to resolve the connection, ends with `(connection from <source>)` or
 carries that line only when resolving failed. Full reference: `docs/CLI.md`
 "Precedence", `docs/CONFIGURATION.md`, `docs/CICD.md` "What the log shows".
 
-Cases: `flags/connection-forms`, `connection/string-forms`, `flags/granular-flags`, `env/connection-string-vars`, `env/connection-string-vars-refuse-flags`, `env/pg-variables`, `env/pgservice-refused`, `config/pgmi-yaml`, `config/pgmi-yaml-invalid`, `config/precedence`, `config/overrides`, `config/dotenv-provenance`, `errors/connection-source`, `env/passfile-beats-pgpassfile`, `connection/uri-plus`, `connection/uri-key-case`, `connection/uri-repeated-key`, `connection/ado-libpq-keywords`.
+Cases: `flags/connection-forms`, `connection/string-forms`, `flags/granular-flags`, `env/connection-string-vars`, `env/connection-string-vars-refuse-flags`, `env/pg-variables`, `env/pgservice-refused`, `config/pgmi-yaml`, `config/pgmi-yaml-invalid`, `config/yaml-maintenance-database`, `config/precedence`, `config/overrides`, `config/dotenv-provenance`, `errors/connection-source`, `env/passfile-beats-pgpassfile`, `connection/uri-plus`, `connection/uri-key-case`, `connection/uri-repeated-key`, `connection/ado-libpq-keywords`.
 
 ### Connection resolution
 
@@ -895,14 +899,23 @@ so they reach the cloud sign-in too; a params
 file additionally refuses, with exit 10, a backslash or `$` inside double quotes
 and an unquoted ` #`, which `.env` readers disagree on. `pgmi.yaml` values
 become text: `~` is empty, numbers and booleans as written (`5432.0` stays
-`5432.0`), block scalars keep their final newline.
+`5432.0`), block scalars keep their final newline; only `retry` and
+`retry_after_commit` read words as booleans, the YAML 1.1 spellings included
+(`yes`/`no`, `on`/`off`, `y`/`n`, any of the three cases, and the quoted
+words), and refuse anything else, `0` and `1` too, exit 10. The Rust binary
+reads only `pgmi.yaml`: when it is absent and a `pgmi.yml` or the same name in
+another case (`PGMI.yaml`) is in the project root, `deploy` prints one WARNING
+naming that file and the name pgmi reads, also in `--json` `warnings`, and goes
+on without it; Go says nothing. A value the parser refuses names its key and
+the fix, with the line and column (`retry: want true or false (line 1 column
+8)`).
 
 In the Rust binary a params file, `-` and the project `.env` are read up to
 `PGMI_MAX_FILE_SIZE` (10 MiB by default) and a larger one is exit 10; a
 password file over 10 MiB is not read, with a WARNING (Rust unit test
 `a_password_file_over_the_limit_is_not_read_and_warned_about`).
 
-Cases: `formats/dotenv-edges`, `formats/dotenv-expansion`, `config/dotenv-forms`, `formats/dotenv-nul`, `cloud/dotenv-feeds-sdk`, `formats/params-file-edges`, `formats/pgmi-yaml-edges`, `config/pgmi-yaml-invalid`, `formats/size-limits`, `config/dotenv-size-limit`, `config/yaml-anchors`, `config/yaml-block-scalars`, `config/yaml-comments`, `config/yaml-booleans`, `config/yaml-numbers`, `config/yaml-tabs`, `config/yaml-bom`, `config/yaml-crlf`, `config/yaml-unknown-keys`, `config/yaml-duplicate-keys`, `config/yaml-port`, `config/yaml-timeout`, `config/yaml-empty`, `config/yaml-documents`, `config/dotenv-bom`, `config/dotenv-refused-keys`.
+Cases: `formats/dotenv-edges`, `formats/dotenv-expansion`, `config/dotenv-forms`, `formats/dotenv-nul`, `cloud/dotenv-feeds-sdk`, `formats/params-file-edges`, `formats/pgmi-yaml-edges`, `config/pgmi-yaml-invalid`, `formats/size-limits`, `config/dotenv-size-limit`, `config/yaml-anchors`, `config/yaml-block-scalars`, `config/yaml-comments`, `config/yaml-booleans`, `config/yaml-numbers`, `config/yaml-tabs`, `config/yaml-bom`, `config/yaml-crlf`, `config/yaml-unknown-keys`, `config/yaml-duplicate-keys`, `config/yaml-port`, `config/yaml-timeout`, `config/yaml-empty`, `config/yaml-documents`, `config/dotenv-bom`, `config/dotenv-refused-keys`, `config/yaml-misnamed`, `config/yaml-retry-booleans`.
 
 ### Terminal behaviour
 
@@ -1626,6 +1639,14 @@ release notes take their "Behaviour changes" section from this table.
 | `pgmi.yaml` with a `%YAML 1.2` directive | refused, exit 10 | accepted | agent 2026-11-12 (PGMI-895), owner may revisit |
 | `pgmi.yaml` `port: 0` | quietly 5432 | refused, exit 10 | agent 2026-11-12 (PGMI-895), owner may revisit |
 | `pgmi.yaml` negative timeout (`-5s`) | runs, then exit 11 "exceeded --timeout -5s" | refused before connecting, exit 10 | agent 2026-11-12 (PGMI-895), owner may revisit |
+| `pgmi.yaml` `auth_method: ""` | password authentication | refused, exit 10 (`auth_method "" is not one of azure, aws, google (omit it for password authentication)`) | agent 2026-11-20 (PGMI-1100), owner may revisit |
+| `pgmi.yaml` `sslmode: ""` | unset: the next source or `prefer` | refused, exit 10, as every empty connection value (row "A connection setting written empty or as white space only") | agent 2026-11-20 (PGMI-1100), owner may revisit |
+| `pgmi.yaml` port with a fraction, an exponent or an octal prefix (`1.5`, `1e1`, `0o1`) | read as an integer (1, 10, 1) | refused, exit 10 (`invalid port "1.5" from pgmi.yaml connection.port: want a number from 1 to 65535`); `5432.0`, `0x1538` and `5_432` are 5432 in both | agent 2026-11-20 (PGMI-1100), owner may revisit |
+| `pgmi.yaml` quoted port with white space (`port: " 1"`) | refused, exit 10, as every quoted port | accepted, the white space trimmed, as `PGPORT` is | agent 2026-11-20 (PGMI-1100), owner may revisit |
+| `pgmi.yaml` `params` entry whose name is null (`~: x`) | dropped silently | refused, exit 10 (`params: a parameter name is empty or ~; name the parameter (line 2 column 3)`) | agent 2026-11-20 (PGMI-1100), owner may revisit |
+| `pgmi.yaml` with more than 10 aliases per anchor once it has 100 aliases | read, however many | refused, exit 10, naming the counts (`120 aliases (*name) of 1 anchor (&name), more than pgmi reads ...; write the repeated values out`): the parser's guard against alias bombs | agent 2026-11-20 (PGMI-1100), owner may revisit |
+| `pgmi.yml` or `PGMI.yaml` with no `pgmi.yaml` | not read, nothing said | not read; one WARNING names the file and says pgmi reads only `pgmi.yaml`; also in `--json` `warnings`; exit unchanged. Case: `config/yaml-misnamed` | agent 2026-11-20 (PGMI-1100), owner may revisit |
+| `pgmi info` on a `pgmi.yaml` whose values deploy refuses (`timeout: 1d`, `port: 0`) | `pgmi.yaml: ok` (a port that is not an integer: the parse error) | `pgmi.yaml: error: <the refusal deploy gives>`; exit 0 both. Case: `commands/info-pgmi-yaml-values` | agent 2026-11-20 (PGMI-1100), owner may revisit |
 | A host with several addresses fails to connect | only the last address's error, retried when that one is transient | every address's error; a certificate failure among them is final, not retried; exit 11 both | intended |
 | POSIX class such as `[[:space:]]` in `.pgmiignore` | refused, exit 10 | accepted | intended |
 | Backslash inside a class in `.pgmiignore` (`a[\]]b`) | a literal backslash | escapes the next character, as in gitignore | owner 2026-11-13 (PGMI-947) |
@@ -1636,7 +1657,7 @@ release notes take their "Behaviour changes" section from this table.
 | Session-preparation failure | `session preparation failed: execution failed: failed to create internal tables: failed to create pgmi schema: ...; pgmi's session tables need the TEMPORARY privilege: GRANT ...` | `session preparation failed: create the session tables: ...`, the `GRANT` on its own line | agent 2026-11-12 (PGMI-907), owner may revisit |
 | Input refused before connecting | `FAILED <db>: failed after ...`, then the error (a connection option value, a client certificate without its key) | the error alone; exit 10 both (a refused parameter key or value, and AWS sign-in without a region, print the FAILED line in both) | agent 2026-11-12 (PGMI-907), owner may revisit |
 | AWS sign-in without a region | `failed to create connector: failed to create AWS IAM token provider: AWS IAM auth requires region ...` | `AWS IAM auth requires region ...`, without Go's internal steps; exit 10 both, the `--json` record naming the target in both | owner 2026-11-14: wording only |
-| `pgmi.yaml` that is not valid YAML or has an unknown key | yaml.v3's text (`yaml: unmarshal errors: line 2: field x not found in type config.ProjectConfig`) | the line, column and parser text, naming the keys expected (`line 2 column 3: unknown field ...`); exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
+| `pgmi.yaml` that is not valid YAML or has an unknown key | yaml.v3's text (`yaml: unmarshal errors: line 2: field x not found in type config.ProjectConfig`) | the line, column and parser text, naming the keys expected (`line 2 column 3: unknown field ...`); a value of the wrong kind names its key and the fix (`connection: want keys under it, one per line, such as "host: db.internal" (line 1 column 13)`); a `pgmi.yaml` that is a directory names its path (`failed to load pgmi.yaml: <path> is a directory; replace it with a file`); exit 10 both | agent 2026-11-12 (PGMI-907), PGMI-1100 (2026-11-20), owner may revisit |
 | A project path that does not exist | `failed to scan directory: failed to open directory: failed to access path: stat <path>: no such file or directory` | `project path "<path>" does not exist`; exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
 | `PGMI_MAX_FILE_SIZE` that is not a positive whole number | reported inside the first file read (`failed to read ./x.sql: PGMI_MAX_FILE_SIZE=...`) | reported alone; exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
 | A `.pgmiignore` pattern that cannot be read | Go regexp's reason (`error parsing regexp: ...`, `empty character class`) | `invalid pattern "<p>"`; exit 10 both | agent 2026-11-12 (PGMI-907), owner may revisit |
@@ -1732,9 +1753,9 @@ release notes take their "Behaviour changes" section from this table.
 | `CALL pgmi_test('<pattern>')` with a pattern that is not a valid regular expression | `failed to preprocess deploy.sql: execution failed: failed to call pgmi_test_generate: ERROR: Invalid regex pattern ...` | the server's `ERROR: Invalid regex pattern ...` alone; exit 13 both | owner 2026-11-13 (PGMI-973): wording only |
 | `pgmi init <dir>` into a directory that is not empty | names the absolute path | names the path as typed; exit 2 both | owner 2026-11-13 (PGMI-973): wording only |
 | `PGMI_PARAM_<NAME>` whose value is not UTF-8 | `FAILED <db>: ...`, then `invalid parameter value for '<name>': not valid UTF-8` | `environment variable PGMI_PARAM_<NAME> is not valid UTF-8`, the error alone; exit 10 both | owner 2026-11-13 (PGMI-973): wording only, it names the variable to fix |
-| `connect_timeout` or `sslmode` in a connection string that is not a valid value | `invalid connection string: invalid connect_timeout [value] "x": strconv.Atoi: ...`; `invalid sslmode "x" in the connection (valid: disable, allow, ...)` | `invalid connect_timeout "x"`; `invalid sslmode value: "x"`, libpq's words; exit 10 both | owner 2026-11-13 (PGMI-973): wording only |
+| `connect_timeout` or `sslmode` in a connection string that is not a valid value | `invalid connection string: invalid connect_timeout [value] "x": strconv.Atoi: ...`; `invalid sslmode "x" in the connection (valid: disable, allow, ...)` | `invalid connect_timeout "x"`; `invalid sslmode value: "x"`, libpq's words, then the valid values (`(valid: disable, allow, prefer, require, verify-ca, verify-full)`), as for every keyword setting; exit 10 both | owner 2026-11-13 (PGMI-973): wording only; valid values added in PGMI-1100 |
 | A failure to connect to the maintenance database | `maintenance database: connect to "<db>": ...` | `connect to "<db>": ...`; exit codes unchanged | owner 2026-11-13 (PGMI-973): wording only, the line names the database |
-| Refusal order: a `pgmi.yaml` port that is not a number, or a quoted one, and no database | the port (`cannot unmarshal !!str ... into int`) | the missing database; with a database, `invalid port "x"` (a quoted number is accepted, row above); exit 10 both | owner 2026-11-13 (PGMI-973): wording only |
+| Refusal order: a `pgmi.yaml` port that is not a number, or a quoted one, and no database | the port (`cannot unmarshal !!str ... into int`) | the missing database; with a database, `invalid port "x" from pgmi.yaml connection.port: want a number from 1 to 65535`, naming `PGPORT` instead when that variable wrote the port (a quoted number is accepted, row above); exit 10 both | owner 2026-11-13 (PGMI-973): wording only; the source named in PGMI-1100 |
 | A database name holding `"` or `\` in the `--overwrite` lines and the `does not exist; creating` line | Go-escaped (`"o2\"x"`) | as written between double quotes | owner 2026-11-13 (PGMI-973): wording only |
 | A project file over `PGMI_MAX_FILE_SIZE` | `failed to read ./lib/a.sql: file lib/a.sql is N bytes, ...` | `failed to read ./lib/a.sql: file a.sql is N bytes, ...`: the prefix names the path | owner 2026-11-13 (PGMI-973): wording only |
 

@@ -1,0 +1,12 @@
+description: pgmi info judges pgmi.yaml's values as deploy does - Go calls a file with timeout 1d "ok" that deploy refuses, Rust shows the refusal (contract "Behaviour changes in 0.20", row "pgmi info on a pgmi.yaml whose values deploy refuses")
+project:
+  files:
+    deploy.sql: SELECT 1;
+    pgmi.yaml: "timeout: 1d\n"
+steps:
+  - pgmi: [info, "{project}"]
+    expect:
+      exit: 0
+      stdout: ['pgmi\.yaml: ok']
+      rust:
+        stdout: ['pgmi\.yaml: error: invalid timeout in pgmi\.yaml: time: invalid duration "1d"']

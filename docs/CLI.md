@@ -492,6 +492,8 @@ pgmi info [path] [flags]
 
 Inspects a pgmi project directory and reports file counts by directory, template type, deploy.sql presence, test coverage, and metadata usage.
 
+The `pgmi.yaml` line is `ok` only when `pgmi deploy` would accept the file's own values (its connection values and its timeout, with no flag or variable replacing them); otherwise it shows the refusal deploy would give, such as `pgmi.yaml: error: invalid timeout in pgmi.yaml: ...`.
+
 It also shows which pgmi version and template created the project, read from the first line `pgmi init` writes into `deploy.sql` (`-- Scaffolded by pgmi 0.12.2 from the advanced template.`). Use it to tell whether a project's template files predate a fix. pgmi never changes your files based on it.
 
 | Flag | Description |
@@ -1122,7 +1124,7 @@ after connecting, before any create or drop.
 |-------|-------|----------|
 | `database name is required` | No `-d`, no database in the connection string, no `PGDATABASE` | Add `-d mydb`. `deploy` never opens the connection wizard, also on a terminal |
 | `invalid parameter format` | `--param` without `=` | Use `--param key=value` |
-| `failed to load pgmi.yaml` | Unparseable `pgmi.yaml` | Fix the YAML syntax |
+| `failed to load pgmi.yaml` | Unparseable `pgmi.yaml`, or a value of the wrong kind | Fix the line and key the error names |
 | `unsupported API version` | Invalid `--compat` value | Use `--compat=1` (currently only v1 supported) |
 | `failed to read/parse params file` | `--params-file` missing or malformed | Check the path and the `KEY=VALUE` format |
 | `environment variable PGMI_PARAM_X is set but empty` | A CI secret mapped to it is missing or misspelled | Fix the secret mapping, or unset the variable |

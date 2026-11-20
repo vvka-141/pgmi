@@ -1,0 +1,19 @@
+description: a pgmi.yml, or PGMI.yaml, beside deploy.sql with no pgmi.yaml is not read; Go says nothing, Rust prints one WARNING naming the file and the name pgmi reads, then deploys without it (contract "Behaviour changes in 0.20", row "pgmi.yml or PGMI.yaml with no pgmi.yaml")
+project:
+  files:
+    yml/deploy.sql: SELECT 1;
+    yml/pgmi.yml: "timeout: 1ms\n"
+    upper/deploy.sql: SELECT 1;
+    upper/PGMI.yaml: "timeout: 1ms\n"
+steps:
+  - pgmi: [deploy, "{project}/yml", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      rust:
+        stderr: ['^WARNING: pgmi\.yml is not read; pgmi reads only pgmi\.yaml, so rename the file to use it$']
+  - pgmi: [deploy, "{project}/upper", --connection, "{conn}", -d, "{db}", --json]
+    expect:
+      exit: 0
+      rust:
+        stderr: ['^WARNING: PGMI\.yaml is not read; pgmi reads only pgmi\.yaml, so rename the file to use it$']
+        json: {warnings: ["WARNING: PGMI.yaml is not read; pgmi reads only pgmi.yaml, so rename the file to use it"]}

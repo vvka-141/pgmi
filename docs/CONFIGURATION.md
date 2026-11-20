@@ -60,12 +60,18 @@ retry: true              # Run the deploy again after a transient failure (defau
 retry_after_commit: false  # Also retry once a unit has committed (default: false)
 ```
 
-All fields are optional. Missing fields fall back to built-in defaults or libpq environment variables. Unknown keys are an error, not a silent fallback — a typo like `usernmae:` fails the load rather than quietly deploying against a default; the error names the line, the column and the keys expected. A file with two YAML documents, `port: 0` and a negative `timeout` are refused too (exit 10). A quoted port (`port: "5433"`) is accepted.
+All fields are optional. Missing fields fall back to built-in defaults or libpq environment variables. Unknown keys are an error, not a silent fallback — a typo like `usernmae:` fails the load rather than quietly deploying against a default; the error names the line, the column and the keys expected. pgmi reads only `pgmi.yaml`: when it is absent and a `pgmi.yml` (or the same name in another case, `PGMI.yaml`) sits beside `deploy.sql`, `pgmi deploy` prints one WARNING naming that file and goes on without it. `pgmi info` judges the file as `pgmi deploy` would on its own values, so `port: abc` or `timeout: 1d` shows as an error there, not `ok`. A file with two YAML documents, `port: 0` and a negative `timeout` are refused too (exit 10). A quoted port (`port: "5433"`) is accepted.
 
 `retry` and `retry_after_commit` decide whether a transient failure (a lost
 connection, a failover, a deadlock) runs the deploy again inside the time box.
 They are the project's property, so there is no flag for them. See
 [Time box and retries](CLI.md#time-box-and-retries).
+
+Both take `true` or `false`, and the YAML 1.1 spellings too: `yes`/`no`,
+`on`/`off` and `y`/`n`, in lower case, capitalised or upper case (`True`,
+`NO`), and the quoted words (`"true"`, `"no"`). Anything else, `0` and `1`
+included, is refused with exit 10 before connecting. Every other key keeps
+these words as text: `params: {flag: on}` passes the text `on`.
 
 ### `auth_method`
 
@@ -135,15 +141,28 @@ string outranks its environment variable, matching libpq — `PGSSLROOTCERT` is 
 a CI environment could swap the trust anchor out from under a `verify-full`
 connection string.
 
-**`--connection` replaces the `connection:` block in `pgmi.yaml`; it does not
-merge with it.** The chain above is per-field for flags and environment
-variables, but a connection string is one value. Every field it does not name
-comes from its PG* variable (`PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`,
-`PGAPPNAME`, `PGCONNECT_TIMEOUT`, `PGSSLMODE`), as in libpq, then from the
-built-in default (`localhost:5432`), never from the `pgmi.yaml` value. The one
-exception is the database: a string without one takes `PGDATABASE`, then
-`connection.database` from `pgmi.yaml`; with neither, the deploy refuses with
-exit 10. A database name carries no trust policy, so filling it is safe.
+**`--connection` replaces the server settings of the `connection:` block in
+`pgmi.yaml`; it does not merge with them.** The chain above is per-field for
+flags and environment variables, but a connection string is one value. Every
+field it does not name comes from its PG* variable (`PGHOST`, `PGPORT`,
+`PGDATABASE`, `PGUSER`, `PGAPPNAME`, `PGCONNECT_TIMEOUT`, `PGSSLMODE`), as in
+libpq, then from the built-in default (`localhost:5432`), never from
+`pgmi.yaml`'s `host`, `port`, `username` or `sslmode`. The other `connection:`
+keys still apply beside a connection string:
+
+- `database`: a string without one takes `PGDATABASE`, then
+  `connection.database`; with neither, the deploy refuses with exit 10.
+- `maintenance_database`, unless `-d` is given and the string names a
+  database: that database is then the maintenance database.
+- `sslcert`, `sslkey` and `sslrootcert`, when neither the string nor
+  `PGSSLCERT`, `PGSSLKEY` or `PGSSLROOTCERT` sets them; the `--sslcert`,
+  `--sslkey` and `--sslrootcert` flags outrank all of them.
+- `auth_method` and its companion keys, which choose the sign-in
+  ([`auth_method`](#auth_method)).
+
+So a committed `pgmi.yaml` with `sslrootcert` chooses the CA that a
+`verify-ca` or `verify-full` connection string from CI is checked against. To
+choose it yourself, put `sslrootcert` in the string or set `PGSSLROOTCERT`.
 
 ```yaml
 # pgmi.yaml
@@ -162,11 +181,12 @@ pgmi deploy . --connection "postgresql://other.host"
 # → with no PG* set: port 5432, sslmode prefer; the target database is myapp
 ```
 
-This is deliberate: merging `sslmode: require` from `pgmi.yaml` into a string
-pointing at a *different* host would apply one host's trust policy to another.
-Name the fields you need in the string, or use `-d` and the granular flags,
-which do compose. Pinned by the unit tests
-`a_string_replaces_the_pgmi_yaml_connection_block` and
+Dropping the server settings is deliberate: merging `sslmode: require` from
+`pgmi.yaml` into a string pointing at a *different* host would apply one
+host's trust policy to another. Name the fields you need in the string, or use
+`-d` and the granular flags, which do compose. Pinned by the unit tests
+`a_string_replaces_the_pgmi_yaml_connection_block`,
+`a_string_still_takes_the_databases_and_certificate_files_from_pgmi_yaml` and
 `a_string_takes_what_it_omits_from_the_environment` in
 `crates/pgmi/src/conn/resolve_tests.rs`.
 

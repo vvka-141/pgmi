@@ -74,6 +74,11 @@ fn yaml_port(written: &str) -> std::result::Result<String, YamlError> {
 #[derive(Debug)]
 pub(crate) enum YamlError {
     Syntax(serde_saphyr::Error),
+    /// A value the parser refused, reworded to name its key and the fix.
+    Key {
+        message: String,
+        error: Box<serde_saphyr::Error>,
+    },
     AuthMethod(String),
     Port(String),
 }
@@ -95,6 +100,7 @@ impl std::fmt::Display for YamlError {
                         ),
                 )
             }
+            YamlError::Key { message, .. } => f.write_str(message),
             YamlError::Port(text) => write!(
                 f,
                 "connection.port: invalid port {text:?}: expected a number"
@@ -113,6 +119,7 @@ impl std::error::Error for YamlError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             YamlError::Syntax(e) => e.source(),
+            YamlError::Key { error, .. } => error.source(),
             YamlError::AuthMethod(_) | YamlError::Port(_) => None,
         }
     }
@@ -131,6 +138,101 @@ fn auth_method(text: &str) -> std::result::Result<Provider, YamlError> {
         .ok_or_else(|| YamlError::AuthMethod(text.to_string()))
 }
 
+fn original(e: &serde_saphyr::Error) -> &serde_saphyr::Error {
+    match e.without_snippet() {
+        serde_saphyr::Error::AliasError { error, .. } => original(error),
+        other => other,
+    }
+}
+
+/// The top-level key whose block holds `line`, and the key written on
+/// `line` itself when it is nested under it.
+fn keys_at(text: &str, line: usize) -> Option<(&str, Option<&str>)> {
+    fn key(l: &str) -> Option<&str> {
+        let body = l.trim_start().trim_start_matches('\u{feff}');
+        if body.is_empty() || body.starts_with('#') {
+            return None;
+        }
+        body.split_once(':').map(|(k, _)| k.trim())
+    }
+    let lines: Vec<&str> = text.lines().collect();
+    let here = *lines.get(line.checked_sub(1)?)?;
+    let top = lines[..line]
+        .iter()
+        .rposition(|l| !l.starts_with([' ', '\t']) && key(l).is_some())?;
+    let nested = (top + 1 != line).then(|| key(here)).flatten();
+    Some((key(lines[top])?, nested))
+}
+
+fn reworded(error: serde_saphyr::Error, text: &str) -> YamlError {
+    use serde_saphyr::Error as E;
+    use serde_saphyr::budget::BudgetBreach;
+    let inner = original(&error);
+    if let E::Budget {
+        breach: BudgetBreach::AliasAnchorRatio { aliases, anchors },
+        ..
+    } = inner
+    {
+        let noun = if *anchors == 1 { "anchor" } else { "anchors" };
+        let message = format!(
+            "{aliases} aliases (*name) of {anchors} {noun} (&name), more than pgmi reads (at most 10 per anchor from 100 aliases on); write the repeated values out"
+        );
+        return YamlError::Key {
+            message,
+            error: Box::new(error),
+        };
+    }
+    if matches!(
+        inner,
+        E::DuplicateMappingKey { .. }
+            | E::SerdeUnknownField { .. }
+            | E::MultipleDocuments { .. }
+            | E::Budget { .. }
+    ) {
+        return YamlError::Syntax(error);
+    }
+    let Some(at) = inner.location() else {
+        return YamlError::Syntax(error);
+    };
+    let Some((top, nested)) = usize::try_from(at.line())
+        .ok()
+        .and_then(|line| keys_at(text, line))
+    else {
+        return YamlError::Syntax(error);
+    };
+    let null_name = top == "params" && matches!(inner, E::NullIntoString { .. });
+    let fix = match (top, nested) {
+        ("retry" | "retry_after_commit", _) => "want true or false".to_string(),
+        ("timeout", _) => "want a duration such as 30s or 5m".to_string(),
+        ("params", _) if null_name => {
+            "a parameter name is empty or ~; name the parameter".to_string()
+        }
+        ("connection", None) => {
+            "want keys under it, one per line, such as \"host: db.internal\"".to_string()
+        }
+        ("params", None) => "want name: value pairs under it, one per line".to_string(),
+        _ => {
+            let said = inner.to_string();
+            let first = said.lines().next().unwrap_or_default();
+            let first = first.strip_prefix("error: ").unwrap_or(first);
+            first
+                .strip_prefix("line ")
+                .and_then(|rest| rest.split_once(": "))
+                .map_or(first, |(_, what)| what)
+                .to_string()
+        }
+    };
+    let name = match nested.filter(|_| !null_name) {
+        Some(k) => format!("{top}.{k}"),
+        None => top.to_string(),
+    };
+    let message = format!("{name}: {fix} (line {} column {})", at.line(), at.column());
+    YamlError::Key {
+        message,
+        error: Box::new(error),
+    }
+}
+
 fn sslmode_line(text: &str) -> Option<usize> {
     let mut in_connection = false;
     for (n, line) in text.lines().enumerate() {
@@ -147,18 +249,44 @@ fn sslmode_line(text: &str) -> Option<usize> {
     None
 }
 
+/// The WARNING for a file beside `deploy.sql` that looks meant as
+/// `pgmi.yaml` (`pgmi.yml`, `PGMI.yaml`) when `pgmi.yaml` itself is absent.
+pub(crate) fn misnamed(project: &impl Vfs) -> Option<String> {
+    if project.stat("pgmi.yaml").is_ok() {
+        return None;
+    }
+    let entries = project.read_dir("").ok()?;
+    let name = entries
+        .iter()
+        .map(|e| e.name.as_str())
+        .find(|n| n.eq_ignore_ascii_case("pgmi.yaml") || n.eq_ignore_ascii_case("pgmi.yml"))?;
+    Some(format!(
+        "WARNING: {name} is not read; pgmi reads only pgmi.yaml, so rename the file to use it"
+    ))
+}
+
 impl ProjectConfig {
     pub(crate) fn load(project: &impl Vfs) -> Result<Option<Self>> {
         crate::vfs::no_symlink(project, "pgmi.yaml")?;
         let text = match project.read_to_string("pgmi.yaml") {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) if e.kind() == std::io::ErrorKind::IsADirectory => {
+                return Err(Error::config(format!(
+                    "failed to load pgmi.yaml: {} is a directory; replace it with a file",
+                    project.display("pgmi.yaml")
+                )));
+            }
             Err(e) => {
-                return Err(Error::config("failed to load pgmi.yaml").with_source(e));
+                return Err(Error::config(format!(
+                    "failed to load pgmi.yaml: read {}",
+                    project.display("pgmi.yaml")
+                ))
+                .with_source(e));
             }
         };
         Self::parse(&text).map(Some).map_err(|e| match e {
-            YamlError::Syntax(_) => Error::config(format!(
+            YamlError::Syntax(_) | YamlError::Key { .. } => Error::config(format!(
                 "failed to load pgmi.yaml: parse {}",
                 project.display("pgmi.yaml")
             ))
@@ -172,7 +300,7 @@ impl ProjectConfig {
             return Ok(Self::default());
         }
         let Some(mut cfg) =
-            serde_saphyr::from_str::<Option<ProjectConfig>>(text).map_err(YamlError::Syntax)?
+            serde_saphyr::from_str::<Option<ProjectConfig>>(text).map_err(|e| reworded(e, text))?
         else {
             return Ok(Self::default());
         };
@@ -358,7 +486,7 @@ mod tests {
             ),
             (
                 MemFs::default().file("pgmi.yaml", b"timeout: \xff\n"),
-                "failed to load pgmi.yaml: stream did not contain valid UTF-8",
+                "failed to load pgmi.yaml: read ",
             ),
         ] {
             let e = ProjectConfig::load(&fs).unwrap_err();
@@ -439,5 +567,137 @@ mod tests {
             minimal.param_values(),
             [("env".to_string(), "development".to_string())]
         );
+    }
+
+    #[test]
+    fn a_value_of_the_wrong_kind_names_its_key_and_the_fix() {
+        use std::fmt::Write as _;
+        let mut aliases = String::from("params:\n  a: &a v\n");
+        for i in 0..120 {
+            let _ = writeln!(aliases, "  k{i}: *a");
+        }
+        for (text, want) in [
+            ("retry: 0\n", "retry: want true or false (line 1 column 8)"),
+            (
+                "retry_after_commit: maybe\n",
+                "retry_after_commit: want true or false (line 1",
+            ),
+            (
+                "connection: x\n",
+                "connection: want keys under it, one per line, such as \"host: db.internal\" (line 1 column 13)",
+            ),
+            (
+                "params: {~: 1}\n",
+                "params: a parameter name is empty or ~; name the parameter (line 1",
+            ),
+            (
+                "params:\n  ~: 1\n",
+                "params: a parameter name is empty or ~; name the parameter (line 2",
+            ),
+            (
+                "timeout: [1s]\n",
+                "timeout: want a duration such as 30s or 5m (line 1 column 10)",
+            ),
+            ("connection:\n  host: [a, b]\n", "connection.host: "),
+            (
+                aliases.as_str(),
+                "120 aliases (*name) of 1 anchor (&name), more than pgmi reads (at most 10 per anchor from 100 aliases on); write the repeated values out",
+            ),
+        ] {
+            let e = Error::from(ProjectConfig::parse(text).unwrap_err());
+            assert_eq!(e.exit_code(), 10, "{text}");
+            assert!(
+                e.text()
+                    .starts_with(&format!("failed to load pgmi.yaml: {want}")),
+                "{text:?}: {}",
+                e.text()
+            );
+        }
+    }
+
+    #[test]
+    fn a_pgmi_yaml_that_is_a_directory_names_the_path_and_the_fix() {
+        use crate::vfs::MemFs;
+        let e = ProjectConfig::load(&MemFs::default().dir("pgmi.yaml")).unwrap_err();
+        assert_eq!(e.exit_code(), 10);
+        assert!(
+            e.text().contains("pgmi.yaml is a directory")
+                && e.text().contains("replace it with a file"),
+            "{}",
+            e.text()
+        );
+    }
+
+    #[test]
+    fn a_misnamed_pgmi_yaml_is_named_once_with_the_file_pgmi_reads() {
+        use crate::vfs::MemFs;
+        for name in ["pgmi.yml", "PGMI.yaml", "Pgmi.YML"] {
+            assert_eq!(
+                misnamed(&MemFs::default().file(name, "timeout: 1s\n")).as_deref(),
+                Some(
+                    format!(
+                        "WARNING: {name} is not read; pgmi reads only pgmi.yaml, so rename the file to use it"
+                    )
+                    .as_str()
+                ),
+                "{name}"
+            );
+        }
+        let both = MemFs::default().file("pgmi.yml", "").file("PGMI.yaml", "");
+        assert_eq!(
+            misnamed(&both).map(|w| w.matches("WARNING").count()),
+            Some(1)
+        );
+        for fs in [
+            MemFs::default(),
+            MemFs::default().file("pgmi.yaml", "").file("pgmi.yml", ""),
+            MemFs::default().file("pgmi.yaml.bak", ""),
+        ] {
+            assert_eq!(misnamed(&fs), None);
+        }
+    }
+
+    #[test]
+    fn retry_keys_read_yaml_1_1_booleans_and_refuse_numbers() {
+        for (written, read) in [
+            ("true", true),
+            ("True", true),
+            ("TRUE", true),
+            ("yes", true),
+            ("Yes", true),
+            ("YES", true),
+            ("y", true),
+            ("Y", true),
+            ("on", true),
+            ("On", true),
+            ("ON", true),
+            ("\"true\"", true),
+            ("\"yes\"", true),
+            ("false", false),
+            ("False", false),
+            ("no", false),
+            ("NO", false),
+            ("n", false),
+            ("N", false),
+            ("off", false),
+            ("Off", false),
+            ("\"no\"", false),
+        ] {
+            let cfg = ProjectConfig::parse(&format!(
+                "retry: {written}\nretry_after_commit: {written}\n"
+            ))
+            .unwrap_or_else(|e| panic!("{written}: {e}"));
+            assert_eq!(
+                (cfg.retry, cfg.retry_after_commit),
+                (Some(read), Some(read)),
+                "{written}"
+            );
+        }
+        for written in ["0", "1", "\"\"", "tru"] {
+            assert!(
+                ProjectConfig::parse(&format!("retry: {written}\n")).is_err(),
+                "{written}"
+            );
+        }
     }
 }

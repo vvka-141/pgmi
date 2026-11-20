@@ -89,6 +89,10 @@ impl Source {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Unknown;
 
+pub(crate) trait Keyword: FromStr<Err = Unknown> {
+    fn texts() -> &'static [&'static str];
+}
+
 macro_rules! keywords {
     ($(#[$meta:meta])* $name:ident { $($variant:ident = $text:literal),+ $(,)? }) => {
         $(#[$meta])*
@@ -99,11 +103,18 @@ macro_rules! keywords {
 
         impl $name {
             pub(crate) const ALL: &'static [Self] = &[$($name::$variant),+];
+            const TEXTS: &'static [&'static str] = &[$($text),+];
 
             pub(crate) const fn as_str(self) -> &'static str {
                 match self {
                     $($name::$variant => $text),+
                 }
+            }
+        }
+
+        impl Keyword for $name {
+            fn texts() -> &'static [&'static str] {
+                Self::TEXTS
             }
         }
 
@@ -294,7 +305,10 @@ pub(crate) enum ResolveError {
         error: ParseError,
     },
     NoDatabase,
-    Port(String),
+    Port {
+        value: String,
+        origin: &'static str,
+    },
     /// A setting written empty or as white space only, and where.
     Blank {
         key: &'static str,
@@ -309,6 +323,7 @@ pub(crate) enum ResolveError {
     Value {
         key: &'static str,
         value: String,
+        valid: &'static [&'static str],
     },
     WeakForSystemRoots(SslMode),
     WeakForDirect(SslMode),
@@ -355,21 +370,7 @@ impl fmt::Display for ResolveError {
             ResolveError::ServiceEnv => f.write_str(
                 "PGSERVICE is set: service files (service=, PGSERVICE) are not supported: give host, port and dbname in the connection string, flags or PGHOST/PGPORT/PGDATABASE",
             ),
-            ResolveError::ConnectionWith(flags, sslmode) => {
-                let mut passed = flags.clone();
-                passed.extend(sslmode.map(|_| "--sslmode"));
-                write!(f, "cannot combine --connection with {}; ", passed.join(", "))?;
-                match sslmode.filter(|_| flags.is_empty()) {
-                    Some(mode) => write!(
-                        f,
-                        "put sslmode={} in the connection string",
-                        mode.as_str()
-                    ),
-                    None => f.write_str(
-                        "put the host, port and user in the connection string, or drop --connection and use -h, -p, -U",
-                    ),
-                }
-            }
+            ResolveError::ConnectionWith(flags, sslmode) => connection_with(f, flags, *sslmode),
             ResolveError::FlagWithEnvString { flag, source } => write!(
                 f,
                 "cannot combine {flag} with {source}, which names its own server and login; unset {source} to connect with the flags, or put the values in the string",
@@ -379,7 +380,10 @@ impl fmt::Display for ResolveError {
             ResolveError::NoDatabase => f.write_str(
                 "database name is required\nProvide via:\n  1. --database/-d flag: pgmi deploy . -d mydb\n  2. Connection string: pgmi deploy . --connection \"postgresql://user@host/mydb\"\n  3. pgmi.yaml: connection.database: mydb\n  4. Environment variable: export PGDATABASE=mydb, or a database in PGMI_CONNECTION_STRING / DATABASE_URL",
             ),
-            ResolveError::Port(p) => write!(f, "invalid port \"{p}\""),
+            ResolveError::Port { value, origin } => write!(
+                f,
+                "invalid port \"{value}\" from {origin}: want a number from 1 to 65535"
+            ),
             ResolveError::Blank { key, origin, how } => f.write_str(&blank(key, origin, *how)),
             ResolveError::FlagPort(p) => write!(
                 f,
@@ -388,7 +392,9 @@ impl fmt::Display for ResolveError {
             ResolveError::PortCount { ports, hosts } => {
                 write!(f, "could not match {ports} port numbers to {hosts} hosts")
             }
-            ResolveError::Value { key, value } => write!(f, "invalid {key} value: \"{value}\""),
+            ResolveError::Value { key, value, valid } => {
+                write!(f, "invalid {key} value: \"{value}\"{}", choices(valid))
+            }
             ResolveError::WeakForSystemRoots(mode) => write!(
                 f,
                 "weak sslmode \"{mode}\" may not be used with sslrootcert=system (use \"verify-full\")"
@@ -448,6 +454,38 @@ impl From<Error> for ResolveError {
     }
 }
 
+fn connection_with(
+    f: &mut fmt::Formatter<'_>,
+    flags: &[&'static str],
+    sslmode: Option<SslMode>,
+) -> fmt::Result {
+    let mut passed = flags.to_vec();
+    passed.extend(sslmode.map(|_| "--sslmode"));
+    write!(
+        f,
+        "cannot combine --connection with {}; ",
+        passed.join(", ")
+    )?;
+    match sslmode.filter(|_| flags.is_empty()) {
+        Some(mode) => write!(
+            f,
+            "put sslmode={} in the connection string",
+            mode.as_str()
+        ),
+        None => f.write_str(
+            "put the host, port and user in the connection string, or drop --connection and use -h, -p, -U",
+        ),
+    }
+}
+
+fn choices(valid: &[&str]) -> String {
+    if valid.is_empty() {
+        String::new()
+    } else {
+        format!(" (valid: {})", valid.join(", "))
+    }
+}
+
 fn blank(key: &str, origin: &str, how: Blank) -> String {
     format!(
         "the {key} from {origin} is {}; write the {key}, or remove it so the next source applies",
@@ -480,10 +518,14 @@ impl ResolveError {
         let hide = |s: String| crate::error::redact(&s, secrets);
         match self {
             ResolveError::Env(e) => ResolveError::Env(e.redact(secrets)),
-            ResolveError::Port(p) => ResolveError::Port(hide(p)),
-            ResolveError::Value { key, value } => ResolveError::Value {
+            ResolveError::Port { value, origin } => ResolveError::Port {
+                value: hide(value),
+                origin,
+            },
+            ResolveError::Value { key, value, valid } => ResolveError::Value {
                 key,
                 value: hide(value),
+                valid,
             },
             ResolveError::ConnectTimeout(t) => ResolveError::ConnectTimeout(hide(t)),
             ResolveError::ConnectTimeoutRange(t) => ResolveError::ConnectTimeoutRange(hide(t)),
@@ -814,6 +856,7 @@ fn finish(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>, given: Given)
         string_db,
     } = given;
     let sslmode_source = SslModeSource::of(flags, &fields, source, env, yaml)?;
+    let port_origin = port_origin(&fields, source, env, yaml)?;
     merge(&mut fields, flags, env, yaml, source)?;
     let f = &mut fields;
     let Databases {
@@ -821,7 +864,7 @@ fn finish(flags: &Flags, env: &Env, yaml: Option<&YamlConnection>, given: Given)
         maintenance: maintenance_db,
         replaced: replaced_db,
     } = databases(flags, string_db.as_deref(), source, env, yaml)?;
-    let hosts = take_hosts(f)?;
+    let hosts = take_hosts(f, port_origin)?;
     let tls = TlsSettings::take(f)?;
     check_protocol(f)?;
     let channel_binding = keyword(f, "channel_binding", ChannelBinding::Prefer)?;
@@ -989,12 +1032,31 @@ fn databases(
     })
 }
 
-fn take_hosts(f: &mut Fields) -> Result<Hosts> {
+/// Where the port was written, named when it is not a port.
+fn port_origin(
+    f: &Fields,
+    source: Source,
+    env: &Env,
+    yaml: Option<&YamlConnection>,
+) -> Result<&'static str> {
+    Ok(if f.contains_key("port") {
+        source.label()
+    } else if env.non_empty("PGPORT")?.is_some() {
+        "PGPORT"
+    } else if !source.is_string() && yaml.is_some_and(|y| y.port.is_some()) {
+        "pgmi.yaml connection.port"
+    } else {
+        "defaults"
+    })
+}
+
+fn take_hosts(f: &mut Fields, port_origin: &'static str) -> Result<Hosts> {
     let hostaddr = f.remove("hostaddr");
     let host_text = f.remove("host").or_else(|| hostaddr.clone());
     hosts(
         host_text.as_deref().unwrap_or("localhost"),
         f.remove("port").as_deref().unwrap_or("5432"),
+        port_origin,
         hostaddr.as_deref(),
     )
 }
@@ -1071,7 +1133,7 @@ fn check_protocol(f: &mut Fields) -> Result<()> {
     }
 }
 
-fn keyword<T: FromStr<Err = Unknown>>(f: &mut Fields, key: &'static str, default: T) -> Result<T> {
+fn keyword<T: Keyword>(f: &mut Fields, key: &'static str, default: T) -> Result<T> {
     f.remove(key).map_or(Ok(default), |v| setting(key, &v))
 }
 
@@ -1204,11 +1266,16 @@ fn value(key: &'static str, value: &str) -> ResolveError {
     ResolveError::Value {
         key,
         value: value.to_string(),
+        valid: &[],
     }
 }
 
-fn setting<T: FromStr<Err = Unknown>>(key: &'static str, text: &str) -> Result<T> {
-    text.parse().map_err(|Unknown| value(key, text))
+fn setting<T: Keyword>(key: &'static str, text: &str) -> Result<T> {
+    text.parse().map_err(|Unknown| ResolveError::Value {
+        key,
+        value: text.to_string(),
+        valid: T::texts(),
+    })
 }
 
 fn split_list(text: &str) -> (&str, Vec<&str>) {
@@ -1216,12 +1283,20 @@ fn split_list(text: &str) -> (&str, Vec<&str>) {
     (parts.next().unwrap_or_default(), parts.collect())
 }
 
-fn hosts(host_text: &str, port_text: &str, addr_text: Option<&str>) -> Result<Hosts> {
+fn hosts(
+    host_text: &str,
+    port_text: &str,
+    port_origin: &'static str,
+    addr_text: Option<&str>,
+) -> Result<Hosts> {
     let port = |p: &str| -> Result<u16> {
         p.parse::<u16>()
             .ok()
             .filter(|n| *n > 0)
-            .ok_or_else(|| ResolveError::Port(p.to_string()))
+            .ok_or_else(|| ResolveError::Port {
+                value: p.to_string(),
+                origin: port_origin,
+            })
     };
     let (first_name, rest_names) = split_list(host_text);
     if first_name.is_empty() || rest_names.iter().any(|n| n.is_empty()) {

@@ -270,7 +270,7 @@ accept:
     case: cases/(connection/pgx-options|env/pg-tls-protocol-variables|tls/(client-certificate-pairs|require-auth-and-version))\.yaml
     field: stderr
     go: 'cannot parse `postgresql://'
-    rust: '(?m)^pgmi: error: (invalid [a-z_]+ (value|method): "[^"]*"|both "sslcert" and "sslkey" are required: give the client certificate and its private key together)$'
+    rust: '(?m)^pgmi: error: (invalid [a-z_]+ (value|method): "[^"]*"( \(valid: [^)]*\))?|both "sslcert" and "sslkey" are required: give the client certificate and its private key together)$'
   - row: Connection-string parse errors
     case: cases/(connection/keyword-uppercase-no-echo|env/pgservice-refused)\.yaml
     field: stderr
@@ -315,7 +315,7 @@ accept:
     case: 'cases/config/(yaml-duplicate-keys|yaml-tabs|yaml-unknown-keys|pgmi-yaml-invalid)\.yaml|variant/pgmi\.yaml: .*'
     field: stderr
     go: '\Apgmi: error: failed to load pgmi\.yaml: parse \{project\}/(\w+/)?pgmi\.yaml: yaml: '
-    rust: '\Apgmi: error: failed to load pgmi\.yaml: parse \{project\}/(\w+/)?pgmi\.yaml: line \d+ column \d+: [^\n]*$'
+    rust: '\Apgmi: error: failed to load pgmi\.yaml: parse \{project\}/(\w+/)?pgmi\.yaml: (line \d+ column \d+: [^\n]*|[\w.~]+: [^\n]* \(line \d+ column \d+\))$'
   - row: '`pgmi.yaml` with two YAML documents'
     case: cases/config/yaml-documents\.yaml
     field: stderr
@@ -458,8 +458,8 @@ accept:
   - row: '`connect_timeout` or `sslmode` in a connection string that is not a valid value'
     case: 'variant/connection: .*sslmode=bogus.*'
     field: stderr
-    go: 'invalid sslmode "bogus" in the connection \(valid: [^)]*\)'
-    go_as: 'invalid sslmode value: "bogus"'
+    go: 'invalid sslmode "bogus" in the connection (\(valid: [^)]*\))'
+    go_as: 'invalid sslmode value: "bogus" \1'
   - row: 'Refusal order: a `pgmi.yaml` port that is not a number, or a quoted one, and no database'
     case: "variant/pgmi\\.yaml: .*'port': '(x|\\d+)'.*"
     field: stderr

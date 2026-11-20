@@ -248,7 +248,9 @@ PostgreSQL defaults (localhost, 5432)
 ```
 
 A connection string is the exception: a field it names outranks its `PG*`
-variable, and with a string `pgmi.yaml` supplies only the database. Every
+variable, and with a string `pgmi.yaml` supplies only the database, the
+maintenance database and the TLS paths (`sslcert`, `sslkey`, `sslrootcert`).
+Every
 variable pgmi, the driver and the cloud SDKs read is in the
 [environment reference](CICD.md#environment-reference).
 
