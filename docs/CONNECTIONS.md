@@ -391,7 +391,7 @@ When you use `--overwrite`, pgmi follows this sequence:
    `--overwrite` of the same target exits 15, also while this one waits at the
    prompt or creates a target that did not exist
 3. If the target does not exist, create it and skip to step 8
-4. Show safety prompt (interactive confirmation or 5-second countdown with `--force`)
+4. Show safety prompt (interactive confirmation, or with `--force` a 5-second countdown on a terminal and none without one)
 5. Refuse with exit 15 if a deploy holds the target's deploy lock
 6. `DROP DATABASE target_db WITH (FORCE)`, which ends the target's connections
 7. `CREATE DATABASE target_db`

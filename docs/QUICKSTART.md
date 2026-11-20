@@ -373,7 +373,7 @@ pgmi deploy . --overwrite --force --param env=dev
 What this does:
 - `.` means "this directory" (where pgmi.yaml and deploy.sql are)
 - `--overwrite` allows dropping and recreating the database if it already exists
-- `--force` replaces interactive confirmation with a 5-second countdown (you can still press Ctrl+C to cancel)
+- `--force` replaces interactive confirmation with a 5-second countdown on a terminal (you can still press Ctrl+C to cancel); without a terminal there is no countdown
 
 **Note:** `--overwrite` is for local development. In production, deploy incrementally without this flag. pgmi drops and recreates the database *before* `deploy.sql` runs, so a deploy that then fails (for example on a missing parameter) leaves an empty database behind. The basic and advanced templates require `env`: pass `--param env=dev` on a local `--overwrite`.
 
