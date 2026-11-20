@@ -13,13 +13,15 @@ skip:
 
 accept:
   - row: Known secrets (password, `sslpassword`, sign-in tokens) in notices, errors, `--json`, serve
-    case: cases/(notices/(pgpass-)?secrets-redacted|errors/diagnostics-secrets|deploy/advanced-template-.*|checksums/cross-binary-redeploy-advanced|tls/tls-only-and-plain-servers)\.yaml
+    case: cases/(notices/(pgpass-secret|secrets)-redacted|errors/diagnostics-secrets)\.yaml
     field: stderr
-    rust: \*\*\*
+    go: 'pw-\{db\}-x|(?<=password=)\[redacted\]'
+    go_as: '***'
   - row: Known secrets (password, `sslpassword`, sign-in tokens) in notices, errors, `--json`, serve
-    case: cases/(notices/(pgpass-)?secrets-redacted|errors/diagnostics-secrets)\.yaml
+    case: cases/(notices/(pgpass-secret|secrets)-redacted|errors/diagnostics-secrets)\.yaml
     field: json
-    rust: \*\*\*
+    go: 'pw-\{db\}-x|(?<=password=)\[redacted\]'
+    go_as: '***'
   - row: Connection-string parse errors
     case: cases/errors/connection-string-(secrets|password-rest)\.yaml
     field: stderr
@@ -158,6 +160,26 @@ accept:
     field: stderr
     go: '(?m)^pgmi: error: maintenance database: connect to '
     go_as: 'pgmi: error: connect to '
+  - row: Whole-deployment retry
+    case: 'cases/(bad-weather/azure-managed-identity-gives-up|connection/(target-session-attrs|multi-host|connect-timeout-range|uri-scheme-case)|exit-codes/11-connection-failed|errors/(refusal-wording|connection-source)|env/pgconnect-timeout)\.yaml|variant/(connection|pgmi\.yaml): .*'
+    field: stderr
+    rust: '(?m)^(?:Preparing session: scanning files, loading parameters\n)?pgmi: attempt \d+ failed \([^\n]*\); retrying in <duration>, (?:\d+ attempts?|<duration>) left\n'
+    rust_as: ''
+  - row: Whole-deployment retry
+    case: 'cases/(bad-weather/azure-managed-identity-gives-up|connection/(target-session-attrs|multi-host|connect-timeout-range|uri-scheme-case)|exit-codes/11-connection-failed|errors/(refusal-wording|connection-source)|env/pgconnect-timeout)\.yaml|variant/(connection|pgmi\.yaml): .*'
+    field: stderr
+    rust: '(?m)(?<=^pgmi: error: )(?:gave up after \d+ attempts? with no time box \(--timeout 0\)|time box of <duration> used up after \d+ attempts?|stopped after \d+ attempts?: the next retry would pass the <duration> time box); last error: '
+    rust_as: ''
+  - row: Whole-deployment retry
+    case: 'cases/(bad-weather/azure-managed-identity-gives-up|connection/(target-session-attrs|multi-host|connect-timeout-range|uri-scheme-case)|exit-codes/11-connection-failed|errors/(refusal-wording|connection-source)|env/pgconnect-timeout)\.yaml|variant/(connection|pgmi\.yaml): .*'
+    field: stderr
+    rust: '(?m)\nattempt 1 of \d+ failed with: [^\n]*$'
+    rust_as: ''
+  - row: Whole-deployment retry
+    case: cases/(bad-weather/azure-managed-identity-gives-up|connection/(multi-host|connect-timeout-range|uri-scheme-case)|exit-codes/11-connection-failed|errors/(refusal-wording|connection-source)|env/pgconnect-timeout)\.yaml
+    field: json
+    rust: '(?<="error": ")time box of <duration> used up after \d+ attempts?; last error: '
+    rust_as: ''
   - row: Driver error text in connection and retry lines
     case: 'cases/(bad-weather|cloud|connection|env|errors|exit-codes|tls)/.*\.yaml|variant/(connection|pgmi\.yaml): .*'
     field: stderr
@@ -290,14 +312,6 @@ accept:
     field: stderr
     go: 'invalid connect_timeout (value )?"x": strconv\.Atoi'
     rust: '\Apgmi: error: invalid connect_timeout "x"$'
-  - row: Known secrets (password, `sslpassword`, sign-in tokens) in notices, errors, `--json`, serve
-    case: cases/notices/pgpass-secret-redacted\.yaml
-    field: stderr
-    rust: \*\*\*
-  - row: Known secrets (password, `sslpassword`, sign-in tokens) in notices, errors, `--json`, serve
-    case: cases/notices/pgpass-secret-redacted\.yaml
-    field: json
-    rust: \*\*\*
   - row: Known secrets (password, `sslpassword`, sign-in tokens) in notices, errors, `--json`, serve
     case: cases/(connection/maintenance-database-only-when-needed|errors/connection-failures)\.yaml
     field: stderr
@@ -436,14 +450,6 @@ accept:
     field: stdout
     rust: '"timeUsedMs": \d+, '
     rust_as: ''
-  - row: Whole-deployment retry
-    case: 'cases/(bad-weather/azure-managed-identity-gives-up|connection/(target-session-attrs|multi-host|connect-timeout-range|uri-scheme-case)|exit-codes/11-connection-failed|errors/(refusal-wording|connection-source)|env/pgconnect-timeout)\.yaml|variant/(connection|pgmi\.yaml): .*'
-    field: stderr
-    rust: '(?m)^pgmi: attempt 1 failed \('
-  - row: Whole-deployment retry
-    case: cases/(bad-weather/azure-managed-identity-gives-up|connection/(multi-host|connect-timeout-range|uri-scheme-case)|exit-codes/11-connection-failed|errors/(refusal-wording|connection-source)|env/pgconnect-timeout)\.yaml
-    field: json
-    rust: '"error": "time box of <duration> used up after \d+ attempts?; last error: '
   - row: Failure summary after a stop or a retry
     case: cases/bad-weather/frozen-server-timeout\.yaml
     field: stderr
@@ -504,7 +510,18 @@ accept:
     field: stderr
     rust: sets PGSERVICE, which a project \.env may not set
   - row: 'A project `.env` that does not parse (a line that is not `KEY=VALUE`, a comment or blank; a NUL byte)'
-    case: cases/(errors/next-step-hints|formats/dotenv-nul)\.yaml
+    case: cases/errors/next-step-hints\.yaml
+    step: steps[5]
+    field: db
+    rust: <no database>
+  - row: 'A project `.env` that does not parse (a line that is not `KEY=VALUE`, a comment or blank; a NUL byte)'
+    case: cases/errors/next-step-hints\.yaml
+    step: steps[6]
+    field: db
+    rust: <no database>
+  - row: 'A project `.env` that does not parse (a line that is not `KEY=VALUE`, a comment or blank; a NUL byte)'
+    case: cases/formats/dotenv-nul\.yaml
+    step: steps[0]
     field: db
     rust: <no database>
   - row: 'A project `.env` that does not parse (a line that is not `KEY=VALUE`, a comment or blank; a NUL byte)'
