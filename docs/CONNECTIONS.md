@@ -267,8 +267,8 @@ An empty value is not an unset one. A connection setting written empty or as
 white space only stops the deploy before connecting, exit 10: a key of a
 connection string in any form (`host=''`, `?sslmode=`, `Port=;`), a
 connection flag (`-h ''`), a `PG*` variable (`PGHOST=`), `DATABASE_URL`,
-`PGMI_CONNECTION_STRING`, or a `pgmi.yaml` value written as `""` or with no value (`host:`, `host: ~`,
-`host: null`). The message
+`PGMI_CONNECTION_STRING`, a `pgmi.yaml` value written as `""` or with no value (`host:`, `host: ~`,
+`host: null`), or a `pgmi serve` deploy call's `maintenanceDatabase`. The message
 names the setting and where it was written:
 
 ```

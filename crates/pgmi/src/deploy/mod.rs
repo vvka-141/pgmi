@@ -541,6 +541,13 @@ impl Run {
     }
 }
 
+fn maintenance_db(spec: &mut Spec, given: Option<&str>) -> Result<()> {
+    if let Some(m) = resolve::written("maintenance_database", "maintenanceDatabase", given)? {
+        m.clone_into(&mut spec.maintenance_db);
+    }
+    Ok(())
+}
+
 pub(crate) fn run(runtime: Runtime, ctx: &Context) -> u8 {
     let reporter = Reporter::new(ctx.verbose, &ctx.env);
     let mut run = Run::start();
@@ -845,9 +852,7 @@ impl Steps<'_> {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .warn(line);
         }
-        if let Some(m) = &request.maintenance_db {
-            spec.maintenance_db.clone_from(m);
-        }
+        maintenance_db(&mut spec, request.maintenance_db.as_deref())?;
         if let Some(allowed) = &self.ctx.serve_hosts
             && let Some(host) =
                 restrict_to_allowed(&mut spec, &request.connection, cloud.as_ref(), allowed)?
@@ -1716,6 +1721,27 @@ mod tests {
             ..resolve::Flags::default()
         };
         resolve::resolve(&flags, &Env::default(), None).unwrap()
+    }
+
+    #[test]
+    fn an_empty_or_blank_maintenance_database_is_refused_and_a_written_one_applies() {
+        for (given, how) in [("", "empty"), (" \t", "only whitespace")] {
+            let mut s = spec("app");
+            let e = maintenance_db(&mut s, Some(given)).unwrap_err();
+            assert_eq!(e.kind(), Kind::Config);
+            assert_eq!(
+                e.text(),
+                format!(
+                    "the maintenance_database from maintenanceDatabase is {how}; write the maintenance_database, or remove it so the next source applies"
+                )
+            );
+            assert_eq!(s.maintenance_db, "postgres");
+        }
+        let mut s = spec("app");
+        maintenance_db(&mut s, None).unwrap();
+        assert_eq!(s.maintenance_db, "postgres");
+        maintenance_db(&mut s, Some("template1")).unwrap();
+        assert_eq!(s.maintenance_db, "template1");
     }
 
     #[test]

@@ -1,0 +1,20 @@
+description: a serve deploy call whose maintenanceDatabase is empty or white space is refused by the Rust binary before connecting (exitCode 10), naming the argument, as an empty maintenance_database in pgmi.yaml is (PGMI-1105, PGMI-1111). Go takes the empty value as written and deploys, creating the database through the server's default database
+project:
+  files:
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [serve]
+    stdin:
+      - '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}'
+      - '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"{conn}","database":"{db}","maintenanceDatabase":""}}}'
+      - {until: '"id":2,', timeout: 60}
+      - '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"{conn}","database":"{db}","maintenanceDatabase":"  "}}}'
+      - {until: '"id":3,', timeout: 60}
+    timeout: 60
+    expect:
+      exit: 0
+      stdout: ['(?m)^{"jsonrpc":"2.0","id":2,"result":{"content":\[{"type":"text","text":"deployed {db}: ']
+      rust:
+        stdout:
+          - '(?m)^{"jsonrpc":"2.0","id":2,"result":{.*the maintenance_database from maintenanceDatabase is empty; write the maintenance_database, or remove it so the next source applies.*"exitCode":10.*"isError":true}}$'
+          - '(?m)^{"jsonrpc":"2.0","id":3,"result":{.*the maintenance_database from maintenanceDatabase is only whitespace; write the maintenance_database.*"exitCode":10.*"isError":true}}$'

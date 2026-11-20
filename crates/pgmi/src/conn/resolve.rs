@@ -813,7 +813,7 @@ pub(super) fn connection_string(flags: &Flags, env: &Env) -> Result<Option<(Stri
 /// A value as written, refused when it is empty or white space: read as
 /// unset, it would give way to the next source or to the built-in default,
 /// a server or a setting the operator did not name.
-fn written<'a>(
+pub(crate) fn written<'a>(
     key: &'static str,
     origin: &'static str,
     value: Option<&'a str>,
