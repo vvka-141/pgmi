@@ -101,6 +101,16 @@ pub(crate) enum Concurrent {
     Detach,
 }
 
+fn after_name<'a, 'b>(w: &'b [&'a [u8]]) -> &'b [&'a [u8]] {
+    let mut rest = w.get(1..).unwrap_or_default();
+    while let [dot, _, tail @ ..] = rest
+        && *dot == b"."
+    {
+        rest = tail;
+    }
+    rest
+}
+
 pub(crate) fn concurrent(unit: &str) -> Option<Concurrent> {
     let bytes = unit.as_bytes();
     statements(unit)
@@ -123,7 +133,11 @@ pub(crate) fn concurrent(unit: &str) -> Option<Concurrent> {
                 (w.len() >= 3 && eq(w[1], "INDEX") && eq(w[2], "CONCURRENTLY"))
                     .then_some(Concurrent::Index)
             } else if eq(first, "ALTER") {
-                (has("DETACH") && has("CONCURRENTLY")).then_some(Concurrent::Detach)
+                w.windows(2)
+                    .position(|p| eq(p[0], "DETACH") && eq(p[1], "PARTITION"))
+                    .and_then(|i| after_name(&w[i + 2..]).first())
+                    .is_some_and(|x| eq(x, "CONCURRENTLY"))
+                    .then_some(Concurrent::Detach)
             } else {
                 None
             }
@@ -440,6 +454,7 @@ mod tests {
         for unit in [
             "ALTER TABLE p DETACH PARTITION p_1 CONCURRENTLY;",
             "alter table if exists only s.p detach partition s.p_1 concurrently",
+            "ALTER TABLE p DETACH PARTITION \"S\" . \"p 1\" CONCURRENTLY;",
         ] {
             assert_eq!(concurrent(unit), Some(Concurrent::Detach), "{unit}");
         }
@@ -453,6 +468,9 @@ mod tests {
             "ALTER TABLE p DETACH PARTITION p_1;",
             "ALTER TABLE p DETACH PARTITION p_1 FINALIZE;",
             "ALTER TABLE concurrently ADD COLUMN x int;",
+            "ALTER TABLE cic ADD COLUMN detach int, ADD COLUMN concurrently int",
+            "ALTER TABLE concurrently DETACH PARTITION p_1;",
+            "ALTER TABLE p DETACH PARTITION concurrently;",
             "REFRESH MATERIALIZED VIEW CONCURRENTLY m;",
             "DO $$ BEGIN EXECUTE 'DROP INDEX CONCURRENTLY i'; END $$;",
         ] {

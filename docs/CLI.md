@@ -161,6 +161,16 @@ redeploy: run-once files are skipped by their ledger, everything else is
 rerunnable by design. PostgreSQL does not undo sequence advances, and nothing
 undoes effects outside the database.
 
+Work deploy.sql does through another connection is not undone either. A
+`dblink_exec` commits on its own connection and stays after the attempt fails;
+only `postgres_fdw` writes belong to the deploy's transaction and roll back
+with it. A `CREATE INDEX CONCURRENTLY` sent through `dblink` that fails leaves
+an `INVALID` index behind, and `CREATE INDEX ... IF NOT EXISTS` checks the name
+only, so the retry, or the next deploy, skips it and exits 0 with the index
+still invalid. Drop the invalid index by name before building it again: the
+`postgres-indexing` skill's `references/create-index-concurrently.md` (in
+`.agents/skills/` of a `basic` or `advanced` project) shows how.
+
 Only a deploy that has reached the server is retried. When the first attempt
 never connects (the server refuses, cannot be reached, stays busy, or the
 sign-in gives up), pgmi fails at once with exit 11, so a wrong host or port is
