@@ -15,6 +15,14 @@ CREATE TABLE core.dev_probe (id int);
 SELECT pg_temp.exempt_from_rls('core.dev_probe', 'test probe');
 "#;
 
+fn drop_db_and_roles(pg: &common::Pg, db: &str) {
+    let admin = pg.admin();
+    let _ = admin.batch(&format!("DROP DATABASE IF EXISTS {db} WITH (FORCE)"));
+    for r in ["_admin", "_api", "_kernel", "_owner"] {
+        let _ = admin.batch(&format!("DROP ROLE IF EXISTS {db}{r}"));
+    }
+}
+
 struct Case {
     name: &'static str,
     files: &'static [(&'static str, &'static str)],
@@ -43,6 +51,7 @@ fn refuses_bad_parameters() {
     let Some(pg) = pg() else { return };
     let project = scaffold(&[]);
     const DB: &str = "pgmi_rs_a_params";
+    drop_db_and_roles(&pg, DB);
     let long_role = "r".repeat(64);
     let cases = vec![
         Case {
@@ -700,14 +709,7 @@ fn accepts_a_scram_verifier() {
     let _serial = adv::serial();
     let Some(pg) = pg() else { return };
     let project = scaffold(&[]);
-    let drop_roles = || {
-        let admin = pg.admin();
-        let _ = admin.batch(&format!("DROP DATABASE IF EXISTS {DB} WITH (FORCE)"));
-        for r in ["_admin", "_api", "_kernel", "_owner"] {
-            let _ = admin.batch(&format!("DROP ROLE IF EXISTS {DB}{r}"));
-        }
-    };
-    drop_roles();
+    drop_db_and_roles(&pg, DB);
     let db = pg.database(DB);
     let admin = format!("{DB}_admin");
 
@@ -732,7 +734,7 @@ fn accepts_a_scram_verifier() {
         "the admin signed in with a wrong password"
     );
     drop(db);
-    drop_roles();
+    drop_db_and_roles(&pg, DB);
 }
 
 /// A database deployed as dev may hold the dev default password. Relabelling
@@ -745,14 +747,7 @@ fn a_relabel_from_dev_needs_the_admin_password() {
     let _serial = adv::serial();
     let Some(pg) = pg() else { return };
     let project = scaffold(&[]);
-    let drop_roles = || {
-        let admin = pg.admin();
-        let _ = admin.batch(&format!("DROP DATABASE IF EXISTS {DB} WITH (FORCE)"));
-        for r in ["_admin", "_api", "_kernel", "_owner"] {
-            let _ = admin.batch(&format!("DROP ROLE IF EXISTS {DB}{r}"));
-        }
-    };
-    drop_roles();
+    drop_db_and_roles(&pg, DB);
     let db = pg.database(DB);
     let admin = format!("{DB}_admin");
     let label = || -> String {
@@ -807,7 +802,7 @@ fn a_relabel_from_dev_needs_the_admin_password() {
     common::Client::try_connect(&db, &admin, REAL)
         .expect("a redeploy as prod without the parameter keeps the password");
     drop(db);
-    drop_roles();
+    drop_db_and_roles(&pg, DB);
 }
 
 /// A blank `database_admin_password` is refused, whatever the environment and
@@ -836,13 +831,6 @@ END $$;
             SPELLING_PROBE,
         ),
     )]);
-    let drop_roles = || {
-        let admin = pg.admin();
-        let _ = admin.batch(&format!("DROP DATABASE IF EXISTS {DB} WITH (FORCE)"));
-        for r in ["_admin", "_api", "_kernel", "_owner"] {
-            let _ = admin.batch(&format!("DROP ROLE IF EXISTS {DB}{r}"));
-        }
-    };
     let admin = format!("{DB}_admin");
     type Blank = Box<dyn Fn(common::Deploy) -> common::Deploy>;
     let blanks: [(&str, Blank); 6] = [
@@ -873,7 +861,7 @@ END $$;
     ];
 
     for env in ["dev", "test"] {
-        drop_roles();
+        drop_db_and_roles(&pg, DB);
         let db = pg.database(DB);
         let keeps = |when: &str| {
             common::Client::try_connect(&db, &admin, PASSWORD)
@@ -907,7 +895,7 @@ END $$;
         keeps("after a redeploy without the parameter");
         drop(db);
     }
-    drop_roles();
+    drop_db_and_roles(&pg, DB);
 }
 
 /// Roles belong to the server, so the admin role outlives its database. A
