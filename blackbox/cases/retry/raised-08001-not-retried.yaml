@@ -1,0 +1,15 @@
+description: Rust only (contract "Whole-deployment retry"). A class 08 SQLSTATE the server reports on a session it keeps open (a deploy.sql RAISE, a dblink or postgres_fdw that cannot reach its own server) is a SQL failure, not a lost connection; exit 13 after one attempt, no retry (PGMI-1060)
+impl: rust
+project:
+  files:
+    deploy.sql: |
+      DO $$ BEGIN RAISE EXCEPTION 'side server unreachable' USING ERRCODE = '08001'; END $$;
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}", --json]
+    timeout: 30
+    expect:
+      exit: 13
+      json: {sqlstate: "08001"}
+      stdout: ['"attempts": \[\s*\{[^}]*"sqlstate": "08001"[^}]*\}\s*\]']
+      stderr: ["side server unreachable"]
+      stderr_not: ["attempt 1 failed", "retrying in"]

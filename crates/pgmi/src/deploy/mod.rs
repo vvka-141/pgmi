@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use tokio::runtime::Runtime;
-use tokio_postgres::error::ErrorPosition;
+use tokio_postgres::error::{ErrorPosition, Severity};
 
 use crate::config::params::{self, Sources};
 use crate::config::yaml::{self, ProjectConfig};
@@ -116,6 +116,10 @@ pub(crate) fn sql_error_needing(
                 internal_query,
                 position,
                 internal_position,
+                fatal: matches!(
+                    db.parsed_severity(),
+                    Some(Severity::Fatal | Severity::Panic)
+                ),
             })
         }
         None => Error::sql(context).with_source(e),
@@ -2497,6 +2501,7 @@ mod tests {
             internal_query: None,
             position: None,
             internal_position: None,
+            fatal: false,
         });
         let r = record_of(loaded("app"), &Err(e));
         assert_eq!(

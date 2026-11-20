@@ -82,11 +82,19 @@ pub(super) fn transient(e: &Error, seen: &Seen) -> Option<Transient> {
     if seen.in_test || !matches!(e.kind(), Kind::Sql | Kind::Connection) {
         return None;
     }
-    if let Some(code) = e.sql_diagnostics().and_then(|d| d.sqlstate.as_deref()) {
-        let retried = code.starts_with("08")
-            || SERVER.contains(&code)
-            || (code == "25006" && seen.hot_standby);
-        return retried.then(|| Transient::Server(code.to_string()));
+    if let Some(d) = e.sql_diagnostics()
+        && let Some(code) = d.sqlstate.as_deref()
+    {
+        let connection = code.starts_with("08");
+        if SERVER.contains(&code)
+            || (code == "25006" && seen.hot_standby)
+            || (connection && d.fatal)
+        {
+            return Some(Transient::Server(code.to_string()));
+        }
+        if !connection {
+            return None;
+        }
     }
     let mut cur: Option<&(dyn std::error::Error + 'static)> = Some(e);
     while let Some(c) = cur {
@@ -244,8 +252,7 @@ mod tests {
     #[test]
     fn the_transient_table_retries_these_server_errors() {
         for code in [
-            "08000", "08006", "08P01", "57P01", "57P02", "57P03", "53300", "40001", "40P01",
-            "55P03",
+            "57P01", "57P02", "57P03", "53300", "40001", "40P01", "55P03",
         ] {
             for kind in [Kind::Sql, Kind::Connection] {
                 assert_eq!(
@@ -254,6 +261,35 @@ mod tests {
                     "{code}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn a_class_08_error_on_a_session_the_server_kept_open_is_final() {
+        for code in ["08000", "08001", "08004", "08006", "08P01"] {
+            for kind in [Kind::Sql, Kind::Connection] {
+                assert_eq!(
+                    transient(&coded(kind, code), &Seen::default()),
+                    None,
+                    "{code}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_class_08_error_that_ended_the_session_is_retried() {
+        for code in ["08000", "08006", "08P01"] {
+            let e = Error::sql(format!("FATAL: x (SQLSTATE {code})")).with_sql(SqlDiagnostics {
+                sqlstate: Some(code.into()),
+                fatal: true,
+                ..SqlDiagnostics::default()
+            });
+            assert_eq!(
+                transient(&e, &Seen::default()),
+                Some(Transient::Server(code.into())),
+                "{code}"
+            );
         }
     }
 

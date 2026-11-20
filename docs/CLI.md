@@ -178,7 +178,7 @@ reported in a second, not after the whole time box.
 
 | Retried | Typical cause |
 |---|---|
-| SQLSTATE class 08; a connection closed, reset or refused mid-run | network, restart, failover |
+| SQLSTATE class 08 when the server ends the session with it (FATAL); a connection closed, reset or refused mid-run | network, restart, failover |
 | 57P01, 57P02, 57P03 | server shutdown, crash or recovery |
 | 53300 | the server is at `max_connections` |
 | 40001, 40P01 | serialization failure or deadlock with live traffic |
@@ -188,7 +188,9 @@ reported in a second, not after the whole time box.
 
 Never retried: any other SQL error (syntax, constraint, permission, a
 `RAISE EXCEPTION` of the project's own unless it carries one of the SQLSTATEs
-above, as `RAISE ... USING ERRCODE = '55P03'` does), every failure inside a test,
+above, as `RAISE ... USING ERRCODE = '55P03'` does), a class 08 error on a
+session the server keeps open (`RAISE ... USING ERRCODE = '08001'`, a `dblink`
+or `postgres_fdw` that cannot reach its own server), every failure inside a test,
 configuration errors (exit 10), a refused sign-in, another deploy holding the
 lock (exit 15), a session an administrator ended with `pg_terminate_backend`
 while the server kept running, and anything after Ctrl-C or SIGTERM.

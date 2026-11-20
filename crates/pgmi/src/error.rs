@@ -42,6 +42,7 @@ pub(crate) struct SqlDiagnostics {
     pub(crate) internal_query: Option<String>,
     pub(crate) position: Option<usize>,
     pub(crate) internal_position: Option<usize>,
+    pub(crate) fatal: bool,
 }
 
 /// A field of a server message, absent when the server sent it empty.
