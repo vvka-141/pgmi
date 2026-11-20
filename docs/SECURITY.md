@@ -229,7 +229,7 @@ pgmi deploy . -d mydb \
   --azure
 ```
 
-With `--azure` or `--aws`, pgmi refuses `sslmode` `disable`, `allow` and `prefer` (exit 10), so the token never travels without TLS. Azure defaults to `verify-full`; AWS defaults to `verify-full` with the RDS CA bundle in `--sslrootcert`, otherwise `require`. See [TLS with token authentication](CONNECTIONS.md#tls-with-token-authentication).
+With `--azure`, `--aws` or `--databricks`, pgmi refuses `sslmode` `disable`, `allow` and `prefer` (exit 10), so the token never travels without TLS. Azure and Databricks default to `verify-full`; AWS defaults to `verify-full` with the RDS CA bundle in `--sslrootcert`, otherwise `require`. `require` without a root certificate encrypts but does not check who receives the token; `verify-full` does. `--google` ignores `sslmode`: its connector always uses TLS 1.3 and verifies the instance's certificate. See [TLS with token authentication](CONNECTIONS.md#tls-with-token-authentication).
 
 Service Principal still requires `AZURE_CLIENT_SECRET` as an env var. Pass any additional secrets with the [pipeline patterns](#pipeline-patterns) above.
 
@@ -258,4 +258,4 @@ For deployments handling sensitive parameters, ensure your PostgreSQL server is 
 | Session variable visibility | Low | Session-scoped | Don't persist session vars |
 | Shell history | Low | `PGMI_PARAM_*`, stdin and `--params-file` available | Keep secrets out of typed commands |
 | Azure Entra ID (MI) | None | Token-based, no secrets | Use `--azure` with Managed Identity |
-| IAM token sent without TLS | None | Plaintext-capable sslmodes refused with `--azure`/`--aws` | Give AWS the RDS CA bundle for `verify-full` |
+| Cloud token sent without TLS | None | Plaintext-capable sslmodes refused with `--azure`/`--aws`/`--databricks`; `--google` always uses verified TLS | Give AWS the RDS CA bundle for `verify-full` |

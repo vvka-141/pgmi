@@ -350,7 +350,9 @@ so pass params in the call or set them in the server's environment.
 Tools: `deploy`, `init`, `metadata_plan`, `metadata_validate`, `templates_list`,
 `ai_overview`, `ai_contract`. Results are structured
 JSON (the same data as each command's `--json` output). Diagnostics go to
-stderr; the server exits cleanly on EOF or SIGINT.
+stderr. At EOF the server cancels a running deploy, waits for every call to
+answer, then exits 0; a signal cancels every call and ends it, and a second
+exits 130.
 
 ### Global flags
 

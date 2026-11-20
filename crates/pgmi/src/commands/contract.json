@@ -275,12 +275,12 @@
     {
       "code": 16,
       "name": "ExitTimeout",
-      "description": "Operation exceeded --timeout (context deadline exceeded)"
+      "description": "Operation exceeded --timeout"
     },
     {
       "code": 130,
       "name": "ExitInterrupted",
-      "description": "Process interrupted by SIGINT (Ctrl-C)"
+      "description": "Interrupted by SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGUSR1 or SIGUSR2 (Ctrl-C on Windows)"
     }
   ],
   "macros": [

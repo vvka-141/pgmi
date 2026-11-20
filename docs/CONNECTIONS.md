@@ -303,6 +303,19 @@ otherwise vouch for any server. With an explicit root file `verify-ca` checks
 no name. `sslrootcert=system` with a mode weaker than `verify-full` is
 refused, exit 10.
 
+pgmi cannot check certificate revocation lists. When the connection verifies
+the server (`verify-ca`, `verify-full`, or `require` with a root certificate)
+and `~/.postgresql/root.crl` exists (`%APPDATA%\postgresql\root.crl` on
+Windows), libpq would check that list, so pgmi refuses to connect, exit 10:
+
+```
+pgmi: error: /home/me/.postgresql/root.crl exists, and libpq checks it under sslmode=verify-full, but pgmi cannot check certificate revocation lists, so it cannot refuse a revoked server certificate; move the file away to connect without revocation checks
+```
+
+Move the file away to connect without revocation checks. `PGSSLCRL` and
+`PGSSLCRLDIR` are refused under the same modes. With `sslrootcert=system`
+libpq reads no list, and pgmi refuses none of them.
+
 pgmi's TLS needs CPU instructions present on x86-64 since about 2014 (AES-NI,
 PCLMULQDQ, SSSE3, AVX, AVX2, BMI1, BMI2, ADX) and on arm64 NEON, AES, PMULL
 and SHA2. On an older CPU every connection that would use TLS (`allow`, `prefer`,

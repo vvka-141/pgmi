@@ -1063,8 +1063,8 @@ Unless you typed it (`--connection`, `-h`), deploy says on stderr where the conn
 | `13` | SQL execution failed |
 | `14` | `deploy.sql` not found |
 | `15` | Concurrent deploy detected |
-| `16` | Operation exceeded `--timeout` (context deadline exceeded) |
-| `130` | Interrupted by SIGINT (Ctrl-C) or SIGTERM |
+| `16` | Operation exceeded `--timeout` |
+| `130` | Interrupted by SIGINT (Ctrl-C), SIGTERM, SIGHUP, SIGQUIT, SIGUSR1 or SIGUSR2 |
 
 ---
 

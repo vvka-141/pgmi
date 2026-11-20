@@ -37,11 +37,14 @@ current_setting('pgmi.db_password'); other environment variables are not read.
 Secrets go in the environment or a params file, never in --param.
 
 Exit codes:
-  0   success
-  10  invalid configuration       13  SQL execution failed
-  11  connection failed           14  deploy.sql not found
-  12  user denied overwrite       15  concurrent deploy in progress
-  16  timeout exceeded            130 interrupted (SIGINT, SIGTERM)
+  0   success                     12  user denied overwrite
+  1   general error               13  SQL execution failed
+  2   usage error                 14  deploy.sql not found
+  3   internal panic              15  concurrent deploy in progress
+  10  invalid configuration       16  timeout exceeded
+  11  connection failed           130 interrupted by a signal
+The signals are SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGUSR1 and SIGUSR2 (Ctrl-C
+on Windows): the first cancels the deploy, a second exits at once.
 A --timeout that runs out while connecting is 11: the server was not reached.";
 
 pub(super) const INIT: &str = "Scaffold a new pgmi project (deploy.sql, directory layout, README).
@@ -184,7 +187,9 @@ Tools: deploy, init, metadata_plan, metadata_validate, templates_list,
 ai_overview, ai_contract.
 
 The server reads JSON-RPC from stdin and writes responses to stdout; all
-diagnostics go to stderr. It exits cleanly on EOF or SIGINT.
+diagnostics go to stderr. At EOF it cancels a running deploy, waits for every
+call to answer, then exits 0. A signal cancels every call and ends the server;
+a second exits 130.
 
 A failing tool answers with isError and the session continues. A malformed
 message gets a -32700 parse error with a null id and the session continues.

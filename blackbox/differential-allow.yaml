@@ -310,6 +310,13 @@ accept:
     go_as: 'Usage:'
     rust: '(?s)^Usage: pgmi .*\Z'
     rust_as: 'Usage:'
+  - row: Exit codes in `pgmi help deploy` and `pgmi ai contract`
+    case: *help
+    field: stdout
+    go: '(?m)^Exit codes:\n(?:  .*\n)+'
+    go_as: 'Exit codes:\n'
+    rust: '(?m)^Exit codes:\n(?:  .*\n)+The signals are .*\n.*\n'
+    rust_as: 'Exit codes:\n'
   - row: Databricks Lakebase sign-in (`--databricks`, `--databricks-endpoint`)
     case: *help
     field: stdout
