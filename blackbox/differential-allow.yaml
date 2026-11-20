@@ -69,6 +69,15 @@ accept:
     step: steps[1]
     field: stderr
     rust: Database "\{db\}" does not exist; creating
+  - row: A symlinked `deploy.sql`, `pgmi.yaml` or `.pgmiignore`
+    case: cases/errors/symlinked-(deploy-sql|pgmi-yaml|pgmiignore)\.yaml
+    field: db
+    rust: <no database>
+  - row: A symlinked `deploy.sql`, `pgmi.yaml` or `.pgmiignore`
+    case: cases/errors/symlinked-(deploy-sql|pgmi-yaml|pgmiignore)\.yaml
+    step: steps[1]
+    field: stderr
+    go: Executing deploy\.sql
   - row: A `--params-file` (or `paramsFile`, or `-`) over `PGMI_MAX_FILE_SIZE` (10 MiB)
     case: cases/formats/size-limits\.yaml
     field: db

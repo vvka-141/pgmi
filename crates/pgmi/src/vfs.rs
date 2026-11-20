@@ -14,6 +14,19 @@ use crate::error::{Error, Result};
 /// Why a named pipe, socket or device in a project is never read.
 pub(crate) const NOT_REGULAR: &str = "not a regular file (a named pipe, socket or device)";
 
+pub(crate) fn symlink_refused(rel: &str, remedy: &str) -> Error {
+    Error::config(format!(
+        "failed to read ./{rel}: refusing to read symlink {rel}: pgmi does not follow symlinks; {remedy}"
+    ))
+}
+
+pub(crate) fn no_symlink(fs: &impl Vfs, rel: &str) -> Result<()> {
+    if fs.stat(rel).is_ok_and(|s| s.link) {
+        return Err(symlink_refused(rel, "replace it with the file"));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FileKind {
     File,

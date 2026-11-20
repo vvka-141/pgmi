@@ -1,0 +1,26 @@
+description: a deploy.sql that is a symbolic link is followed by Go and refused by Rust with exit 10 before connecting, naming it, on pgmi deploy and on a serve deploy call (contract "Behaviour changes in 0.20", PGMI-1079)
+home:
+  outside.sql: "CREATE TABLE IF NOT EXISTS leaked (id int);"
+project:
+  files:
+    deploy.sql: {symlink: "{home}/outside.sql"}
+steps:
+  - pgmi: [deploy, "{project}", --connection, "{conn}", -d, "{db}"]
+    expect:
+      exit: 0
+      rust:
+        exit: 10
+        stderr: ['failed to read \./deploy\.sql: refusing to read symlink deploy\.sql: pgmi does not follow symlinks; replace it with the file']
+        stderr_not: ['does not exist; creating']
+  - pgmi: [serve]
+    stdin:
+      - '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"blackbox","version":"1"}}}'
+      - '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"deploy","arguments":{"path":"{project}","connection":"{conn}","database":"{db}"}}}'
+      - {until: '"id":2,', timeout: 30}
+    timeout: 60
+    expect:
+      exit: 0
+      stdout_not: ['"isError":true']
+      rust:
+        stdout: ['(?m)^{"jsonrpc":"2.0","id":2,"result":{.*refusing to read symlink deploy\.sql: pgmi does not follow symlinks.*"exitCode":10.*"isError":true}}$']
+        stdout_not: []

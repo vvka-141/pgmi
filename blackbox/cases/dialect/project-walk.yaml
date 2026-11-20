@@ -6,7 +6,7 @@ project:
     link-file/x.sql: {symlink: ../shared/x.sql}
     link-dir/deploy.sql: SELECT 1;
     link-dir/lib: {symlink: ../shared}
-    ignored/deploy.sql: {symlink: ../shared/x.sql}
+    ignored/deploy.sql: SELECT 1;
     ignored/.pgmiignore: "lib\n"
     ignored/lib: {symlink: ../shared}
     nul/deploy.sql: SELECT 1;

@@ -149,6 +149,7 @@ fn sslmode_line(text: &str) -> Option<usize> {
 
 impl ProjectConfig {
     pub(crate) fn load(project: &impl Vfs) -> Result<Option<Self>> {
+        crate::vfs::no_symlink(project, "pgmi.yaml")?;
         let text = match project.read_to_string("pgmi.yaml") {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -366,6 +367,22 @@ mod tests {
             if text.contains("auth_method") {
                 assert_eq!(e.text(), text);
             }
+        }
+    }
+
+    #[test]
+    fn a_symlinked_pgmi_yaml_is_refused_before_it_is_read() {
+        use crate::vfs::MemFs;
+        for fs in [
+            MemFs::default().link_to_file("pgmi.yaml"),
+            MemFs::default().dangling_link("pgmi.yaml"),
+        ] {
+            let e = ProjectConfig::load(&fs).unwrap_err();
+            assert_eq!(e.exit_code(), 10, "{}", e.text());
+            assert_eq!(
+                e.text(),
+                "failed to read ./pgmi.yaml: refusing to read symlink pgmi.yaml: pgmi does not follow symlinks; replace it with the file"
+            );
         }
     }
 

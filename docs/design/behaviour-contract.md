@@ -345,9 +345,11 @@ file before anything else sees it. Each project file is capped at 10 MiB, deploy
 else exit 10). Full reference: `docs/DEPLOY-GUIDE.md` "What gets loaded".
 
 The walk never follows a symbolic link: a linked file or directory that
-`.pgmiignore` does not hide is exit 10 naming it; `deploy.sql` itself may be
-a link (`failed to read ./x.sql: refusing to read symlink x.sql: pgmi does
-not follow symlinks; ...`). A file containing a NUL byte (`file ./x.bin
+`.pgmiignore` does not hide is exit 10 naming it (`failed to read ./x.sql:
+refusing to read symlink x.sql: pgmi does not follow symlinks; ...`). A linked
+`deploy.sql`, `pgmi.yaml` or `.pgmiignore` is exit 10 before it is read and
+before connecting, `.pgmiignore` or not (Go follows these three; see
+"Behaviour changes in 0.20"). A file containing a NUL byte (`file ./x.bin
 contains a NUL byte; ...`) or invalid UTF-8 is exit 10 naming it (for
 `deploy.sql`, with the byte offset). A directory named `__<name>__`
 other than `__test__` and `__tests__` is exit 10. A file larger than the cap
@@ -362,7 +364,7 @@ The first SIGINT or SIGTERM during the load is exit 130 and a
 `--timeout` that runs out there is exit 16, as in Go, which loads after
 connecting.
 
-Cases: `dialect/pgmiignore`, `dialect/pgmiignore-characters`, `dialect/root-deploy-file-any-case`, `dialect/pgmiignore-hides-deploy`, `execution/loader-at-scale`, `dialect/project-walk`, `commands/metadata-refusals`, `errors/special-file`, `dialect/nested-deploy-sql-loaded`, `dialect/pgmiignore-broken-patterns`, `formats/binary-file-in-test-directory`., `formats/deploy-sql-not-capped`, `errors/deploy-sql-directory`. The load racing a signal and the timeout: Rust unit tests `blocking_work_gives_way_to_the_first_signal`, `blocking_work_gives_way_to_the_timeout`.
+Cases: `dialect/pgmiignore`, `dialect/pgmiignore-characters`, `dialect/root-deploy-file-any-case`, `dialect/pgmiignore-hides-deploy`, `execution/loader-at-scale`, `dialect/project-walk`, `commands/metadata-refusals`, `errors/special-file`, `dialect/nested-deploy-sql-loaded`, `dialect/pgmiignore-broken-patterns`, `formats/binary-file-in-test-directory`, `formats/deploy-sql-not-capped`, `errors/deploy-sql-directory`, `errors/symlinked-deploy-sql`, `errors/symlinked-pgmi-yaml`, `errors/symlinked-pgmiignore`. The load racing a signal and the timeout: Rust unit tests `blocking_work_gives_way_to_the_first_signal`, `blocking_work_gives_way_to_the_timeout`.
 
 ### Session API
 
@@ -1596,6 +1598,7 @@ release notes take their "Behaviour changes" section from this table.
 | `pgmi serve`: a deploy tool call with `overwrite: true` | runs when the call's own `confirmDatabaseName` matches | refused with exit 12 before connecting unless the operator started `pgmi serve` with `PGMI_SERVE_ALLOW_OVERWRITE=1`; then `confirmDatabaseName` must still match; the deploy tool's description says so | PGMI-924 |
 | Failure summary after a stop or a retry | `nothing committed` whenever the run failed | names the units committed before a stop and those an earlier attempt committed; a unit the server never answered reads `whether it committed is unknown, check the database`; `--json` adds `outcomeUnknown` and `attempts[].unitsCommitted` | owner 2026-11-12 (PGMI-911, PGMI-912) |
 | Azure tenant id outside letters, digits, `.` and `-` | refused at sign-in, exit 11 | refused before connecting, exit 10 | agent 2026-11-12 (PGMI-910) |
+| A symlinked `deploy.sql`, `pgmi.yaml` or `.pgmiignore` | followed: the link's target is read, wherever it points, and `deploy.sql`'s text can come back in an error or reach the server `pgmi.yaml` names | refused before it is read and before connecting, exit 10, on `pgmi deploy` and on a serve deploy call (`failed to read ./<name>: refusing to read symlink <name>: pgmi does not follow symlinks; replace it with the file`); a dangling link too, which Go reported for `deploy.sql` as not found, exit 14. Cases: `errors/symlinked-deploy-sql`, `errors/symlinked-pgmi-yaml`, `errors/symlinked-pgmiignore` | PGMI-1079 |
 | A cloud sign-in endpoint that answers a redirect (pgmi's own sign-in client: Azure managed identity, Databricks, AWS, the Google Cloud SQL Admin API) | followed, https to http included, and the target's answer used | not followed: the redirect is the answer, so the sign-in fails naming its status. Accepted exception: the Google access-token request goes through google-cloud-auth's own HTTP clients, which follow redirects and read an answer of any size; its endpoints come from Google's ADC configuration on the operator's machine, and the library offers no way to pass pgmi's client (PGMI-994) | PGMI-931 |
 | `sslnegotiation=direct` to a TLS server that selects no ALPN protocol | the startup and the password are sent | refused after the handshake, before the startup message, exit 11 (libpq 17 refuses too) | PGMI-932 |
 | `PGSSLCRL`, `PGSSLCRLDIR` or `PGREQUIREPEER` set and non-empty | ignored silently | ignored with a WARNING naming the variable and what pgmi does not check (also in `--json` `warnings`), then the deploy goes on; `PGSSLCRL` or `PGSSLCRLDIR` under `sslmode=verify-ca` or `verify-full`, or `require` with a root certificate, is refused, exit 10 (PGMI-996, PGMI-1032), and so is an existing `~/.postgresql/root.crl` when the connection verifies (PGMI-1053), neither with `sslrootcert=system` (PGMI-1065) (the connection-string keys `sslcrl`, `sslcrldir`, `requirepeer` stay refused, exit 10); `PGHOSTADDR` stays ignored, as in Go | owner 2026-11-14 |

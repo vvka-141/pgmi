@@ -40,6 +40,11 @@ Everything else is read as **text**. A binary file inside the project path
 naming the file. Exclude it in `.pgmiignore`, or move it out of the project
 path.
 
+pgmi follows no symbolic links. A linked file or directory fails the deploy
+the same way unless `.pgmiignore` hides it; a linked `deploy.sql`,
+`pgmi.yaml` or `.pgmiignore` fails it even then. Replace the link with the
+file.
+
 ### `.pgmiignore`
 
 A `.pgmiignore` file at the project root adds exclusions in `.gitignore`

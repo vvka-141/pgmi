@@ -137,6 +137,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `.env` `$NAME` expansion, a broken `.env` warned about; `.env` reaches the cloud sign-in | ✓ `formats/dotenv-expansion`, `cloud/dotenv-feeds-sdk` |
 | project walk: symbolic links, NUL bytes, invalid UTF-8, `__name__` directories | ✓ `dialect/project-walk`, `commands/metadata-refusals` |
 | project walk: a named pipe is refused (10), never read, by `deploy` and `info` | ✓ `errors/special-file` |
+| a symlinked `deploy.sql`, `pgmi.yaml` or `.pgmiignore` is refused (Rust: 10) before connecting, on `deploy` and serve | ✓ `errors/symlinked-deploy-sql`, `errors/symlinked-pgmi-yaml`, `errors/symlinked-pgmiignore` |
 | `.pgmiignore` (globs, classes, `**`, directories, `!`, escaped `#`; hiding deploy.sql = 10; bytes that are not UTF-8 read leniently) | ✓ `dialect/pgmiignore`, `dialect/pgmiignore-hides-deploy`, `dialect/pgmiignore-posix-class`, `dialect/pgmiignore-latin1`; empty or reversed classes = 10, an unclosed `[` literal ✓ `dialect/pgmiignore-broken-patterns` |
 
 ## Connection layer

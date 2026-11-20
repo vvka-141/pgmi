@@ -1,6 +1,6 @@
 use super::ignore::Rules;
 use crate::error::{Error, Kind, Result};
-use crate::vfs::{FileKind, NOT_REGULAR, Name, Vfs};
+use crate::vfs::{FileKind, NOT_REGULAR, Name, Vfs, no_symlink, symlink_refused};
 
 pub(crate) const DEFAULT_MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
@@ -46,6 +46,7 @@ pub(crate) fn max_size(env: &crate::env::Env) -> Result<u64> {
 }
 
 fn rules(fs: &impl Vfs) -> Result<Rules> {
+    no_symlink(fs, ".pgmiignore")?;
     let rules = match fs.read(".pgmiignore") {
         Ok(bytes) => Rules::parse(&String::from_utf8_lossy(&bytes)).map_err(Error::config)?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Rules::default(),
@@ -85,6 +86,7 @@ pub(crate) fn scan(fs: &impl Vfs, max_size: u64) -> Result<Project> {
 pub(crate) fn load(fs: &impl Vfs, max_size: u64) -> Result<Project> {
     let scanning = scan_failed(Some(&fs.display("")));
     let rules = rules(fs).map_err(&scanning)?;
+    no_symlink(fs, "deploy.sql")?;
     let deploy = fs.stat("deploy.sql");
     if deploy.as_ref().is_ok_and(|s| s.kind == FileKind::Dir) {
         return Err(Error::config(format!(
@@ -92,10 +94,7 @@ pub(crate) fn load(fs: &impl Vfs, max_size: u64) -> Result<Project> {
             fs.display("deploy.sql")
         )));
     }
-    if deploy
-        .as_ref()
-        .is_ok_and(|s| s.kind == FileKind::Other && !s.link)
-    {
+    if deploy.as_ref().is_ok_and(|s| s.kind == FileKind::Other) {
         return Err(Error::config(format!(
             "{} is {NOT_REGULAR}",
             fs.display("deploy.sql")
@@ -228,9 +227,10 @@ fn walk(
             continue;
         }
         if entry.stat.link {
-            return Err(Error::config(format!(
-                "failed to read ./{child}: refusing to read symlink {child}: pgmi does not follow symlinks; exclude it in .pgmiignore or replace it with the file"
-            )));
+            return Err(symlink_refused(
+                &child,
+                "exclude it in .pgmiignore or replace it with the file",
+            ));
         }
         if entry.stat.kind == FileKind::Other {
             return Err(Error::config(format!(
@@ -571,6 +571,23 @@ mod tests {
         }
         let fs = project().link_to_dir("l").file(".pgmiignore", "l/\n");
         assert!(load(&fs, MAX).unwrap().sources.is_empty());
+    }
+
+    #[test]
+    fn a_symlinked_deploy_sql_or_pgmiignore_is_refused_before_it_is_read() {
+        let deploy = "failed to read ./deploy.sql: refusing to read symlink deploy.sql: pgmi does not follow symlinks; replace it with the file";
+        let ignore = "failed to scan directory \"/mem\": failed to read ./.pgmiignore: refusing to read symlink .pgmiignore: pgmi does not follow symlinks; replace it with the file";
+        for (fs, text) in [
+            (MemFs::default().link_to_file("deploy.sql"), deploy),
+            (MemFs::default().dangling_link("deploy.sql"), deploy),
+            (project().link_to_file(".pgmiignore"), ignore),
+            (project().dangling_link(".pgmiignore"), ignore),
+        ] {
+            assert_eq!(refused(&fs), text);
+        }
+        let e = scan(&project().link_to_file(".pgmiignore"), MAX).unwrap_err();
+        assert_eq!(e.exit_code(), 10, "{}", e.text());
+        assert!(e.text().contains("symlink .pgmiignore"), "{}", e.text());
     }
 
     #[test]
