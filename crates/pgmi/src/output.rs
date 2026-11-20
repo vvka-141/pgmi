@@ -452,6 +452,7 @@ pub(crate) struct NoticeLog {
 const HEAD: usize = 50;
 const WARNINGS: usize = 200;
 const TAIL: usize = 150;
+const KEPT_FIELD: usize = 4 << 10;
 
 impl NoticeLog {
     /// A warning pgmi itself gave, not the server.
@@ -468,11 +469,17 @@ impl NoticeLog {
         if n.severity == Severity::Warning {
             self.warning_total += 1;
         }
+        let n = Notice {
+            severity: n.severity.clone(),
+            message: cut(&n.message),
+            detail: n.detail.as_deref().map(cut),
+            hint: n.hint.as_deref().map(cut),
+        };
         if self.head.len() < HEAD {
-            self.head.push(n.clone());
+            self.head.push(n);
             return;
         }
-        self.tail.push_back(n.clone());
+        self.tail.push_back(n);
         if self.tail.len() > TAIL
             && let Some(old) = self.tail.pop_front()
         {
@@ -497,6 +504,14 @@ impl NoticeLog {
             (self.dropped > 0).then_some(self.dropped),
         )
     }
+}
+
+fn cut(s: &str) -> String {
+    if s.len() <= KEPT_FIELD {
+        return s.to_string();
+    }
+    let end = s.floor_char_boundary(KEPT_FIELD);
+    format!("{}… [cut: {} more bytes]", &s[..end], s.len() - end)
 }
 
 pub(crate) fn seconds(d: std::time::Duration) -> String {
@@ -819,6 +834,46 @@ mod tests {
                 {"severity": "NOTICE", "message": "msg"}
             ])
         );
+    }
+
+    #[test]
+    fn notice_log_stays_small_when_every_notice_is_huge() {
+        let mut log = NoticeLog::default();
+        let big = Notice {
+            severity: Severity::Warning,
+            message: "m".repeat(1 << 20),
+            detail: Some("d".repeat(1 << 20)),
+            hint: None,
+        };
+        for _ in 0..400 {
+            log.push(&big);
+        }
+        let (v, dropped) = log.finish();
+        assert_eq!(v.as_array().map(Vec::len), Some(400));
+        assert_eq!(dropped, None);
+        let size = v.to_string().len();
+        assert!(size < 6 << 20, "{size}");
+        let mark = format!("… [cut: {} more bytes]", (1 << 20) - KEPT_FIELD);
+        assert_eq!(v[0]["message"], format!("{}{mark}", "m".repeat(KEPT_FIELD)));
+        assert_eq!(v[0]["detail"], format!("{}{mark}", "d".repeat(KEPT_FIELD)));
+    }
+
+    #[test]
+    fn notice_log_cuts_on_a_char_boundary_and_keeps_short_fields_whole() {
+        let mut log = NoticeLog::default();
+        let head = "a".repeat(KEPT_FIELD - 1);
+        let message = format!("{head}éz");
+        let exact = "h".repeat(KEPT_FIELD);
+        log.push(&Notice {
+            severity: Severity::Notice,
+            message,
+            detail: Some("short".into()),
+            hint: Some(exact.clone()),
+        });
+        let v = log.finish().0;
+        assert_eq!(v[0]["message"], format!("{head}… [cut: 3 more bytes]"));
+        assert_eq!(v[0]["detail"], "short");
+        assert_eq!(v[0]["hint"], exact);
     }
 
     #[test]
