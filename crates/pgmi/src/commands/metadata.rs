@@ -295,10 +295,19 @@ fn directory(path: &str) -> &str {
 }
 
 fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\t' | '\n' | '\r' => out.push(c),
+            '\u{0}'..='\u{1f}' | '\u{fffe}' | '\u{ffff}' => out.push('\u{fffd}'),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// A `<pgmi-meta>` block; without a key the file keeps its path order.
@@ -449,6 +458,34 @@ fn with_block(file: &Path, block: &str, content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_character_xml_forbids_becomes_the_replacement_character() {
+        assert_eq!(xml_escape("a_esc\u{1b}[31mred"), "a_esc\u{fffd}[31mred");
+        assert_eq!(
+            xml_escape("\t\n\r\u{fffe}\u{ffff}"),
+            "\t\n\r\u{fffd}\u{fffd}"
+        );
+    }
+
+    #[test]
+    fn a_block_for_a_name_with_every_control_character_parses() {
+        let name: String = (0u8..0x20)
+            .map(char::from)
+            .chain(['\u{7f}', '\u{fffe}', '\u{ffff}'])
+            .collect();
+        let id = "3b8e5f21-9c4d-4a7e-b6f0-2d1a8c7e5b94";
+        let text = block(
+            id,
+            false,
+            &format!("./{name}.sql"),
+            Some(&format!("./{name}")),
+        );
+        let meta = crate::project::metadata::parse("./x.sql", &text)
+            .expect("the block parses")
+            .expect("the block is found");
+        assert_eq!(meta.id, id);
+    }
 
     #[test]
     fn scaffold_write_keeps_a_bom_first() {
