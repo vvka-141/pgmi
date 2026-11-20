@@ -939,6 +939,18 @@ fn merge(
     yaml: Option<&YamlConnection>,
     source: Source,
 ) -> Result<()> {
+    if let Some(m) = flags.sslmode {
+        f.insert("sslmode".into(), m.as_str().into());
+    }
+    for (k, v) in [
+        ("sslcert", &flags.sslcert),
+        ("sslkey", &flags.sslkey),
+        ("sslrootcert", &flags.sslrootcert),
+    ] {
+        if let Some(v) = v {
+            f.insert(k.into(), v.clone());
+        }
+    }
     for (env_name, key) in ENV_DEFAULTS {
         if !f.contains_key(*key)
             && let Some(v) = variable(env, env_name, key)?.filter(|v| !v.is_empty())
@@ -965,18 +977,6 @@ fn merge(
             && let Some(v) = written(key, Source::Yaml.label(), v.as_deref())?
         {
             f.insert(key.into(), v.to_string());
-        }
-    }
-    if let Some(m) = flags.sslmode {
-        f.insert("sslmode".into(), m.as_str().into());
-    }
-    for (k, v) in [
-        ("sslcert", &flags.sslcert),
-        ("sslkey", &flags.sslkey),
-        ("sslrootcert", &flags.sslrootcert),
-    ] {
-        if let Some(v) = v {
-            f.insert(k.into(), v.clone());
         }
     }
     Ok(())

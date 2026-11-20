@@ -299,6 +299,42 @@ fn every_connection_variable_set_empty_or_blank_is_refused_where_it_would_apply(
 }
 
 #[test]
+fn a_blank_tls_setting_that_a_flag_replaces_is_not_read() {
+    let tls = Flags {
+        sslmode: Some(SslMode::Require),
+        sslcert: Some("/c.pem".into()),
+        sslkey: Some("/k.pem".into()),
+        sslrootcert: Some("/r.pem".into()),
+        ..to_database()
+    };
+    for value in VALUES {
+        for name in ["PGSSLMODE", "PGSSLCERT", "PGSSLKEY", "PGSSLROOTCERT"] {
+            let r = resolve(&tls, &environment(name, value), None);
+            assert!(
+                r.is_ok(),
+                "{name}={value:?} under its flag: {}",
+                outcome(&r)
+            );
+        }
+        let yaml = Connection {
+            sslmode: Some(value.into()),
+            sslcert: Some(value.into()),
+            sslkey: Some(value.into()),
+            sslrootcert: Some(value.into()),
+            ..Connection::default()
+        };
+        let r = resolve(&tls, &Env::default(), Some(&yaml));
+        assert!(
+            r.is_ok(),
+            "pgmi.yaml TLS values {value:?} under the flags: {}",
+            outcome(&r)
+        );
+        let r = resolve(&to_database(), &environment("PGSSLMODE", value), None);
+        assert!(r.is_err(), "PGSSLMODE={value:?} with no --sslmode resolved");
+    }
+}
+
+#[test]
 fn a_blank_variable_that_a_nearer_source_replaces_is_not_read() {
     for value in VALUES {
         for (name, text) in [
