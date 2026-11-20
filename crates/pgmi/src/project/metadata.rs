@@ -55,7 +55,7 @@ fn meta_tag(text: &str) -> Option<usize> {
 }
 
 /// The first element before the block, as Go's XML decoder meets it.
-fn element_before(prefix: &str) -> Option<&str> {
+fn element_before(prefix: &str) -> Option<(usize, &str)> {
     let at = prefix
         .match_indices('<')
         .map(|(i, _)| i)
@@ -64,7 +64,7 @@ fn element_before(prefix: &str) -> Option<&str> {
     let end = name
         .find(|c: char| c.is_whitespace() || matches!(c, '>' | '/'))
         .unwrap_or(name.len());
-    Some(&name[..end])
+    Some((at, &name[..end]))
 }
 
 fn elements(mut text: &str) -> Vec<&str> {
@@ -89,9 +89,35 @@ fn element_end(element: &str) -> Option<usize> {
     if element[..close].ends_with('/') {
         return Some(close + 1);
     }
-    element
-        .find("</pgmi-meta>")
-        .map(|e| e + "</pgmi-meta>".len())
+    element.match_indices("</pgmi-meta").find_map(|(i, tag)| {
+        let after = &element[i + tag.len()..];
+        let gap = after.len() - after.trim_start_matches([' ', '\t', '\r', '\n']).len();
+        after[gap..]
+            .starts_with('>')
+            .then_some(i + tag.len() + gap + 1)
+    })
+}
+
+/// `text` with every XML comment blanked, and the first comment Go's decoder
+/// refuses: its byte offset and Go's message.
+fn without_xml_comments(text: &str) -> (String, Option<(usize, &'static str)>) {
+    let mut out = text.as_bytes().to_vec();
+    let mut fault = None;
+    let mut from = 0;
+    while let Some(open) = text[from..].find("<!--").map(|i| from + i) {
+        let body = open + 4;
+        let end = text[body..].find("-->").map(|i| body + i);
+        let close = end.map_or(text.len(), |e| e + 3);
+        if let Some(i) = text[body..end.unwrap_or(text.len())].find("--") {
+            fault.get_or_insert((body + i, "invalid sequence \"--\" not allowed in comments"));
+        }
+        if end.is_none() {
+            fault.get_or_insert((text.len(), "unexpected EOF"));
+        }
+        out[open..close].fill(b' ');
+        from = close;
+    }
+    (String::from_utf8_lossy(&out).into_owned(), fault)
 }
 
 fn parse_bool(s: &str) -> Option<bool> {
@@ -131,6 +157,10 @@ pub(crate) enum MetaError {
         path: String,
         reason: String,
     },
+    Decode {
+        path: String,
+        text: String,
+    },
     Invalid {
         path: String,
         problems: Vec<String>,
@@ -164,6 +194,9 @@ impl fmt::Display for MetaError {
                 f,
                 "metadata error in {path}: id attribute is not a UUID: {reason}\n\nHint: Generate one with SELECT gen_random_uuid();\n{FORMAT_HINT}"
             ),
+            MetaError::Decode { path, text } => {
+                write!(f, "metadata error in {path}: {text}\n\nHint: {FORMAT_HINT}")
+            }
             MetaError::Invalid { path, problems } => {
                 write!(f, "invalid PGMI metadata in {path}:")?;
                 for (i, p) in problems.iter().enumerate() {
@@ -225,35 +258,47 @@ fn block_xml<'a>(path: &str, content: &'a str) -> std::result::Result<Option<&'a
             bytes: comment.len(),
         });
     }
-    let start = meta_tag(comment).unwrap_or(0);
-    if let Some(name) = element_before(&comment[..start]) {
+    let (masked, fault) = without_xml_comments(comment);
+    let start = meta_tag(&masked);
+    let limit = start.unwrap_or(masked.len());
+    let before = element_before(&masked[..limit]);
+    if let Some((at, text)) = fault.filter(|f| f.0 <= limit && before.is_none_or(|b| f.0 < b.0)) {
+        return Err(MetaError::Xml {
+            path: path.to_string(),
+            line: u32::try_from(comment[..at].matches('\n').count() + 1).unwrap_or(u32::MAX),
+            text: text.into(),
+        });
+    }
+    let decode = |text: String| MetaError::Decode {
+        path: path.to_string(),
+        text,
+    };
+    if let Some((_, name)) = before {
+        return Err(decode(format!(
+            "expected element type <pgmi-meta> but have <{name}>"
+        )));
+    }
+    let Some(start) = start else {
+        return Err(decode("EOF".into()));
+    };
+    let rest = &masked[start..];
+    if !rest.starts_with("<pgmi-meta") {
         return Err(MetaError::Xml {
             path: path.to_string(),
             line: 1,
-            text: format!("expected element type <pgmi-meta> but have <{name}>"),
+            text: "expected element name after <".into(),
         });
     }
-    let found = elements(&comment[start..]);
+    let found = elements(rest);
     if found.len() > 1 {
         return Err(MetaError::Multiple {
             path: path.to_string(),
         });
     }
-    let rest = &comment[start..];
-    let xml = match found.first() {
-        Some(xml) => *xml,
-        None if rest.starts_with("<pgmi-meta") => {
-            return Err(xml_error(path, &roxmltree::Error::UnexpectedEndOfStream));
-        }
-        None => {
-            return Err(MetaError::Xml {
-                path: path.to_string(),
-                line: 1,
-                text: "expected element name after <".into(),
-            });
-        }
-    };
-    Ok(Some(xml))
+    match found.first() {
+        Some(xml) => Ok(Some(&comment[start..start + xml.len()])),
+        None => Err(xml_error(path, &roxmltree::Error::UnexpectedEndOfStream)),
+    }
 }
 
 pub(crate) fn parse(path: &str, content: &str) -> std::result::Result<Option<Meta>, MetaError> {
@@ -277,7 +322,9 @@ pub(crate) fn parse(path: &str, content: &str) -> std::result::Result<Option<Met
         text => {
             let id = uuid::Uuid::parse_str(text).map_err(|_| MetaError::NotUuid {
                 path: path.to_string(),
-                reason: if matches!(text.len(), 32 | 36 | 38 | 45) {
+                reason: if text.trim() != text {
+                    "the id has leading or trailing spaces".into()
+                } else if matches!(text.len(), 32 | 36 | 38 | 45) {
                     "invalid UUID format".into()
                 } else {
                     format!("invalid UUID length: {}", text.len())
@@ -821,6 +868,108 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(e, MetaError::Idempotent { .. }), "{e}");
+    }
+
+    #[test]
+    fn an_end_tag_may_hold_white_space_before_its_close() {
+        for end in ["</pgmi-meta >", "</pgmi-meta\n\t\r >"] {
+            let content = format!(
+                "/* <pgmi-meta id=\"{ID}\" idempotent=\"true\"><sortKeys><key>1</key ></sortKeys>{end} */"
+            );
+            let m = parse("./a.sql", &content).unwrap().unwrap();
+            assert_eq!(m.sort_keys, ["1"], "{content}");
+            let two = format!(
+                "/* <pgmi-meta id=\"{ID}\" idempotent=\"true\">{end} {} */",
+                &content[3..content.len() - 3]
+            );
+            let e = parse("./a.sql", &two).unwrap_err();
+            assert!(matches!(e, MetaError::Multiple { .. }), "{two}: {e}");
+        }
+    }
+
+    #[test]
+    fn a_block_inside_an_xml_comment_is_read_as_go_reads_it() {
+        let block = format!(
+            "<pgmi-meta id=\"{ID}\" idempotent=\"true\"><sortKeys><key>1</key></sortKeys></pgmi-meta>"
+        );
+        let other = "<pgmi-meta id=\"7603e3af-b8d9-46a5-8c4c-7f74d39e17f9\" idempotent=\"true\"></pgmi-meta>";
+        let decode =
+            |text: &str| format!("metadata error in ./a.sql: {text}\n\nHint: {FORMAT_HINT}");
+        for (content, want) in [
+            (format!("/* <!-- {block} --> */"), decode("EOF")),
+            (
+                format!("/* header <!-- {block} --> trailing */"),
+                decode("EOF"),
+            ),
+            (
+                format!("/* <!-- {block} --> <x/> */"),
+                decode("expected element type <pgmi-meta> but have <x>"),
+            ),
+            (
+                format!("/* <x/> {block} */"),
+                decode("expected element type <pgmi-meta> but have <x>"),
+            ),
+        ] {
+            assert_eq!(
+                parse("./a.sql", &content).unwrap_err().to_string(),
+                want,
+                "{content}"
+            );
+        }
+        for (content, line, text) in [
+            (format!("/*\n<!--\n{block}\n */"), 2, "unexpected EOF"),
+            (
+                format!("/* <!--\na\n-- b -->\n{block} */"),
+                3,
+                "invalid sequence \"--\" not allowed in comments",
+            ),
+        ] {
+            let e = parse("./a.sql", &content).unwrap_err();
+            assert!(
+                matches!(&e, MetaError::Xml { line: l, text: t, .. } if *l == line && t == text),
+                "{content}: {e}"
+            );
+        }
+        for content in [
+            format!("/* <!-- {other} --> {block} */"),
+            format!("/* {block} <!-- {other} --> */"),
+            format!("/* <!-- note --> {block} */"),
+            format!(
+                "/* <pgmi-meta id=\"{ID}\" idempotent=\"true\"><!-- </pgmi-meta> --><sortKeys><key>1</key></sortKeys></pgmi-meta> */"
+            ),
+        ] {
+            let m = parse("./a.sql", &content).unwrap().unwrap();
+            assert_eq!(
+                (m.id.as_str(), m.sort_keys.as_slice()),
+                (ID, ["1".to_string()].as_slice()),
+                "{content}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_id_with_leading_or_trailing_spaces_is_refused_naming_the_spaces() {
+        for id in [
+            format!(" {ID}"),
+            format!("{ID} "),
+            format!(" {ID} "),
+            format!("\t{ID}"),
+        ] {
+            let e = parse(
+                "./a.sql",
+                &format!("/* <pgmi-meta id=\"{id}\" idempotent=\"true\"/> */"),
+            )
+            .unwrap_err();
+            assert!(
+                matches!(&e, MetaError::NotUuid { reason, .. } if reason == "the id has leading or trailing spaces"),
+                "{id:?}: {e}"
+            );
+            assert!(
+                e.to_string()
+                    .contains("id attribute is not a UUID: the id has leading or trailing spaces"),
+                "{e}"
+            );
+        }
     }
 
     #[test]

@@ -1,0 +1,18 @@
+description: an id with white space before or after it is refused by the Rust binary with exit 10, the message saying the id has leading or trailing spaces; Go 0.14.1 accepted a space on each side (it reads any 38 characters as a braced uuid) and refused a space on one side for its length (behaviour-contract.md "Behaviour changes in 0.20", row "A `<pgmi-meta>` id with white space before or after it")
+project:
+  files:
+    both/deploy.sql: SELECT 1;
+    both/a.sql: '/* <pgmi-meta id=" 0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e31 " idempotent="true"><sortKeys><key>1</key></sortKeys></pgmi-meta> */'
+    trailing/deploy.sql: SELECT 1;
+    trailing/a.sql: '/* <pgmi-meta id="0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e31 " idempotent="true"><sortKeys><key>1</key></sortKeys></pgmi-meta> */'
+steps:
+  - pgmi: [metadata, plan, "{project}/both"]
+    expect:
+      exit: 0
+      stdout: ["\\./a\\.sql"]
+      rust: {exit: 10, stdout: [], stderr: ["\\./a\\.sql", "id attribute is not a UUID: the id has leading or trailing spaces"]}
+  - pgmi: [metadata, plan, "{project}/trailing"]
+    expect:
+      exit: 10
+      stderr: ["\\./a\\.sql", "id attribute is not a UUID: invalid UUID length: 37"]
+      rust: {stderr: ["\\./a\\.sql", "id attribute is not a UUID: the id has leading or trailing spaces"]}

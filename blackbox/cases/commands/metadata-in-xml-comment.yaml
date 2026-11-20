@@ -1,0 +1,22 @@
+description: a <pgmi-meta> block inside an XML comment <!-- --> is commented out, as in Go 0.14.1 - a comment holding nothing else is refused with exit 10 (EOF) rather than read as metadata, and a real block next to a commented-out one is the file's block
+project:
+  files:
+    only/deploy.sql: SELECT 1;
+    only/a.sql: |
+      /* <!-- <pgmi-meta id="0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e21" idempotent="true"><sortKeys><key>1</key></sortKeys></pgmi-meta> --> */
+      SELECT 1;
+    beside/deploy.sql: SELECT 1;
+    beside/a.sql: |
+      /*
+      <!-- <pgmi-meta id="0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e21" idempotent="true"><sortKeys><key>1</key></sortKeys></pgmi-meta> -->
+      <pgmi-meta id="0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e22" idempotent="true"><sortKeys><key>2</key></sortKeys></pgmi-meta>
+      <!-- <pgmi-meta id="0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e23" idempotent="true"></pgmi-meta> -->
+      */
+      SELECT 2;
+steps:
+  - pgmi: [metadata, plan, "{project}/only"]
+    expect: {exit: 10, stderr: ["metadata error in \\./a\\.sql: EOF"]}
+  - pgmi: [metadata, plan, "{project}/beside", --json]
+    expect:
+      exit: 0
+      stdout: ['"path": "\./a\.sql",\s+"sortKey": "2",\s+"id": "0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e22"']

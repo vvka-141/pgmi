@@ -145,17 +145,22 @@ attributes, an XML prolog and a default namespace are ignored; standard and
 numeric entities and CDATA are decoded; repeated `<sortKeys>` are merged;
 text after the root element is ignored; a sort key keeps its white space
 and may repeat. Refused with exit 10, naming the file: `idempotent` missing
-or not a boolean, a missing or nil id, an id with spaces, a blank sort key
+or not a boolean, a missing or nil id, an id with white space before or
+after it (Go accepted a space on each side, see "Behaviour changes in 0.20"), a blank sort key
 or description, an unknown entity, unclosed XML, two blocks (in the Rust
 binary also two `<pgmi-meta` elements in one comment, see "Two metadata
 elements in one comment are refused", and a repeated attribute such as two
 `id`s), a block comment over 10240 bytes. A block is found as Go finds it,
 by `<\s*pgmi-meta[\s>]` in a block comment, so `< pgmi-meta` (a space after
 the `<`) or another element before the block is malformed metadata, exit
-10, never a file without metadata (PGMI-942). A file without a block gets the id `md5("./<path>")` read as a
+10, never a file without metadata (PGMI-942). The element is read as XML,
+so its end tag may hold white space before the `>` (`</pgmi-meta >`), and an
+XML comment `<!-- -->` hides what it holds: a comment holding the only
+`<pgmi-meta>` is refused, exit 10 (`EOF`), and a block beside a commented-out
+one is the file's block (PGMI-1083). A file without a block gets the id `md5("./<path>")` read as a
 uuid, the same in `metadata plan` and `pgmi_plan_view.generic_id`.
 
-Cases: `commands/metadata`, `commands/metadata-invalid`, `commands/metadata-duplicate`, `commands/metadata-scaffold-run-once`, `commands/metadata-forms`, `commands/metadata-refusals`, `commands/metadata-scaffold-and-checks`, `commands/metadata-tag-as-go-finds-it`.
+Cases: `commands/metadata`, `commands/metadata-invalid`, `commands/metadata-duplicate`, `commands/metadata-scaffold-run-once`, `commands/metadata-forms`, `commands/metadata-refusals`, `commands/metadata-scaffold-and-checks`, `commands/metadata-tag-as-go-finds-it`, `commands/metadata-end-tag-spaces`, `commands/metadata-in-xml-comment`, `commands/metadata-id-spaces`.
 
 ### templates, version, ai, completion, help
 
@@ -1682,6 +1687,7 @@ release notes take their "Behaviour changes" section from this table.
 | SIGHUP (a closed terminal or SSH session) or a stderr reader that went away, during `deploy` | the process dies at once; the statement runs on and keeps the deploy lock | SIGHUP is handled as SIGTERM (statement cancelled, exit 130); writes to a closed pipe are dropped and the deploy goes on | PGMI-946 |
 | SIGQUIT (Ctrl-\\), SIGUSR1 or SIGUSR2 during `deploy` or `serve` | SIGQUIT ends the process at once; the statement runs on and keeps the deploy lock, so the next run may exit 15 (SIGUSR1 and SIGUSR2: not handled by pgmi) | handled as SIGTERM: the first stops the work and cancels the statement, the second exits at once, exit 130 (case `exit-codes/130-other-signals`) | PGMI-999 |
 | Two `<pgmi-meta>` elements in one comment | the first used, the rest ignored | newly refused, exit 10, the message says the id and sort keys are ambiguous and to keep one block | owner 2026-11-11, 2026-11-14 (PGMI-993) |
+| A `<pgmi-meta>` id with white space before or after it | a space on each side accepted (any 38 characters read as a braced uuid); a space on one side refused, exit 10, `invalid UUID length: 37` | refused, exit 10, `id attribute is not a UUID: the id has leading or trailing spaces` (case `commands/metadata-id-spaces`) | owner 2026-11-20 (PGMI-1083) |
 | A `<pgmi-meta>` element with an attribute given twice (two `id`s) | the last value used | refused, exit 10, naming the attribute and saying to keep one | owner 2026-11-12 (PGMI-942), 2026-11-14 (PGMI-993) |
 | `serve`: a line over 16 MiB | read | newly refused with `-32600`, session goes on | owner 2026-11-11 |
 | A `--params-file` (or `paramsFile`, or `-`) over `PGMI_MAX_FILE_SIZE` (10 MiB) | read whole | newly refused, exit 10 (`exceeds N-byte limit`) | intended |

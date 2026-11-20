@@ -354,6 +354,12 @@ accept:
     field: stderr
     go: 'failed to scan directory: failed to read \./big\.sql: '
     go_as: ''
+  - row: A `<pgmi-meta>` id with white space before or after it
+    case: cases/commands/metadata-refusals\.yaml
+    step: steps[4]
+    field: stderr
+    go: 'id attribute is not a UUID: invalid UUID length: 37'
+    go_as: 'id attribute is not a UUID: the id has leading or trailing spaces'
   - row: A `.pgmiignore` pattern that cannot be read
     case: cases/dialect/pgmiignore-broken-patterns\.yaml
     field: stderr

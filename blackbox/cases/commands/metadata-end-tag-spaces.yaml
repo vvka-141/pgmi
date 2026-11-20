@@ -1,0 +1,20 @@
+description: XML allows white space between the name and the > of an end tag, so a block closed with </pgmi-meta > or </pgmi-meta, a newline and > is read like one closed with </pgmi-meta>
+project:
+  files:
+    space.sql: |
+      /* <pgmi-meta id="0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e11" idempotent="true"><sortKeys><key>1</key ></sortKeys></pgmi-meta > */
+      SELECT 1;
+    newline.sql: |
+      /*
+      <pgmi-meta id="0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e12" idempotent="false">
+        <sortKeys><key>2</key></sortKeys>
+      </pgmi-meta
+      >
+      */
+      SELECT 2;
+    deploy.sql: SELECT 1;
+steps:
+  - pgmi: [metadata, plan, "{project}", --json]
+    expect:
+      exit: 0
+      stdout: ['"path": "\./space\.sql",\s+"sortKey": "1",\s+"id": "0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e11"', '"path": "\./newline\.sql",\s+"sortKey": "2",\s+"id": "0d3b6f0e-5a8e-4f64-9a3e-6a1c2b7d9e12"']
