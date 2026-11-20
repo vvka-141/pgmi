@@ -110,6 +110,15 @@ catch (Exception e) when (e is ArgumentException or InvalidOperationException or
 }
 
 app.UseExceptionHandler();
+app.Use(async (http, next) =>
+{
+    if (Credentials.Collision(http.Request) is { } twice)
+    {
+        await Problems.Problem(400, "Bad Request", "pgmi.header_collision", $"{twice} is sent more than once").ExecuteAsync(http);
+        return;
+    }
+    await next(http);
+});
 
 app.MapGet("/health", () => Results.Json(new { status = "healthy" }));
 

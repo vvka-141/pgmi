@@ -19,7 +19,7 @@ base64 = "=0.23.1"
 deadpool-postgres = "=0.14.2"
 form_urlencoded = "=1.2.2"
 hmac = "=0.13.0"
-hyper-util = { version = "=0.1.21", features = ["server-auto", "service", "tokio"] }
+hyper-util = { version = "=0.1.21", features = ["server-auto", "server-graceful", "service", "tokio"] }
 # ID and access tokens. aws_lc_rs is the crypto backend (exactly one must be
 # enabled); rust_crypto is the pure-Rust alternative.
 jsonwebtoken = { version = "=11.1.0", default-features = false, features = ["aws_lc_rs"] }

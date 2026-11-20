@@ -81,6 +81,23 @@ pub fn cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
         .filter(|value| !value.is_empty())
 }
 
+/// "cookie __Host-session" or "header x-connection" when the request carries
+/// two of it, in one header or several: which session or which connection
+/// calls would be guessed at.
+pub fn credential_collision(headers: &HeaderMap) -> Option<String> {
+    let sessions = headers
+        .get_all(COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(';'))
+        .filter(|pair| pair.split('=').next().is_some_and(|key| key.trim() == SESSION_COOKIE))
+        .count();
+    if sessions > 1 {
+        return Some(format!("cookie {SESSION_COOKIE}"));
+    }
+    (headers.get_all("x-connection").iter().count() > 1).then(|| "header x-connection".to_owned())
+}
+
 // SameSite=Strict keeps the session off every cross-site request, a link
 // included. The sign-in cookie is Lax: the provider's redirect back to
 // /auth/callback is a cross-site navigation that must carry it.

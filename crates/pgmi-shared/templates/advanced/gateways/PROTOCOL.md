@@ -119,6 +119,10 @@ database's.
   `pgmi.header_collision`: one of two values would be guessed at. (Most HTTP
   servers refuse a repeated `Host` or a conflicting `Content-Length`
   themselves, with a bare 400.)
+- Two `__Host-session` cookies, in one `Cookie` header or several, or two
+  `X-Connection` headers in any letter case, are 400
+  `pgmi.header_collision` on every path: which session or which connection
+  calls would be guessed at.
 - No header ever names a user, an email or an organization.
 - A request with the session cookie and a method other than GET, HEAD or
   OPTIONS must carry `X-CSRF-Token`, the value of the readable `__Host-csrf`
@@ -482,6 +486,10 @@ one deployment recipe fit them all:
 
 `GET /health` answers 200 `{"status": "healthy"}` once the process serves
 requests. Any path the gateway does not serve is 404 `pgmi.not_found`.
+
+On SIGTERM or SIGINT a gateway stops accepting connections, lets the
+requests in flight finish for a bounded time, then exits; a request is never
+cut off part way while the bound lasts.
 
 The end-to-end harness in `tests/gateways/e2e/` of the
 pgmi repository checks these rules against a running gateway in any language.

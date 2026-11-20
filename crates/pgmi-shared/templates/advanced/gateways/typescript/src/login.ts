@@ -92,6 +92,24 @@ export function forwardedHeaders(rawHeaders: readonly string[], loginSession: st
   return out;
 }
 
+// "cookie __Host-session" or "header x-connection" when the request carries
+// two of it, in one header or several: which session or which connection
+// calls would be guessed at.
+export function credentialCollision(rawHeaders: readonly string[]): string | undefined {
+  let sessions = 0;
+  let connections = 0;
+  for (let i = 0; i < rawHeaders.length; i += 2) {
+    const name = rawHeaders[i].toLowerCase();
+    if (name === "x-connection") connections++;
+    if (name === "cookie") {
+      sessions += rawHeaders[i + 1].split(";").filter((part) => part.split("=", 1)[0].trim() === SESSION_COOKIE).length;
+    }
+  }
+  if (sessions > 1) return `cookie ${SESSION_COOKIE}`;
+  if (connections > 1) return "header x-connection";
+  return undefined;
+}
+
 // Standard web plumbing, not pgmi-specific: replace it with your framework's own.
 export function readCookies(header: string | undefined): Map<string, string> {
   const jar = new Map<string, string>();

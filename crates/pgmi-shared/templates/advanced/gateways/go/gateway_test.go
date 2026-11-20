@@ -72,6 +72,27 @@ func TestAVerifyingSSLModeNeedsATrustAnchor(t *testing.T) {
 	}
 }
 
+func TestAnUnencodedAtInThePasswordIsRefusedWithoutTheURL(t *testing.T) {
+	for _, url := range []string{
+		"postgresql://gw:LEAKY@secret@127.0.0.1:5432/app",
+		"postgres://gw:LEAKY@secret@db.example.com/app?sslmode=require",
+	} {
+		_, err := NewPool(t.Context(), url, 1)
+		if err == nil || !strings.Contains(err.Error(), "%40") {
+			t.Errorf("want a refusal that names percent-encoding, got %v", err)
+			continue
+		}
+		if strings.Contains(err.Error(), "LEAKY") || strings.Contains(err.Error(), "secret") {
+			t.Errorf("the refusal quotes the password: %v", err)
+		}
+	}
+	for _, url := range []string{"postgresql://gw:LEAKY%40secret@127.0.0.1:5432/app", "host=db.example.com password=a@b"} {
+		if err := checkUserInfo(url); err != nil {
+			t.Errorf("%v", err)
+		}
+	}
+}
+
 func TestForwardedHeadersTakeTheSessionFromTheCookieOnly(t *testing.T) {
 	in := http.Header{}
 	in.Set("X-Login-Session", "ls_forged")
@@ -150,6 +171,27 @@ func TestARepeatedSingleValuedHeaderIs400(t *testing.T) {
 	resp := serve(&Gateway{}, r)
 	if code := problemCode(t, resp); resp.StatusCode != http.StatusBadRequest || code != "pgmi.header_collision" {
 		t.Errorf("got %d %s", resp.StatusCode, code)
+	}
+}
+
+func TestTwoSessionsOrTwoConnectionHandlesAre400(t *testing.T) {
+	g := &Gateway{AllowedOrigins: map[string]bool{}}
+	for name, sent := range map[string]http.Header{
+		"one Cookie header":  {"Cookie": {"__Host-session=ls_a; __Host-session=ls_b"}},
+		"two Cookie headers": {"Cookie": {"__Host-session=ls_a", "theme=dark; __Host-session=ls_b"}},
+		"two X-Connection":   {"X-Connection": {"cn_a", "cn_b"}},
+	} {
+		for _, path := range []string{"/api/hello", "/mcp", "/rpc", "/auth/logout", "/health"} {
+			r := httptest.NewRequest(http.MethodPost, path, nil)
+			for header, values := range sent {
+				for _, v := range values {
+					r.Header.Add(header, v)
+				}
+			}
+			if resp := serve(g, r); resp.StatusCode != http.StatusBadRequest || problemCode(t, resp) != "pgmi.header_collision" {
+				t.Errorf("%s on %s: got %d", name, path, resp.StatusCode)
+			}
+		}
 	}
 }
 

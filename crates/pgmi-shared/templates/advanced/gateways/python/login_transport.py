@@ -123,6 +123,19 @@ def read_cookies(headers):
     return {name: morsel.value for name, morsel in jar.items()}
 
 
+def credential_collision(headers):
+    """"cookie __Host-session" or "header x-connection" when the request
+    carries two of it, in one header or several, else None: which session or
+    which connection calls would be guessed at."""
+    sessions = sum(part.split("=", 1)[0].strip() == SESSION_COOKIE
+                   for raw in headers.get_all("Cookie") or [] for part in raw.split(";"))
+    if sessions > 1:
+        return "cookie " + SESSION_COOKIE
+    if len(headers.get_all("X-Connection") or []) > 1:
+        return "header x-connection"
+    return None
+
+
 def set_cookie(name, value, max_age, http_only=True):
     # SameSite=Strict keeps the session off every cross-site request, a link
     # included. The sign-in cookie is Lax: the provider's redirect back to

@@ -156,6 +156,9 @@ func run(log *slog.Logger) error {
 // NewPool opens the process's one pool: bounded, with timeouts, every
 // connection named. sslmode in the URL is honoured as libpq does.
 func NewPool(ctx context.Context, databaseURL string, maxConns int32) (*pgxpool.Pool, error) {
+	if err := checkUserInfo(databaseURL); err != nil {
+		return nil, fmt.Errorf("DATABASE_URL: %w", err)
+	}
 	cfg, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("DATABASE_URL: %w", err)
@@ -169,6 +172,26 @@ func NewPool(ctx context.Context, databaseURL string, maxConns int32) (*pgxpool.
 	cfg.MaxConns = maxConns
 	cfg.MaxConnIdleTime = 30 * time.Second
 	return pgxpool.NewWithConfig(ctx, cfg)
+}
+
+// checkUserInfo refuses a postgres:// URL with a second @ before its host.
+// pgx, like libpq, splits the user info at the first one, so the rest of the
+// password would become the host name: looked up in DNS and printed in every
+// connection error. The error never quotes the URL.
+func checkUserInfo(databaseURL string) error {
+	rest, ok := strings.CutPrefix(databaseURL, "postgresql://")
+	if !ok {
+		if rest, ok = strings.CutPrefix(databaseURL, "postgres://"); !ok {
+			return nil
+		}
+	}
+	if end := strings.IndexAny(rest, "/?#"); end >= 0 {
+		rest = rest[:end]
+	}
+	if strings.Count(rest, "@") > 1 {
+		return errors.New("an unencoded @ in its user or password: percent-encode it as %40")
+	}
+	return nil
 }
 
 // checkTLSTrust refuses a verifying sslmode without a trust anchor. pgx, like

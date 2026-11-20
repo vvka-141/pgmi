@@ -65,6 +65,8 @@ pub const MAX_BODY: usize = 1024 * 1024;
 pub const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
 pub const MAX_HEADER_BYTES: usize = 64 << 10;
 pub const BODY_READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// ADAPT: how long a shutdown waits for the requests in flight.
+pub const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug)]
 pub struct OidcConfig {
@@ -260,7 +262,20 @@ pub fn router(gateway: Arc<Gateway>) -> Router {
         .fallback(|| async { GatewayError::from(Problem::not_found()) })
         .layer(DefaultBodyLimit::max(MAX_BODY))
         .layer(middleware::from_fn(read_body))
+        .layer(middleware::from_fn(one_credential))
         .with_state(gateway)
+}
+
+/// Two session cookies or two X-Connection headers, on any path, are refused:
+/// which one calls would be guessed at.
+async fn one_credential(request: Request, next: Next) -> Response {
+    match login::credential_collision(request.headers()) {
+        Some(twice) => GatewayError::from(
+            Problem::bad_request("pgmi.header_collision").detail(format!("{twice} is sent more than once")),
+        )
+        .into_response(),
+        None => next.run(request).await,
+    }
 }
 
 // Standard web plumbing, not pgmi-specific: replace it with your framework's own.
@@ -299,22 +314,36 @@ async fn read_body(request: Request, next: Next) -> Response {
 /// Serves `app` on `listener`, closing a connection whose request headers do
 /// not arrive within HEADER_READ_TIMEOUT (axum::serve has no such setting),
 /// and telling every request its peer address (ConnectInfo) for the per-IP
-/// rate limit. It runs until the process stops: a failed accept (EMFILE
-/// under a connection flood, a connection aborted before it was taken) is
-/// logged and waited out by axum's Listener, never the end of the gateway.
-pub async fn serve(mut listener: tokio::net::TcpListener, app: Router) {
+/// rate limit. A failed accept (EMFILE under a connection flood, a connection
+/// aborted before it was taken) is logged and waited out by axum's Listener,
+/// never the end of the gateway. Once `shutdown` completes it stops
+/// accepting, closes idle connections and gives the requests in flight
+/// DRAIN_TIMEOUT to finish: hyper-util's GracefulShutdown, which is what
+/// axum::serve's with_graceful_shutdown uses.
+pub async fn serve(mut listener: tokio::net::TcpListener, app: Router, shutdown: impl Future<Output = ()>) {
     use axum::serve::Listener;
     use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
     use hyper_util::server::conn::auto::Builder;
+    use hyper_util::server::graceful::GracefulShutdown;
     use hyper_util::service::TowerToHyperService;
+    let graceful = GracefulShutdown::new();
+    let mut shutdown = std::pin::pin!(shutdown);
     loop {
-        let (stream, peer) = Listener::accept(&mut listener).await;
+        let (stream, peer) = tokio::select! {
+            accepted = Listener::accept(&mut listener) => accepted,
+            () = &mut shutdown => break,
+        };
         let service = TowerToHyperService::new(Extension(ConnectInfo::<SocketAddr>(peer)).layer(app.clone()));
+        let watcher = graceful.watcher();
         tokio::spawn(async move {
             let mut builder = Builder::new(TokioExecutor::new());
             builder.http1().timer(TokioTimer::new()).header_read_timeout(HEADER_READ_TIMEOUT).max_buf_size(MAX_HEADER_BYTES);
             builder.http2().max_header_list_size(MAX_HEADER_BYTES as u32);
-            let _ = builder.serve_connection(TokioIo::new(stream), service).await;
+            let _ = watcher.watch(builder.serve_connection(TokioIo::new(stream), service)).await;
         });
+    }
+    drop(listener);
+    if tokio::time::timeout(DRAIN_TIMEOUT, graceful.shutdown()).await.is_err() {
+        tracing::warn!(seconds = DRAIN_TIMEOUT.as_secs(), "requests still running at shutdown; stopping");
     }
 }

@@ -88,8 +88,9 @@ export interface Channel {
 
 // -- errors the gateway maps to answers (gateway.ts, answerError) ------------
 
-// No pooled connection within the acquire timeout: 503, never retried here.
-export class PoolTimeout extends Error {}
+// No database connection: none free within the acquire timeout, or the server
+// could not be reached or refused the gateway's login. 503, never retried here.
+export class Unavailable extends Error {}
 
 // The request ran past its deadline: the database cancelled the statement
 // (57014 from statement_timeout), the gateway's own timer fired, or no time
@@ -234,16 +235,16 @@ export function beginStatement(policy: Policy): string {
 }
 
 // pg's Pool rejects with a plain Error when no connection comes within
-// connectionTimeoutMillis, and a server that cannot be reached is the same
-// for the caller: nothing was sent. Only a server answer carries a SQLSTATE.
+// connectionTimeoutMillis, and a server that cannot be reached, or refuses the
+// login (28P01, 28000) or the database (3D000), is the same for the caller:
+// nothing was sent, so it is no connection, not an answer to the request.
 export async function acquire(pool: pg.Pool): Promise<pg.PoolClient> {
   for (;;) {
     try {
       return await pool.connect();
     } catch (err) {
       if (choices.get(pool)?.fallBack(err)) continue;
-      if (err instanceof pg.DatabaseError) throw err;
-      throw new PoolTimeout(err instanceof Error ? err.message : String(err), { cause: err });
+      throw new Unavailable(err instanceof Error ? err.message : String(err), { cause: err });
     }
   }
 }
@@ -458,10 +459,10 @@ export function serializationRetry(inner: Channel, attempts: number, baseDelayMs
 
 // A failure of the connection, not an answer from the server: class 08
 // (connection exception), 57P01..57P03 (the server shut down), or no SQLSTATE
-// at all because the socket broke. 40001 is a server answer, and PoolTimeout
+// at all because the socket broke. 40001 is a server answer, and Unavailable
 // is no connection at all: it is answered 503 at once, not waited out twice.
 export function connectionLost(err: unknown): boolean {
-  if (err instanceof PoolTimeout) return false;
+  if (err instanceof Unavailable) return false;
   if (err instanceof pg.DatabaseError) {
     return err.code !== undefined && (err.code.startsWith("08") || ["57P01", "57P02", "57P03"].includes(err.code));
   }

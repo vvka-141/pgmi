@@ -249,6 +249,7 @@ import os
 import re
 import json
 import select
+import signal
 import socket
 import socketserver
 import threading
@@ -284,6 +285,8 @@ CLIENT_TIMEOUT_SECONDS = 30
 # per recv only: a client trickling a byte at a time would never meet it.
 HEADER_READ_SECONDS = 10
 BODY_READ_SECONDS = 30
+# ADAPT: how long SIGTERM waits for the requests in flight: as long as one may take.
+DRAIN_SECONDS = 30
 # Opened by main(): one pool per process, never a connection per request.
 POOL = None
 
@@ -566,6 +569,10 @@ class MCPHandler(BaseHTTPRequestHandler):
         if self.headers_timed_out:
             # The headers were cut off part way: never dispatch what arrived.
             self.close_connection = True
+            return False
+        if parsed and (twice := login_transport.credential_collision(self.headers)):
+            self.close_connection = True
+            self.send_problem(400, "Bad Request", "pgmi.header_collision", f"{twice} is sent more than once")
             return False
         return parsed
 
@@ -1198,9 +1205,50 @@ class _Gateway(socketserver.ThreadingMixIn, HTTPServer):
 
     daemon_threads = True
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._idle = threading.Condition()
+        self._connections = 0
+
     def server_bind(self):
         socketserver.TCPServer.server_bind(self)
         self.server_name, self.server_port = self.server_address[:2]
+
+    def process_request(self, request, client_address):
+        with self._idle:
+            self._connections += 1
+        super().process_request(request, client_address)
+
+    def shutdown_request(self, request):
+        super().shutdown_request(request)
+        with self._idle:
+            self._connections -= 1
+            self._idle.notify_all()
+
+    def drain(self, timeout):
+        """True once every connection has been answered and closed, False if
+        timeout ran out first. Request threads are daemons: the process does
+        not wait for one that outlives it."""
+        with self._idle:
+            return self._idle.wait_for(lambda: self._connections == 0, timeout)
+
+
+def serve(server, drain_seconds=DRAIN_SECONDS):
+    """Serves until SIGTERM or SIGINT, then stops taking connections and gives
+    the requests in flight drain_seconds to finish.
+
+    serve_forever runs in this thread, so the signal handler calls shutdown()
+    from another one: called here it would wait for itself."""
+    def stop(signum, frame):
+        threading.Thread(target=server.shutdown, name="shutdown").start()
+
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(signum, stop)
+    server.serve_forever()
+    print("Shutting down...")
+    server.server_close()
+    if not server.drain(drain_seconds):
+        print(f"[gateway] requests still running after {drain_seconds} s; stopping")
 
 
 def database_display(database_url):
@@ -1297,12 +1345,8 @@ def main():
     CHANNEL = channel.ConnectionRetry(
         channel.SerializationRetry(channel.TracingChannel(channel.PostgresChannel(POOL)),
                                    MAX_RETRY_ATTEMPTS, RETRY_BASE_DELAY))
-    server = _Gateway((HOST, PORT), MCPHandler)
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nShutting down...")
-        server.shutdown()
+        serve(_Gateway((HOST, PORT), MCPHandler))
     finally:
         POOL.close()
 

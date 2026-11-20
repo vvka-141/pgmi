@@ -70,6 +70,24 @@ public sealed class SessionCookies(IOptions<GatewayOptions> options)
                 SameSite = name == Login ? SameSiteMode.Lax : SameSiteMode.Strict };
 }
 
+// Two session cookies or two X-Connection headers, in one header or several:
+// which session or which connection calls would be guessed at, so the
+// request is refused on every path (Program.cs).
+public static class Credentials
+{
+    public static string? Collision(HttpRequest request)
+    {
+        var sessions = request.Headers.Cookie
+            .SelectMany(header => (header ?? "").Split(';'))
+            .Count(pair => pair.Split('=', 2)[0].Trim() == SessionCookies.Session);
+        if (sessions > 1)
+        {
+            return $"cookie {SessionCookies.Session}";
+        }
+        return request.Headers["X-Connection"].Count > 1 ? "header x-connection" : null;
+    }
+}
+
 public sealed class HeaderCollisionException(string name) : Exception($"header {name} is sent more than once")
 {
     public string Name { get; } = name;

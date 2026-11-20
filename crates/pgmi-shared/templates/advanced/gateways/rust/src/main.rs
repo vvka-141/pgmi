@@ -27,10 +27,13 @@ async fn main() -> Result<(), pgmi_gateway::BoxError> {
                    mcp_resource = gateway.resource.as_ref().map(|r| r.resource.as_str()), "listening");
 
     let mut terminate = signal(SignalKind::terminate())?;
-    tokio::select! {
-        () = serve(listener, router(gateway)) => {}
-        _ = tokio::signal::ctrl_c() => {}
-        _ = terminate.recv() => {}
-    }
+    let stop = async move {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = terminate.recv() => {}
+        }
+        tracing::info!("shutting down");
+    };
+    serve(listener, router(gateway), stop).await;
     Ok(())
 }

@@ -202,6 +202,15 @@ class RestTest(unittest.TestCase):
                     response = browser.request("GET", self.base + "/api/me", [(name, "a"), (second, "b")])
                     self.assert_problem(response, 400, "pgmi.header_collision")
 
+    def test_two_sessions_or_two_connection_handles_are_refused(self):
+        session = self.signed_in().cookies["__Host-session"]
+        for headers in ([("Cookie", f"__Host-session={session}; __Host-session=ls_other")],
+                        [("Cookie", f"__Host-session={session}"), ("Cookie", "theme=dark; __Host-session=ls_other")],
+                        [("X-Connection", "cn_a"), ("x-connection", "cn_b")]):
+            for method, path in (("GET", "/api/me"), ("POST", "/mcp"), ("POST", "/auth/logout"), ("GET", "/health")):
+                with self.subTest(headers=headers, path=path):
+                    self.assert_problem(request(self.base, method, path, headers), 400, "pgmi.header_collision")
+
     def test_an_unknown_isolation_level_is_400(self):
         response = self.get("/api/hello", [("X-PGMI-Transaction-Isolation", "snapshot")])
         self.assert_problem(response, 400, "pgmi.transaction_isolation_unsupported")

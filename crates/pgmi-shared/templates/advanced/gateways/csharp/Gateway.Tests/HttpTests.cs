@@ -68,6 +68,35 @@ public class HttpTests(DefaultGateway gateway) : IClassFixture<DefaultGateway>
     }
 
     [Theory]
+    [InlineData("GET", "/api/hello")]
+    [InlineData("POST", "/mcp")]
+    [InlineData("POST", "/auth/logout")]
+    [InlineData("GET", "/health")]
+    public async Task TwoSessionsOrTwoConnectionHandlesAreAHeaderCollision(string method, string path)
+    {
+        var sent = new (string Name, string[] Values)[]
+        {
+            ("Cookie", new[] { "__Host-session=ls_a; __Host-session=ls_b" }),
+            ("Cookie", new[] { "__Host-session=ls_a", "theme=dark; __Host-session=ls_b" }),
+            ("X-Connection", new[] { "cn_a", "cn_b" }),
+        };
+        foreach (var (name, values) in sent)
+        {
+            var request = new HttpRequestMessage(new HttpMethod(method), path);
+            request.Headers.TryAddWithoutValidation(name, values);
+            await AssertProblem(await _http.SendAsync(request), HttpStatusCode.BadRequest, "pgmi.header_collision");
+        }
+    }
+
+    [Fact]
+    public async Task OneSessionAmongOtherCookiesPasses()
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, "/health");
+        request.Headers.TryAddWithoutValidation("Cookie", "theme=dark; __Host-session=ls_a; __Host-csrf=c");
+        Assert.Equal(HttpStatusCode.OK, (await _http.SendAsync(request)).StatusCode);
+    }
+
+    [Theory]
     [InlineData("GET", "/nowhere")]
     [InlineData("POST", "/nowhere")]
     [InlineData("DELETE", "/auth/nowhere")]

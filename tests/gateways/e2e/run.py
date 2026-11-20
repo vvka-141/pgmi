@@ -19,6 +19,7 @@ a mock OIDC provider, starts the gateway under test and speaks HTTP to it:
     deadline  REQUEST_DEADLINE_SECONDS reaches PostgreSQL as statement_timeout:
            a slow handler is cancelled on the server and answered 504
     hangup  a client that hangs up mid-request cancels its statement
+    shutdown  SIGTERM lets the request in flight finish before the gateway exits
 
     PGMI_BIN=/path/to/pgmi \\
     PGMI_TEST_CONN=postgresql://postgres:postgres@127.0.0.1:5432/postgres \\
@@ -35,7 +36,7 @@ substituted:
         --env-file {env_file} -v .:/src -w /src image ./gateway'
     GATEWAY_STOP='docker rm -f gw-{port}'
 
-E2E_SUITES (default rest,rpc,mcp,login,intercept,oauth,deadline,hangup) picks suites. EXPECTED_MISSING names
+E2E_SUITES (default rest,rpc,mcp,login,intercept,oauth,deadline,hangup,shutdown) picks suites. EXPECTED_MISSING names
 suites the gateway does not implement yet: they still run, their failures
 are reported and do not fail the run, and a suite on that list that passes
 fails it, so the list cannot go stale. GATEWAY_READY_SECONDS (default 120)
@@ -49,7 +50,7 @@ import unittest
 
 import harness
 
-SUITES = ("rest", "rpc", "mcp", "login", "intercept", "oauth", "deadline", "hangup")
+SUITES = ("rest", "rpc", "mcp", "login", "intercept", "oauth", "deadline", "hangup", "shutdown")
 
 
 def main():

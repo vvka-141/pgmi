@@ -40,7 +40,7 @@ Settings are the environment variables of `../PROTOCOL.md` ("Configuration").
 `createGateway()` returns the `node:http` listener. `route()` picks a handler
 (`rest`, `mcp`, `signIn`, ...). A handler checks the request, calls the
 channel and writes the answer; for anything else it throws a typed error
-(`Problem`, `Unauthorized`, `RpcError`, `RetriesExhausted`, `PoolTimeout`,
+(`Problem`, `Unauthorized`, `RpcError`, `RetriesExhausted`, `Unavailable`,
 `DeadlineExceeded`, `InterceptorFailed`, ...). `answerError()` maps each error to its answer in
 one place: a problem on REST, a JSON-RPC envelope on `/mcp`.
 

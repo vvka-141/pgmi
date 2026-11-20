@@ -96,7 +96,7 @@ fn gateway(database_url: &str) -> Arc<Gateway> {
 async fn serve(app: Router) -> SocketAddr {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    tokio::spawn(pgmi_gateway::serve(listener, app));
+    tokio::spawn(pgmi_gateway::serve(listener, app, std::future::pending()));
     address
 }
 
@@ -133,6 +133,16 @@ async fn refusals_before_the_database() {
 
     assert_problem(&c.call("GET", "/api/hello", None, &[("x-organization-session", "a"), ("X-Organization-Session", "b")], false).await,
                    400, "pgmi.header_collision");
+    for twice in [&[("cookie", "__Host-session=ls_a; __Host-session=ls_b")][..],
+                  &[("cookie", "__Host-session=ls_a"), ("cookie", "theme=dark; __Host-session=ls_b")],
+                  &[("x-connection", "cn_a"), ("X-Connection", "cn_b")]] {
+        for (method, path) in [("GET", "/api/hello"), ("POST", "/mcp"), ("POST", "/auth/logout"), ("GET", "/health")] {
+            let reply = c.call(method, path, None, twice, false).await;
+            assert_eq!(reply.status.as_u16(), 400, "{method} {path} {twice:?}: {}", reply.body);
+            assert_eq!(reply.body["code"], "pgmi.header_collision");
+        }
+    }
+    assert_eq!(c.call("GET", "/health", None, &[("cookie", "theme=dark; __Host-session=ls_a")], false).await.status, 200);
     assert_problem(&c.call("GET", "/api/hello", None, &[("origin", "https://evil.example")], false).await, 403, "pgmi.origin_refused");
     assert_problem(&c.call("GET", "/nowhere", None, &[], false).await, 404, "pgmi.not_found");
 
@@ -160,6 +170,28 @@ async fn refusals_before_the_database() {
     .unwrap();
     assert!(closed_after < pgmi_gateway::HEADER_READ_TIMEOUT + Duration::from_secs(5),
             "a client that stops mid-request must be cut off; the connection stayed open {closed_after:?}");
+}
+
+#[tokio::test]
+async fn a_shutdown_finishes_the_request_in_flight_and_takes_no_new_one() {
+    let app = Router::new().route("/slow", axum::routing::get(|| async {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        "done"
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(pgmi_gateway::serve(listener, app, async move {
+        let _ = stopped.await;
+    }));
+    let in_flight = tokio::spawn(exchange(address, "GET /slow HTTP/1.1\r\nHost: x\r\n\r\n".into()));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    stop.send(()).unwrap();
+    let (head, body) = in_flight.await.unwrap();
+    assert!(head.starts_with("http/1.1 200"), "{head}");
+    assert_eq!(body, b"done");
+    tokio::time::timeout(Duration::from_secs(5), server).await.expect("serve returns once the request is answered").unwrap();
+    assert!(std::net::TcpStream::connect(address).is_err(), "a stopped gateway takes no new connection");
 }
 
 #[tokio::test]

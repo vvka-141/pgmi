@@ -28,13 +28,13 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type pg from "pg";
 import {
   type Channel, DeadlineExceeded, type Isolation, type Json, type JsonObject, type McpContext, type McpHeaders, normalizeIsolation,
-  PoolTimeout, type RequestContext, RetriesExhausted, withPolicy,
+  type RequestContext, RetriesExhausted, Unavailable, withPolicy,
 } from "./channel.js";
 import {
   InterceptorFailed, isObject, type Pipeline, RequestMessage, ResponseMessage, runInterceptors, selected,
 } from "./interceptors.js";
 import {
-  clearCookie, CSRF_COOKIE, CSRF_HEADER, forwardedHeaders, HeaderCollision, incomingHeaders, LOGIN_COOKIE, LoginFailed, LoginTransport,
+  clearCookie, credentialCollision, CSRF_COOKIE, CSRF_HEADER, forwardedHeaders, HeaderCollision, incomingHeaders, LOGIN_COOKIE, LoginFailed, LoginTransport,
   readCookies, SESSION_COOKIE,
 } from "./login.js";
 import { identityContext, ProviderUnavailable, RateLimiter, ResourceServer, TokenRejected } from "./resource-server.js";
@@ -339,8 +339,8 @@ export function createGateway(options: GatewayOptions) {
         err.applied ? "the request was applied; its answer could not be completed" : "the request was not applied",
         { "X-Request-Id": ex.requestId }));
     }
-    if (err instanceof PoolTimeout) {
-      log(`[gateway] ${ex.requestId} no pooled connection: ${err.message}`);
+    if (err instanceof Unavailable) {
+      log(`[gateway] ${ex.requestId} no database connection: ${err.message}`);
       if (mcp) {
         return rpcError(ex, 503, -31000, "The database is unavailable; repeat the call later", { code: "pgmi.unavailable" },
                         { "Retry-After": RETRY_AFTER_SECONDS });
@@ -572,7 +572,7 @@ export function createGateway(options: GatewayOptions) {
         log(`[gateway] ${ex.requestId} sign-in refused: ${err.code} (${err.detail})`);
         throw new Problem(err.status, "Sign-in failed", err.code, undefined, clear);
       }
-      if (err instanceof PoolTimeout) throw err;
+      if (err instanceof Unavailable) throw err;
       log(`[gateway] ${ex.requestId} sign-in error: ${err instanceof Error ? err.message : String(err)}`);
       throw new Problem(500, "Internal Server Error", "pgmi.internal_error", undefined, clear);
     }
@@ -613,6 +613,8 @@ export function createGateway(options: GatewayOptions) {
   async function route(ex: Exchange): Promise<void> {
     const { path } = ex;
     const method = ex.req.method;
+    const twice = credentialCollision(ex.req.rawHeaders);
+    if (twice) throw new Problem(400, "Bad Request", "pgmi.header_collision", `${twice} is sent more than once`);
     if (path === REST_PREFIX || path.startsWith(REST_PREFIX + "/")) return rest(ex);
     if (path === "/mcp") {
       if (method === "POST") return mcp(ex);

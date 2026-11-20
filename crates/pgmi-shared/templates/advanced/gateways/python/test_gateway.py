@@ -24,6 +24,7 @@ import json
 import os
 import pathlib
 import secrets
+import signal
 import socket
 import subprocess
 import sys
@@ -885,6 +886,70 @@ class RouteChangeTest(InProcessGateway):
         conn.close()
         self.assertEqual(len(recording.mcp_headers), 2, recording.mcp_headers)
         self.assertEqual(tuple(recording.mcp_headers[1]), ("2026-07-28", "tools/call", "rewritten_tool"))
+
+
+class CredentialCollisionTest(InProcessGateway):
+    def test_two_sessions_or_two_connection_handles_are_400_on_every_path(self):
+        port = self.serve(FakeChannel())
+        for name, headers in [("one Cookie header", [("Cookie", "__Host-session=ls_a; __Host-session=ls_b")]),
+                              ("two Cookie headers", [("Cookie", "__Host-session=ls_a"),
+                                                      ("Cookie", "theme=dark; __Host-session=ls_b")]),
+                              ("two X-Connection", [("X-Connection", "cn_a"), ("x-connection", "cn_b")])]:
+            for method, path in [("GET", "/api/hello"), ("POST", "/mcp"), ("POST", "/auth/logout"), ("GET", "/health")]:
+                with self.subTest(name=name, path=path):
+                    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                    conn.putrequest(method, path)
+                    for header, value in headers:
+                        conn.putheader(header, value)
+                    conn.endheaders()
+                    raw = conn.getresponse()
+                    response = Response(raw.status, raw.getheaders(), raw.read())
+                    conn.close()
+                    self.assertEqual(response.status, 400, response.body)
+                    self.assertEqual(response.json()["code"], "pgmi.header_collision")
+
+    def test_one_session_among_other_cookies_passes(self):
+        port = self.serve(FakeChannel())
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        conn.request("GET", "/health", headers={"Cookie": "theme=dark; __Host-session=ls_a; __Host-csrf=c"})
+        self.assertEqual(conn.getresponse().status, 200)
+        conn.close()
+
+
+class SlowChannel(FakeChannel):
+    def rest_invoke(self, ctx, policy, headers, body):
+        time.sleep(2)
+        return channel.RestResult(200, {}, b"{}")
+
+
+class ShutdownTest(unittest.TestCase):
+    def test_sigterm_finishes_the_request_in_flight_and_takes_no_new_one(self):
+        patcher = mock.patch.object(gateway, "CHANNEL", SlowChannel())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            self.addCleanup(signal.signal, signum, signal.getsignal(signum))
+        server = gateway._Gateway(("127.0.0.1", 0), gateway.MCPHandler)
+        port = server.server_address[1]
+        answers = []
+
+        def client():
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            conn.request("GET", "/api/slow")
+            time.sleep(0.5)
+            os.kill(os.getpid(), signal.SIGTERM)
+            answers.append(conn.getresponse().status)
+            conn.close()
+
+        caller = threading.Thread(target=client)
+        caller.start()
+        started = time.monotonic()
+        gateway.serve(server, drain_seconds=10)
+        caller.join(10)
+        self.assertEqual(answers, [200])
+        self.assertLess(time.monotonic() - started, 5)
+        with self.assertRaises(OSError):
+            socket.create_connection(("127.0.0.1", port), timeout=1).close()
 
 
 class SlowClientTest(InProcessGateway):

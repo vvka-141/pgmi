@@ -16,7 +16,7 @@ import { after, before, describe, test } from "node:test";
 import pg from "pg";
 import {
   acquire, APPLICATION_NAME, cancelBackend, type Channel, connectionLost, connectionRetry, connectionStrings, createPool, DeadlineExceeded, type McpHeaders, NO_ROUTE, normalizeIsolation,
-  type Policy, PoolTimeout, postgresChannel, type RequestContext, RetriesExhausted, serializationRetry, statementTimeout, tracing,
+  type Policy, postgresChannel, type RequestContext, RetriesExhausted, serializationRetry, statementTimeout, tracing, Unavailable,
 } from "./channel.js";
 import { acceptsJson, bearerHandle, createGateway, envelopeStatus, handleUnknown, MAX_BODY_BYTES, mcpRoute, rpcIdOf } from "./gateway.js";
 import {
@@ -198,12 +198,19 @@ describe("the database channel", () => {
   });
 
   test("a pool timeout and a server error are not a dropped connection", () => {
-    assert.equal(connectionLost(new PoolTimeout("timeout exceeded when trying to connect")), false);
+    assert.equal(connectionLost(new Unavailable("timeout exceeded when trying to connect")), false);
     assert.equal(connectionLost(serverError("40001")), false);
     assert.equal(connectionLost(serverError("57P01")), true);
     assert.equal(connectionLost(serverError("08006")), true);
     assert.equal(connectionLost(Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" })), true);
     assert.equal(connectionLost(new TypeError("a bug")), false);
+  });
+
+  test("a refused login is no connection, not a server answer", async () => {
+    for (const code of ["28P01", "28000", "3D000"]) {
+      const refusing = { connect: async () => { throw serverError(code); } } as unknown as pg.Pool;
+      await assert.rejects(acquire(refusing), Unavailable, code);
+    }
   });
 
   test("40001 runs the whole call again, then gives up with the attempts", async () => {
@@ -487,6 +494,39 @@ describe("the request deadline", () => {
   });
 });
 
+describe("credentials", () => {
+  test("two session cookies or two X-Connection headers are 400 pgmi.header_collision on every path", async () => {
+    const server = createServer(createGateway({
+      pool: {} as pg.Pool, channel: flaky(null, 0).channel, pipeline: EMPTY_PIPELINE, perIp: new RateLimiter(0),
+      perClient: new RateLimiter(0), allowedOrigins: new Set(), log: quiet,
+    }));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      for (const headers of [{ Cookie: "__Host-session=ls_a; __Host-session=ls_b" },
+                             { Cookie: ["__Host-session=ls_a", "theme=dark; __Host-session=ls_b"] },
+                             { "X-Connection": ["cn_a", "cn_b"] }] as OutgoingHttpHeaders[]) {
+        for (const [method, path] of [["GET", "/api/hello"], ["POST", "/mcp"], ["POST", "/auth/logout"], ["GET", "/health"]]) {
+          const answer = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+            const req = request({ host: "127.0.0.1", port, method, path, headers }, (res) => {
+              let body = "";
+              res.on("data", (c: Buffer) => { body += c; });
+              res.on("end", () => resolve({ status: res.statusCode!, body }));
+            });
+            req.on("error", reject);
+            req.end();
+          });
+          assert.equal(answer.status, 400, `${method} ${path} ${JSON.stringify(headers)}: ${answer.body}`);
+          assert.equal(JSON.parse(answer.body).code, "pgmi.header_collision");
+        }
+      }
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+});
+
 const databaseUrl = process.env.DATABASE_URL;
 
 describe("against the deployed template", { skip: databaseUrl ? false : "DATABASE_URL is not set" }, () => {
@@ -592,6 +632,29 @@ describe("against the deployed template", { skip: databaseUrl ? false : "DATABAS
     } finally {
       await new Promise((resolve) => down.close(resolve));
       await dead.end();
+    }
+  });
+
+  test("a login the database refuses is 503 pgmi.unavailable, on REST and MCP", async () => {
+    const wrong = new URL(databaseUrl!);
+    wrong.password = "not-the-password";
+    const refused = createPool(wrong.toString(), 1);
+    const down = serve(refused);
+    await new Promise<void>((resolve) => down.listen(0, "127.0.0.1", resolve));
+    const at = `http://127.0.0.1:${(down.address() as AddressInfo).port}`;
+    try {
+      const rest = await fetch(at + "/api/hello");
+      assert.equal(rest.status, 503);
+      assert.equal((await rest.json()).code, "pgmi.unavailable");
+      const mcp = await fetch(at + "/mcp", {
+        method: "POST", headers: { "Content-Type": "application/json", "X-Connection": "cn_x" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      });
+      assert.equal(mcp.status, 503);
+      assert.equal((await mcp.json()).error.data.code, "pgmi.unavailable");
+    } finally {
+      await new Promise((resolve) => down.close(resolve));
+      await refused.end();
     }
   });
 

@@ -125,7 +125,7 @@ func (g *Gateway) Routes() http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	})
-	return g.withRequestScope(g.withAccessLog(routes))
+	return g.withRequestScope(g.withAccessLog(g.withOneCredential(routes)))
 }
 
 // -- Middleware -------------------------------------------------------------------
@@ -162,6 +162,26 @@ func (g *Gateway) withAccessLog(next http.Handler) http.Handler {
 		next.ServeHTTP(recorder, r)
 		g.Log.InfoContext(r.Context(), "request", "method", r.Method, "path", r.URL.Path,
 			"status", recorder.status, "ms", time.Since(started).Milliseconds())
+	})
+}
+
+// withOneCredential refuses, on every path, a request with two session
+// cookies or two X-Connection headers: which one calls would be guessed at.
+func (g *Gateway) withOneCredential(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		twice := ""
+		switch {
+		case len(r.CookiesNamed(sessionCookie)) > 1:
+			twice = "cookie " + sessionCookie
+		case len(r.Header.Values("X-Connection")) > 1:
+			twice = "header x-connection"
+		}
+		if twice != "" {
+			g.writeError(w, r, &problem{status: http.StatusBadRequest, title: "Bad Request", code: "pgmi.header_collision",
+				detail: twice + " is sent more than once"})
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 
