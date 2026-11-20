@@ -427,7 +427,7 @@ pgmi deploy ./myproject -d myapp
 pgmi deploy ./myproject -d myapp_dev --overwrite --force
 
 # Full connection string from the environment (never put the password on argv)
-PGMI_CONNECTION_STRING="postgresql://postgres:${DB_PASSWORD}@db.example.com:5432/postgres" pgmi deploy ./myproject -d myapp
+PGMI_CONNECTION_STRING="postgresql://postgres:${DB_PASSWORD}@db.example.com:5432/postgres?sslmode=verify-full&sslrootcert=/path/to/ca.crt" pgmi deploy ./myproject -d myapp
 
 # Pin to specific API version for CI/CD stability
 pgmi deploy ./myproject -d myapp --compat=1
@@ -466,9 +466,10 @@ pgmi deploy ./myproject -d myapp \
 
 # mTLS combined with connection string
 pgmi deploy ./myproject \
-  --connection "postgresql://user@host/postgres" -d myapp \
+  --connection "postgresql://user@host/postgres?sslmode=verify-full" -d myapp \
   --sslcert /path/to/client.crt \
-  --sslkey /path/to/client.key
+  --sslkey /path/to/client.key \
+  --sslrootcert /path/to/ca.crt
 ```
 
 ### The Two-Database Pattern
@@ -1211,7 +1212,7 @@ pgmi deploy ./myproject -d myapp \
 
 # Combined with connection string
 pgmi deploy ./myproject \
-  --connection "postgresql://user@host/postgres" -d myapp \
+  --connection "postgresql://user@host/postgres?sslmode=verify-full" -d myapp \
   --sslcert /path/to/client.crt \
   --sslkey /path/to/client.key \
   --sslrootcert /path/to/ca.crt

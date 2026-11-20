@@ -24,13 +24,15 @@ pgmi deploy . --host db.example.com -p 5432 -U deployer -d myapp
 
 # Connection string (PostgreSQL URI) from the environment: the password comes
 # from your secret store, so it reaches neither `ps` nor your shell history
-PGMI_CONNECTION_STRING="postgresql://deployer:${DB_PASSWORD}@db.example.com:5432/postgres" pgmi deploy . -d myapp
+PGMI_CONNECTION_STRING="postgresql://deployer:${DB_PASSWORD}@db.example.com:5432/postgres?sslmode=verify-full&sslrootcert=/path/to/ca.crt" pgmi deploy . -d myapp
 
 # ADO.NET format (common in .NET ecosystems)
 PGMI_CONNECTION_STRING="Host=db.example.com;Port=5432;Database=postgres;Username=deployer;Password=${DB_PASSWORD}" pgmi deploy . -d myapp
 ```
 
 Never put a password on the command line: a password inside `--connection` is visible in `ps`, shell history and CI logs. Use `PGPASSWORD`, `.pgpass`, or `PGMI_CONNECTION_STRING` filled from a secret.
+
+Shell tracing (`set -x`, GitLab's `CI_DEBUG_TRACE`) prints the lines above with `${DB_PASSWORD}` expanded into the log; keep it off wherever a secret is expanded.
 
 ---
 
@@ -177,8 +179,10 @@ pgmi accepts three connection string formats:
 
 **PostgreSQL URI:**
 ```
-postgresql://user:pass@host:5432/dbname?sslmode=require
+postgresql://user:pass@host:5432/dbname?sslmode=verify-full&sslrootcert=/path/to/ca.crt
 ```
+Percent-encode a `/`, `?`, `#` or `%` in the password (`%2F`, `%3F`, `%23`,
+`%25`): unencoded, it ends the password early.
 
 A URI may list several hosts, as libpq allows, for example a primary and a
 standby:
@@ -357,7 +361,7 @@ pgmi uses session-scoped temporary tables (`pg_temp`) that must survive for the 
 
 ```bash
 # Direct connection for pgmi (bypasses pooler)
-PGMI_CONNECTION_STRING="postgresql://deployer:${DB_PASSWORD}@db-server:5432/mydb" pgmi deploy .
+PGMI_CONNECTION_STRING="postgresql://deployer:${DB_PASSWORD}@db-server:5432/mydb?sslmode=verify-full&sslrootcert=/path/to/ca.crt" pgmi deploy .
 
 # Application traffic uses pooler as usual
 # postgresql://user:pass@pgbouncer:6432/mydb

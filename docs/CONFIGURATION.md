@@ -346,8 +346,8 @@ connection:
 timeout: 3m
 ```
 
-No `sslmode` is written, so the default applies: `prefer`, or TLS only with
-cloud sign-in (`--azure`, `--aws`, `--databricks`).
+No `sslmode` is written, so the default applies: `prefer`, which can fall back
+to plaintext. Cloud sign-in (`--azure`, `--aws`, `--databricks`) requires TLS.
 
 `env` is required and deliberately not set: pass `--param env=dev` locally and
 `PGMI_PARAM_ENV` in CI, so a deploy that forgets it fails instead of seeding

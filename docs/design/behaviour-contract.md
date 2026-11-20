@@ -1702,7 +1702,7 @@ release notes take their "Behaviour changes" section from this table.
 | `serve`: a `tools/call` whose id is still running | both run, two answers | second refused with `-32600` | owner 2026-11-11 |
 | `serve`: a cancel or a repeated id spelled with escapes (`"\u006aob"` for `"job"`) | missed | matched by the decoded string | owner 2026-11-11 |
 | Azure username/password (resource-owner) login | not reachable | removed | owner 2026-11-10 |
-| `pgmi init`: `sslmode` in the scaffolded `pgmi.yaml` | `prefer`, refused with token sign-in | not written; the default applies (`prefer`, or TLS only with token sign-in) | owner 2026-11-11 |
+| `pgmi init`: `sslmode` in the scaffolded `pgmi.yaml` | `prefer`, refused with token sign-in | not written; the default applies (`prefer`; token sign-in requires TLS) | owner 2026-11-11 |
 | Token sign-in refusing `sslmode: prefer` from `pgmi.yaml` | names the source | names the file line and the fix; exit 10 both | owner 2026-11-11 |
 | Basic template's privilege test | fails on any PUBLIC-executable function in `public`, also a hosting provider's | checks only the deploying role's functions | owner 2026-11-11 |
 | Known secrets (password, `sslpassword`, sign-in tokens) in notices, errors, `--json`, serve | printed | shown as `***`, also where the secret is part of a longer word; a password equal to the login or a database name is not hidden, since pgmi prints those names anyway (owner 2026-11-13, PGMI-973) | owner 2026-11-11 |

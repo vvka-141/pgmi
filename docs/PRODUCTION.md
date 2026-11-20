@@ -590,7 +590,7 @@ See [Connection Requirements](#connection-requirements) above. Use a direct conn
 
 ```bash
 # Direct connection for deployment (bypasses pooler)
-PGMI_CONNECTION_STRING="postgresql://deployer:${DB_PASSWORD}@db-server:5432/mydb" pgmi deploy .
+PGMI_CONNECTION_STRING="postgresql://deployer:${DB_PASSWORD}@db-server:5432/mydb?sslmode=verify-full&sslrootcert=/path/to/ca.crt" pgmi deploy .
 
 # Application traffic goes through pooler
 # postgresql://user:pass@pgbouncer:6432/mydb

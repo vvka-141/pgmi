@@ -80,8 +80,10 @@ Why these choices:
 - **`--force`** skips the interactive confirmation (there is no TTY in CI). It does
   **not** drop your database — that is `--overwrite`, which belongs only on
   throwaway/test databases, never production.
-- **`PGMI_CONNECTION_STRING`** carries host, user, and password from a single secret.
-  Point it at a direct connection, not a transaction-mode pooler.
+- **`PGMI_CONNECTION_STRING`** carries host, user, and password from a single secret,
+  for example `postgresql://deployer:<password>@db.example.com:5432/postgres?sslmode=verify-full&sslrootcert=system`
+  (`system` trusts the runner's CA store; for a private CA, the path of its
+  certificate). Point it at a direct connection, not a transaction-mode pooler.
 
 This is the smallest job. For deploys serialized per database, the deploy
 record kept as an artifact, the advanced template's parameters and OIDC, use
@@ -286,7 +288,8 @@ record kept as an artifact even when the deploy fails.
 
 Before the first run:
 
-- **Secrets:** `DATABASE_URL` (a direct connection) and
+- **Secrets:** `DATABASE_URL` (a direct connection with
+  `sslmode=verify-full`, as in the [smallest job](#github-actions)) and
   `DATABASE_ADMIN_PASSWORD`. **Variables:** `PLATFORM_OPERATORS` and
   `OIDC_ISSUERS`, as JSON arrays (see `pg_temp.parameter_declaration()` in the template's `deploy/parameters.sql`).
 - **The job redeploys an existing database.** `PGMI_PARAM_UPGRADE: "true"`

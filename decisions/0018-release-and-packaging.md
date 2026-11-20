@@ -121,6 +121,9 @@ release is a plain workflow, `.github/workflows/release-rust.yml`:
    `blackbox`: every case but those `rust/blackbox-skip.txt` names, each
    with its reason, against the static Linux binary that ships (PGMI-984);
    `uv` is installed from `blackbox/uv-requirements.txt` by hash.
+   `examples`: `examples.yml`, the workflow CI calls, builds pgmi from the
+   commit and runs every example and gateway client; `publish` needs it
+   (PGMI-1101).
 4. `package`: `cargo about generate` (cargo-about 0.9.3, `about.toml`,
    `about.hbs`) writes `THIRD-PARTY-LICENSES` for every crate of the
    release targets and fails on a licence it cannot read (PGMI-1003);

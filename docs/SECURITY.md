@@ -213,7 +213,7 @@ printf 'db_admin_password=%s\napi_key=%s\n' "$DB_ADMIN_PASSWORD" "$API_KEY" > "$
 pgmi deploy ./migrations -d myapp --params-file "$params"
 ```
 
-`mktemp` creates the file readable only by you; a fixed path such as `/tmp/params.env` survives the job on a shared runner.
+`mktemp` creates the file readable only by you; a fixed path such as `/tmp/params.env` survives the job on a shared runner. Shell tracing (`set -x`, GitLab's `CI_DEBUG_TRACE`) prints the `printf` line with both secrets expanded into the log; keep it off in this script.
 
 ### Never: secrets in `--param`
 

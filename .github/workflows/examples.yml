@@ -1,7 +1,8 @@
 name: Examples
 
-# The end-to-end example gates, called by ci.yml: the README's flagship
-# examples deploy on every push, with the binary built from that commit.
+# The end-to-end example gates, called by ci.yml and release-rust.yml: the
+# README's flagship examples deploy on every push and before every release,
+# with the binary built from that commit.
 on:
   workflow_call:
 

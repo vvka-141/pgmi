@@ -341,10 +341,14 @@ jobs:
           path: dist/
           retention-days: 14
 
+  examples:
+    name: Examples
+    uses: ./.github/workflows/examples.yml
+
   publish:
     name: Publish
     if: inputs.publish
-    needs: [verify, package]
+    needs: [verify, package, examples]
     runs-on: ubuntu-latest
     permissions:
       contents: write

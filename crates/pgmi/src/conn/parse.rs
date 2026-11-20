@@ -103,6 +103,7 @@ pub(crate) enum ParseError {
     UnknownKey(String),
     UnknownKeyBesidePassword,
     InvalidPort,
+    SplitPassword,
     Blank { key: &'static str, how: Blank },
     PercentEncoding,
     NotUtf8,
@@ -134,6 +135,10 @@ impl fmt::Display for ParseError {
             ParseError::InvalidPort => write!(
                 f,
                 "invalid port in connection string ({HIDDEN}): want a number from 1 to 65535"
+            ),
+            ParseError::SplitPassword => write!(
+                f,
+                "invalid port in connection string ({HIDDEN}): if the password holds / or #, percent-encode it (%2F, %23)"
             ),
             ParseError::Blank { key, how } => write!(
                 f,
@@ -185,8 +190,21 @@ pub(crate) fn parse(s: &str) -> Result<Fields> {
         ParseError::UnknownKey(k) if after_password(t, &k) || !key_shaped(&k) => {
             ParseError::UnknownKeyBesidePassword
         }
+        ParseError::InvalidPort if split_password(t) => ParseError::SplitPassword,
         e => e,
     })
+}
+
+fn split_password(t: &str) -> bool {
+    let Some((scheme, rest)) = t.split_once("://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    ["postgresql", "postgres"]
+        .iter()
+        .any(|s| scheme.eq_ignore_ascii_case(s))
+        && !authority.contains('@')
+        && rest.contains('@')
 }
 
 fn key_shaped(key: &str) -> bool {
@@ -1086,12 +1104,31 @@ mod tests {
     }
 
     #[test]
+    fn an_unencoded_separator_in_a_uri_password_gets_a_percent_encode_hint() {
+        for bad in [
+            "postgresql://u:a/b@h/db",
+            "postgresql://u:a#b@h/db",
+            "postgres://u:a/b@h:5432/db",
+        ] {
+            let e = parse(bad).unwrap_err();
+            assert_eq!(e, ParseError::SplitPassword, "{bad}");
+            assert!(e.to_string().contains("percent-encode"), "{bad}: {e}");
+            assert_eq!(Error::from(e).exit_code(), 10, "{bad}");
+        }
+        assert_eq!(
+            parse("postgresql://localhost:abc/mydb"),
+            Err(ParseError::InvalidPort)
+        );
+    }
+
+    #[test]
     fn errors_never_echo_the_input() {
         for (input, secret) in [
             ("postgres:/admin:S3cretPw@db/x", "S3cretPw"),
             ("Host=h;Password=ab;cdSecret", "cdSecret"),
             ("postgresql://u:Qz/ss@h/db", "Qz"),
             ("postgresql://u:Secret9/x@h:5432/db", "Secret9"),
+            ("postgresql://u:Secret9#x@h:5432/db", "Secret9"),
             ("postgresql://u@h:Secret9/db", "Secret9"),
             ("host=h password=S3cret junkSecret", "junkSecret"),
             ("host=h port=Secret9", "Secret9"),
