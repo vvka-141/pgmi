@@ -16,7 +16,7 @@
 > `verify-install.yml` installs it through every documented channel and checks
 > each serves the new version — look at that run before announcing a release.
 
-## v0.20.1 — 2026-11-19
+## v0.20.1 — 2026-11-20
 
 **Claude Code now finds the agent skills `pgmi init` writes.** Since 0.14, `pgmi init` has put its skills (how to add a table, an endpoint, a test, and the PostgreSQL recipes) in `.agents/skills/`. Codex and other agents read that folder; Claude Code does not, so in Claude Code a new project had no pgmi skills at all. pgmi 0.20.1 also writes a copy of every skill to `.claude/skills/`, where Claude Code looks, and a new command checks that the two stay in step.
 
