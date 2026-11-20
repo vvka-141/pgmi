@@ -61,7 +61,7 @@ The Makefile wraps the common commands:
 |---|---|
 | `make build` | `cargo build --release -p pgmi`; the binary is `target/release/pgmi` |
 | `make test` | `cargo test --workspace`; database tests skip without `PGMI_TEST_CONN` |
-| `make test-db` | the same with `PGMI_REQUIRE_DB=1`: a missing database fails the run |
+| `make test-db` | the same with `PGMI_REQUIRE_DB=1`: a missing database (`PGMI_TEST_CONN` or `PGMI_TEST_CONN_PG17`) fails the run |
 | `make lint` | `cargo fmt --check` and clippy with `-D warnings`, also with `--features testhooks` |
 | `make deny` | `cargo deny check` and `scripts/check-no-c.sh` |
 | `make blackbox` | builds the binary and runs the black-box suite against it |
@@ -81,7 +81,15 @@ export PGMI_TEST_CONN=postgresql://postgres:postgres@127.0.0.1:55961/postgres
 export PGMI_REQUIRE_DB=1     # fail, rather than skip, when the database is missing
 ```
 
-**Ports.** pgmi's development uses two fixed host ports, chosen so they do
+One test checks that the advanced template refuses PostgreSQL 17, so
+`make test-db` also needs a PostgreSQL 17 server:
+
+```bash
+docker run -d --name pgmi-pg17 -p 55963:5432 -e POSTGRES_PASSWORD=postgres postgres:17
+export PGMI_TEST_CONN_PG17=postgresql://postgres:postgres@127.0.0.1:55963/postgres
+```
+
+**Ports.** pgmi's development uses three fixed host ports, chosen so they do
 not clash with other PostgreSQL work on the same machine (5432 to 5434 are
 common defaults):
 
@@ -89,9 +97,10 @@ common defaults):
 |---|---|
 | 55961 | the development and test server above (`PGMI_TEST_CONN`, `.env.example`) |
 | 55962 | the throwaway server `scripts/verify-walkthrough.sh` starts to run the README's "See it work" blocks (`WALKTHROUGH_PORT` overrides it) |
+| 55963 | the PostgreSQL 17 server for the PG18-floor test (`PGMI_TEST_CONN_PG17`) |
 
 The black-box suite's extra servers and fakes take a free port from the
-system and need neither.
+system and need none of them.
 
 ### The black-box suite
 

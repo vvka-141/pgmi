@@ -120,3 +120,42 @@ fn operators_and_functions_planted_in_public_never_run_in_the_lock_or_overwrite_
     let out = pg.deploy(&p, &db).connection(&through).overwrite().run();
     assert_eq!(out.code, 0, "{}", out.stderr);
 }
+
+const SETUP_PATHS: &str = r"
+CREATE TABLE public.setup_path (tag text, search_path text);
+CREATE FUNCTION public.record_setup_path() RETURNS event_trigger LANGUAGE plpgsql AS
+  $$BEGIN
+    INSERT INTO public.setup_path
+    SELECT c.command_tag, pg_catalog.current_setting('search_path')
+    FROM pg_catalog.pg_event_trigger_ddl_commands() c;
+  END$$;
+CREATE EVENT TRIGGER record_setup_path ON ddl_command_end
+  EXECUTE FUNCTION public.record_setup_path();
+";
+
+#[test]
+fn session_setup_runs_with_the_search_path_pinned() {
+    let Some(pg) = pg() else { return };
+    let db = pg.database("pgmi_rs_setup_search_path");
+    pg.admin()
+        .exec(&format!("CREATE DATABASE {}", ident(db.name())));
+    db.client().exec(SETUP_PATHS);
+    let p = Project::empty();
+    p.write("deploy.sql", PATH_CHECK);
+    let out = pg.deploy(&p, &db).run();
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    let seen: Vec<(String, String)> = db
+        .client()
+        .query("SELECT tag, search_path FROM public.setup_path", &[])
+        .iter()
+        .map(|r| (r.get(0), r.get(1)))
+        .collect();
+    assert!(
+        seen.iter().any(|(tag, _)| tag == "CREATE TABLE"),
+        "the event trigger saw no session table created: {seen:?}"
+    );
+    assert!(
+        seen.iter().all(|(_, path)| path == "pg_catalog, pg_temp"),
+        "session setup ran DDL outside the pinned search_path: {seen:?}"
+    );
+}

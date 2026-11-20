@@ -1715,6 +1715,58 @@ mod tests {
         assert!(run.secrets().iter().any(|s| s.expose() == "from-pgpass"));
     }
 
+    fn through_the_dialer(send: impl FnOnce(&Dialer)) -> (String, Value) {
+        let ctx = context();
+        let guard = guard(Duration::from_secs(60));
+        let (reporter, out) = crate::output::Captured::reporter(false, crate::output::Style::Plain);
+        let reporter = Arc::new(reporter);
+        let secrets = Secrets::default();
+        secrets.insert(&"from-pgpass".into());
+        let steps = Steps {
+            ctx: &ctx,
+            guard: &guard,
+            reporter: &reporter,
+            secrets: &secrets,
+            retry: retry::Policy {
+                enabled: true,
+                after_commit: false,
+                cap: None,
+            },
+        };
+        let log = Arc::new(Mutex::new(NoticeLog::default()));
+        send(&steps.dialer(&log));
+        let (logged, _) = log.lock().unwrap().finish();
+        (out.text(), logged)
+    }
+
+    #[test]
+    fn a_retry_or_pgpass_line_from_the_dialer_is_redacted() {
+        let (text, _) = through_the_dialer(|d| {
+            (d.log)("Connection attempt 1 failed: from-pgpass; retrying in 250ms".into());
+            (d.log)("WARNING: password file from-pgpass has group or world access".into());
+        });
+        assert_eq!(
+            text,
+            "Connection attempt 1 failed: ***; retrying in 250ms\n\
+             WARNING: password file *** has group or world access\n"
+        );
+    }
+
+    #[test]
+    fn a_server_notice_is_redacted_before_it_is_shown_or_recorded() {
+        let (text, logged) = through_the_dialer(|d| {
+            (d.notices)(Notice {
+                detail: Some("d from-pgpass".into()),
+                hint: Some("h from-pgpass".into()),
+                ..notice("WARNING", "m from-pgpass")
+            });
+        });
+        assert_eq!(text, "WARNING:  m ***\nDETAIL:  d ***\nHINT:  h ***\n");
+        let logged = logged.to_string();
+        assert!(logged.contains("m ***"), "{logged}");
+        assert!(!logged.contains("from-pgpass"), "{logged}");
+    }
+
     fn spec(db: &str) -> Spec {
         let flags = resolve::Flags {
             connection: Some(format!("postgresql://u:s3cret-pw@db.example:6543/{db}").into()),

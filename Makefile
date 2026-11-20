@@ -8,7 +8,7 @@ build:                 ## Build the release binary (target/release/pgmi)
 test:                  ## Run the Rust tests; database tests skip without PGMI_TEST_CONN
 	cargo test --locked --workspace
 
-test-db:               ## Run the Rust tests; a missing PGMI_TEST_CONN fails instead of skipping
+test-db:               ## Run the Rust tests; a missing PGMI_TEST_CONN or PGMI_TEST_CONN_PG17 fails instead of skipping
 	PGMI_REQUIRE_DB=1 cargo test --locked --workspace
 	PGMI_REQUIRE_DB=1 cargo test --locked -p pgmi --features testhooks --test panic --test google_cloud_sql --test aws_credential_process_hang
 

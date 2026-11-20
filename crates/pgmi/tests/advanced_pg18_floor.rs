@@ -11,11 +11,12 @@ use tokio_postgres::{Config, NoTls};
 const DB: &str = "pgmi_rs_a_pg18_floor";
 
 fn pg17() -> Option<String> {
-    let conn = std::env::vars_os()
-        .find(|(k, _)| k == "PGMI_TEST_CONN_PG17")
-        .and_then(|(_, v)| v.into_string().ok())
-        .filter(|v| !v.is_empty());
+    let conn = common::var("PGMI_TEST_CONN_PG17");
     if conn.is_none() {
+        assert!(
+            common::var("PGMI_REQUIRE_DB").is_none(),
+            "PGMI_REQUIRE_DB is set but PGMI_TEST_CONN_PG17 (a PostgreSQL 17 server) is not"
+        );
         eprintln!("skipped: PGMI_TEST_CONN_PG17 (a PostgreSQL 17 server) is not set");
     }
     conn

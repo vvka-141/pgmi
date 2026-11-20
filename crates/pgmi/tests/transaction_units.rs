@@ -156,3 +156,18 @@ fn a_retry_keeps_what_an_earlier_attempt_committed_in_the_report() {
     let rows: i64 = db.client().one("SELECT count(*) FROM once_t", &[]);
     assert_eq!(rows, 1);
 }
+
+#[test]
+fn a_deploy_sql_that_ends_inside_an_open_transaction_fails_and_rolls_it_back() {
+    let Some(pg) = pg() else { return };
+    let db = pg.database("pgmi_rs_b_open_transaction");
+    deploy_project(
+        &pg,
+        "BEGIN;\nCOMMIT;\nBEGIN;\nCREATE TABLE left_open ();\n",
+        &[],
+        &db,
+    )
+    .fails(13)
+    .says("deploy.sql ended inside an open transaction");
+    assert!(!exists(&db.client(), "left_open"));
+}

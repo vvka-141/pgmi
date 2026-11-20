@@ -98,7 +98,7 @@ jobs:
           PGMI_REQUIRE_DB: '1'
         run: |
           cargo test --locked --workspace
-          cargo test --locked -p pgmi --features testhooks --test panic --test google_cloud_sql
+          cargo test --locked -p pgmi --features testhooks --test panic --test google_cloud_sql --test aws_credential_process_hang
 
   build:
     name: Build ${{ matrix.target }}
