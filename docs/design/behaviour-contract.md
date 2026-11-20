@@ -476,7 +476,8 @@ no host (`postgresql://u@:5433/db`), a colon and no port (`@h:/db`) or an `@`
 and no user, for a connection flag (`-h ''`, `-U ''`, `-d ''`, `--sslcert ''`,
 `--sslkey ''`, `--sslrootcert ''`), for a `PG*` connection variable,
 `PGMI_CONNECTION_STRING` and `DATABASE_URL`, and for a `pgmi.yaml` connection
-value. A variable or `pgmi.yaml` value is judged only where it would apply:
+value, also one written with no value (`sslmode:`, `sslmode: ~`,
+`sslmode: null`; PGMI-1109), where a missing key stays unset. A variable or `pgmi.yaml` value is judged only where it would apply:
 one that a nearer source replaces is not read. Not refused: a password
 (`password`, `sslpassword`, `PGPASSWORD`, `PGSSLPASSWORD`), where empty means
 none and white space is the password as written; a URI with no authority
@@ -485,7 +486,7 @@ empty `hostaddr` entry beside a host name, which looks that host up; a host
 without a port in a URI list beside one with a port, which is 5432. Go reads
 an empty value as unset and refuses white space in its own words (cases
 `connection/empty-value-refused`, `connection/empty-host-uses-pghost`,
-`connection/whitespace-host-refused`); ADO.NET text after a closing
+`connection/yaml-null-value-refused`, `connection/whitespace-host-refused`); ADO.NET text after a closing
 quote is dropped up to the next `;`; a keyword/value `connect_timeout` that is
 not a number is refused even when the key comes again with a number (any other
 repeated keyword takes its last value) (case `connection/empty-and-trailing-values`). `-d` (or `PGDATABASE`, or
@@ -1608,7 +1609,7 @@ release notes take their "Behaviour changes" section from this table.
 
 | Change | 0.14 (Go) | 0.20 (Rust) | Decided |
 |---|---|---|---|
-| A connection setting written empty or as white space only | an empty value is unset: the next source or the built-in default applies (localhost, 5432, `prefer`), also for `-h ''`, `PGHOST=`, `host=''`, `Host=;`, `?sslmode=`; only some forms are refused (`Port=;`, white space in a host or port) | refused before connecting, exit 10, naming the setting and where it was written: every key of a connection string in each form, a list entry, a connection flag, a `PG*` connection variable, `PGMI_CONNECTION_STRING`, `DATABASE_URL` and a `pgmi.yaml` connection value, each where it would apply. A password is not judged (empty is none) | owner 2026-11-16 (PGMI-1105; replaces the PGMI-1073 and PGMI-1094 rules) |
+| A connection setting written empty or as white space only | an empty value is unset: the next source or the built-in default applies (localhost, 5432, `prefer`), also for `-h ''`, `PGHOST=`, `host=''`, `Host=;`, `?sslmode=`; only some forms are refused (`Port=;`, white space in a host or port) | refused before connecting, exit 10, naming the setting and where it was written: every key of a connection string in each form, a list entry, a connection flag, a `PG*` connection variable, `PGMI_CONNECTION_STRING`, `DATABASE_URL` and a `pgmi.yaml` connection value, each where it would apply; a `pgmi.yaml` connection key written with no value (`host:`, `host: ~`, `host: null`), which Go reads as missing, is empty too (PGMI-1109), and a missing key stays unset. A password is not judged (empty is none). Cases: `connection/empty-value-refused`, `connection/yaml-null-value-refused` | owner 2026-11-16 (PGMI-1105; replaces the PGMI-1073 and PGMI-1094 rules) |
 | Whole-deployment retry | the first failure ends the run | a transient failure (class 08, a lost connection, 57P01 after a server restart, 57P02, 57P03, 53300, 40001, 40P01, 55P03, 25006 on a hot standby, a sign-in or connect retry that gave up) runs the deploy again from the start inside `--timeout`, once an attempt has reached the server (a first attempt that never connects fails at once, as in Go), waiting 1 s doubling to 30 s; once a unit has committed the failure is final, as in Go, unless `retry_after_commit: true` in `pgmi.yaml` allows a rerun (owner 2026-11-12, PGMI-918); a unit whose reply was lost is never retried (owner 2026-11-13, PGMI-970); `retry: false` turns retrying off; `--json` adds `attempts` (each with its `unitsCommitted`) and `timeUsedMs` | owner 2026-11-12 (record 0025) |
 | `sslmode=verify-ca` with no `sslrootcert` (the system trust store) | any certificate a trusted CA issued, for any host name | the host name is checked too, as in `verify-full`; with an explicit root file `verify-ca` checks no name, as before | owner 2026-11-12 (PGMI-923) |
 | project `.env` that starts with a UTF-8 byte-order mark | warning, none of it applied | applied, the mark ignored | owner 2026-11-12 (PGMI-943) |

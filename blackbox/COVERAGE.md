@@ -64,7 +64,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `serve` (Rust): a cloud sign-in keeps the operator's rules when the call types a password (aws, azure, google: another `sslrootcert` = 10 before any sign-in) | ✓ `serve/typed-password-keeps-cloud-rules` |
 | `serve`: an operator environment that does not resolve (Go starts; Rust does not start, 10) | ✓ `serve/operator-environment-must-resolve` |
 | a host, port or `hostaddr` of white space only, from every source = 10 | ✓ `connection/whitespace-host-refused` |
-| a connection setting written empty, from every source = 10 (Rust; Go reads it as unset) | ✓ `connection/empty-value-refused`, `connection/empty-host-uses-pghost` |
+| a connection setting written empty, from every source = 10 (Rust; Go reads it as unset) | ✓ `connection/empty-value-refused`, `connection/empty-host-uses-pghost`, `connection/yaml-null-value-refused` |
 | `init`: `{{PROJECT_NAME}}`, JSON-escaped in `.json` | ✓ `commands/init-project-name`; file modes 0644/0755 ✗ (the runner checks content only) |
 | `init`: next step shell-quotes the path | ✓ `commands/init-next-step-quoted` |
 | `pgmi` with no arguments; help instead of the banner under `CI` or `PGMI_NON_INTERACTIVE=1` | ✓ `commands/bare`, `commands/bare-not-interactive` |

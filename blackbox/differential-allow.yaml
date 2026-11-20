@@ -39,11 +39,11 @@ accept:
     field: json
     rust: "DATABASE_URL: unterminated \\["
   - row: A connection setting written empty or as white space only
-    case: cases/(connection/(empty-and-trailing-values|empty-host-uses-pghost|empty-value-refused)|errors/hints-kept)\.yaml
+    case: cases/(connection/(empty-and-trailing-values|empty-host-uses-pghost|empty-value-refused|yaml-null-value-refused)|errors/hints-kept)\.yaml
     field: db
     rust: <no database>
   - row: A connection setting written empty or as white space only
-    case: cases/(connection/(empty-and-trailing-values|empty-host-uses-pghost|empty-value-refused)|errors/hints-kept)\.yaml
+    case: cases/(connection/(empty-and-trailing-values|empty-host-uses-pghost|empty-value-refused|yaml-null-value-refused)|errors/hints-kept)\.yaml
     field: stderr
     rust: Database "\{db\}" does not exist; creating
   - row: '`hostaddr`'

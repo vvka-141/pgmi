@@ -1,0 +1,68 @@
+description: a pgmi.yaml connection key written with no value (nothing after the colon, ~ or null) is refused before connecting by the Rust binary (exit 10), naming the key and pgmi.yaml, as an empty value is, instead of being read as unset (PGMI-1109, under the PGMI-1105 rule). Go reads each as unset and deploys with the built-in default (sslmode prefer, no root certificate, maintenance database postgres), so Go exits 0; a database written null is refused by both, by Go as missing
+project:
+  files:
+    deploy.sql: SELECT 1;
+    sslmode/deploy.sql: SELECT 1;
+    sslmode/pgmi.yaml: |
+      connection:
+        host: "{host}"
+        port: {port}
+        username: "{user}"
+        database: "{db}"
+        sslmode:
+    rootcert/deploy.sql: SELECT 1;
+    rootcert/pgmi.yaml: |
+      connection:
+        host: "{host}"
+        port: {port}
+        username: "{user}"
+        database: "{db}"
+        sslrootcert: ~
+    maintenance/deploy.sql: SELECT 1;
+    maintenance/pgmi.yaml: |
+      connection:
+        host: "{host}"
+        port: {port}
+        username: "{user}"
+        database: "{db}"
+        maintenance_database: null
+    database/deploy.sql: SELECT 1;
+    database/pgmi.yaml: |
+      connection:
+        host: "{host}"
+        port: {port}
+        username: "{user}"
+        database:
+steps:
+  - pgmi: ["deploy", "{project}/sslmode"]
+    env: {"PGPASSWORD": "{password}"}
+    expect:
+      exit: 0
+      rust:
+        exit: 10
+        stdout_not: ['^ok ']
+        stderr: ['^pgmi: error: the sslmode from pgmi\.yaml is empty; write the sslmode, or remove it so the next source applies$']
+  - pgmi: ["deploy", "{project}/rootcert"]
+    env: {"PGPASSWORD": "{password}"}
+    expect:
+      exit: 0
+      rust:
+        exit: 10
+        stdout_not: ['^ok ']
+        stderr: ['^pgmi: error: the sslrootcert from pgmi\.yaml is empty; write the sslrootcert, or remove it so the next source applies$']
+  - pgmi: ["deploy", "{project}/maintenance"]
+    env: {"PGPASSWORD": "{password}"}
+    expect:
+      exit: 0
+      rust:
+        exit: 10
+        stdout_not: ['^ok ']
+        stderr: ['^pgmi: error: the maintenance_database from pgmi\.yaml is empty; write the maintenance_database, or remove it so the next source applies$']
+  - pgmi: ["deploy", "{project}/database"]
+    env: {"PGPASSWORD": "{password}"}
+    expect:
+      exit: 10
+      rust:
+        exit: 10
+        stdout_not: ['^ok ']
+        stderr: ['^pgmi: error: the dbname from pgmi\.yaml is empty; write the dbname, or remove it so the next source applies$']

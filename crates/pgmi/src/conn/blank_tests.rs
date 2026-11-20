@@ -437,6 +437,43 @@ fn every_pgmi_yaml_value_written_empty_or_blank_is_refused_where_it_would_apply(
 }
 
 #[test]
+fn a_pgmi_yaml_connection_value_written_null_is_refused_as_empty() {
+    let base = [
+        ("host", "yamlhost"),
+        ("username", "yamluser"),
+        ("database", "yamldb"),
+        ("sslmode", "require"),
+    ];
+    let mut failures = Vec::new();
+    for (yaml_key, key) in [
+        ("host", "host"),
+        ("username", "user"),
+        ("database", "dbname"),
+        ("maintenance_database", "maintenance_database"),
+        ("sslmode", "sslmode"),
+        ("sslcert", "sslcert"),
+        ("sslkey", "sslkey"),
+        ("sslrootcert", "sslrootcert"),
+    ] {
+        for null in ["", " ~", " null"] {
+            let mut text = String::from("connection:\n");
+            for (k, v) in base.iter().filter(|(k, _)| *k != yaml_key) {
+                let _ = writeln!(text, "  {k}: {v}");
+            }
+            let _ = writeln!(text, "  {yaml_key}:{null}");
+            let y = crate::config::yaml::ProjectConfig::parse(&text)
+                .unwrap_or_else(|e| panic!("{text:?}: {e}"))
+                .connection;
+            let r = resolve(&Flags::default(), &Env::default(), Some(&y));
+            if let Err(e) = is_blank(&r, key, "pgmi.yaml", Blank::Empty) {
+                failures.push(format!("{text:?}: {e}"));
+            }
+        }
+    }
+    none(&failures);
+}
+
+#[test]
 fn an_empty_or_blank_entry_in_a_host_or_port_list_is_refused() {
     let mut failures = Vec::new();
     for (key, text, how) in [

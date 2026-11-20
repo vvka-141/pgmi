@@ -21,20 +21,29 @@ pub(crate) struct ProjectConfig {
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Connection {
+    #[serde(default, deserialize_with = "null_is_blank")]
     pub(crate) host: Option<String>,
+    #[serde(default, deserialize_with = "null_is_blank")]
     pub(crate) port: Option<String>,
+    #[serde(default, deserialize_with = "null_is_blank")]
     pub(crate) username: Option<String>,
+    #[serde(default, deserialize_with = "null_is_blank")]
     pub(crate) database: Option<String>,
+    #[serde(default, deserialize_with = "null_is_blank")]
     pub(crate) maintenance_database: Option<String>,
+    #[serde(default, deserialize_with = "null_is_blank")]
     pub(crate) sslmode: Option<String>,
     /// The line of `sslmode:` in the block form, for error messages.
     #[serde(skip)]
     pub(crate) sslmode_line: Option<usize>,
+    #[serde(default, deserialize_with = "null_is_blank")]
     pub(crate) sslcert: Option<String>,
+    #[serde(default, deserialize_with = "null_is_blank")]
     pub(crate) sslkey: Option<String>,
+    #[serde(default, deserialize_with = "null_is_blank")]
     pub(crate) sslrootcert: Option<String>,
     /// `auth_method` as written; `parse` turns it into `auth_method`.
-    #[serde(rename = "auth_method")]
+    #[serde(rename = "auth_method", default, deserialize_with = "null_is_blank")]
     pub(crate) auth_method_text: Option<String>,
     #[serde(skip)]
     pub(crate) auth_method: Option<Provider>,
@@ -50,6 +59,10 @@ where
     T: Default + Deserialize<'de>,
 {
     Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
+
+fn null_is_blank<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<String>, D::Error> {
+    Ok(Some(Option::<String>::deserialize(d)?.unwrap_or_default()))
 }
 
 /// A port as Go's YAML reads an integer: `5432.0`, `0x1538` and `5_432`
@@ -388,6 +401,46 @@ mod tests {
         let e = Error::from(ProjectConfig::parse("connection:\n  port: \"\"\n").unwrap_err());
         assert_eq!(e.exit_code(), 10);
         assert!(e.text().contains("port"), "{}", e.text());
+    }
+
+    #[test]
+    fn a_connection_key_written_null_is_blank_and_a_missing_key_unset() {
+        type Get = fn(&Connection) -> &Option<String>;
+        let fields: [(&str, Get); 9] = [
+            ("host", |c| &c.host),
+            ("port", |c| &c.port),
+            ("username", |c| &c.username),
+            ("database", |c| &c.database),
+            ("maintenance_database", |c| &c.maintenance_database),
+            ("sslmode", |c| &c.sslmode),
+            ("sslcert", |c| &c.sslcert),
+            ("sslkey", |c| &c.sslkey),
+            ("sslrootcert", |c| &c.sslrootcert),
+        ];
+        for (key, get) in fields {
+            for null in ["", " ~", " null"] {
+                let text = format!("connection:\n  {key}:{null}\n");
+                if key == "port" {
+                    let e = Error::from(ProjectConfig::parse(&text).unwrap_err());
+                    assert_eq!(e.exit_code(), 10, "{text:?}");
+                    assert!(
+                        e.text().contains("pgmi.yaml") && e.text().contains("port"),
+                        "{text:?}: {}",
+                        e.text()
+                    );
+                    continue;
+                }
+                let cfg = ProjectConfig::parse(&text).unwrap_or_else(|e| panic!("{text:?}: {e}"));
+                assert_eq!(get(&cfg.connection).as_deref(), Some(""), "{text:?}");
+            }
+            let cfg = ProjectConfig::parse("connection:\n  aws_region: r\n").unwrap();
+            assert_eq!(get(&cfg.connection), &None, "{key} missing");
+        }
+        let e = Error::from(ProjectConfig::parse("connection:\n  auth_method:\n").unwrap_err());
+        assert_eq!(
+            e.text(),
+            "failed to load pgmi.yaml: auth_method \"\" is not one of azure, aws, google (omit it for password authentication)"
+        );
     }
 
     #[test]
