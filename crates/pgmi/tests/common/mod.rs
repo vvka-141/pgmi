@@ -6,8 +6,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use tokio::runtime::Runtime;
+use tokio_postgres::error::SqlState;
 use tokio_postgres::types::{FromSqlOwned, ToSql};
 use tokio_postgres::{Config, NoTls, Row};
 
@@ -98,12 +100,46 @@ impl Db {
 
     fn drop_database(&self) {
         let admin = Client::connect(&self.conn, None);
-        admin
-            .batch(&format!(
-                "DROP DATABASE IF EXISTS {} WITH (FORCE)",
-                ident(&self.name)
-            ))
-            .expect("drop test database");
+        if let Err(e) = drop_retrying(&admin, &self.name, 10, Duration::from_secs(1)) {
+            panic!("drop test database: {e}");
+        }
+    }
+}
+
+pub fn drop_retrying(
+    admin: &Client,
+    name: &str,
+    tries: u32,
+    pause: Duration,
+) -> Result<(), String> {
+    let sql = format!("DROP DATABASE IF EXISTS {} WITH (FORCE)", ident(name));
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let Err(e) = admin.batch(&sql) else {
+            return Ok(());
+        };
+        if e.code() != Some(&SqlState::OBJECT_IN_USE) {
+            return Err(describe(&e));
+        }
+        if attempt >= tries {
+            let sessions = admin
+                .try_query(
+                    "SELECT coalesce(string_agg(format('pid %s user %s application %s backend %s', \
+                     pid, usename, application_name, backend_type), '; ' ORDER BY pid), 'none') \
+                     FROM pg_stat_activity WHERE datname = $1",
+                    &[&name],
+                )
+                .map_or_else(
+                    |q| format!("pg_stat_activity: {}", describe(&q)),
+                    |rows| rows[0].get(0),
+                );
+            return Err(format!(
+                "{} after {attempt} tries; sessions still connected: {sessions}",
+                describe(&e)
+            ));
+        }
+        std::thread::sleep(pause);
     }
 }
 
