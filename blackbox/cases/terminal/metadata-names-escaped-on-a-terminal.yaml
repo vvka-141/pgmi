@@ -1,0 +1,28 @@
+description: on a terminal metadata plan and scaffold show a file name or sort key holding ESC or a bidirectional control escaped, so it cannot recolour the terminal or read backwards; piped, stdout keeps the names as they are (case commands/metadata-names-escaped-on-stderr). Go prints them raw on a terminal too (Rust, contract "On stderr the Rust binary shows ... escaped", PGMI-1136)
+project:
+  files:
+    "sub/b_esc\e[31mred.sql": SELECT 2;
+    "sub/c_fi‮le.sql": SELECT 3;
+steps:
+  - pgmi: [metadata, plan, "{project}"]
+    tty: true
+    timeout: 30
+    expect:
+      exit: 0
+      stdout: ['b_esc.*red\.sql', 'c_fi.*le\.sql']
+      rust:
+        exit: 0
+        stdout: ['\./sub/b_esc\\x1b\[31mred\.sql', '\./sub/c_fi\\u\{202e\}le\.sql']
+        raw: ['b_esc\\x1b\[31mred\.sql']
+        raw_not: ["\x1b", "‮"]
+  - pgmi: [metadata, scaffold, "{project}", --sort-key, ./]
+    tty: true
+    timeout: 30
+    expect:
+      exit: 0
+      stdout: ['b_esc.*red\.sql', 'c_fi.*le\.sql']
+      rust:
+        exit: 0
+        stdout: ['\./sub/b_esc\\x1b\[31mred\.sql', '\./sub/c_fi\\u\{202e\}le\.sql']
+        raw: ['b_esc\\x1b\[31mred\.sql']
+        raw_not: ["\x1b", "‮"]

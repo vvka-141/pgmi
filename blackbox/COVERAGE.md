@@ -120,6 +120,7 @@ The behaviour contract (PGMI-828) maps each row to a section.
 | `PGSSLSNI`, `PGSSLCERTMODE`, `PGMINPROTOCOLVERSION`, `PGMAXPROTOCOLVERSION` (invalid = 10) | ✓ `env/pg-tls-protocol-variables` |
 | `NO_COLOR`, `PGMI_NO_BANNER`, `CI`, `PGMI_NON_INTERACTIVE` (on a terminal); `ok`/`FAILED` under `NO_COLOR` | ✓ `terminal/colors`, `terminal/no-color-words`, `terminal/force-banner`, `terminal/non-interactive`; `TERM=dumb` ✗ (the runner sets `TERM` for a terminal step) |
 | no terminal queries outside the wizards | ✓ `terminal/no-terminal-queries` |
+| `metadata plan` and `scaffold` names: escaped on a terminal stdout, raw when piped, escaped on stderr | ✓ `terminal/metadata-names-escaped-on-a-terminal`, `commands/metadata-names-escaped-on-stderr` |
 | `PGMI_PAGER`, `PAGER`, `PGMI_PAGER=cat` (on a terminal); split without a shell, default `less -R`, a pager that cannot start; no pager under `CI` or `PGMI_NON_INTERACTIVE=1` | ✓ `terminal/pager`, `terminal/pager-command`, `terminal/pager-not-interactive` |
 | `PGMI_MAX_FILE_SIZE` (cap, not a number = 10) | ✓ `commands/metadata-refusals` |
 | `IDENTITY_ENDPOINT`/`IDENTITY_HEADER`, `AWS_REGION`, `AWS_DEFAULT_REGION`, `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` | ✓ `cloud/*`; `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET` ✗ (they only reach Entra, see Cloud sign-in) |

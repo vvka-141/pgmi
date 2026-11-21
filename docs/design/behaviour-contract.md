@@ -755,9 +755,13 @@ line are unchanged, and the `--json` record keeps the original text. Go
 prints them raw, as psql does (PGMI-1002; cases `notices/escape-sequences`,
 `errors/escape-sequences`). The same holds for every other command's stderr
 lines (`metadata`, `config`, `init`: "Written to", "Wrote", warnings; case
-`commands/metadata-names-escaped-on-stderr`, PGMI-1056). stdout is data and
-keeps names as they are (`metadata plan` and `scaffold` tables, `--json`), as
-in Go.
+`commands/metadata-names-escaped-on-stderr`, PGMI-1056). stdout keeps names
+as they are when it is not a terminal (a pipe or a file): the `metadata plan`
+and `scaffold` tables and `--json` are data, as in Go (case
+`commands/metadata-names-escaped-on-stderr`). When stdout is a terminal, the
+file names and sort keys in those two tables are escaped the same way, as GNU
+`ls` quotes names on a terminal only; Go prints them raw there too
+(PGMI-1136, case `terminal/metadata-names-escaped-on-a-terminal`).
 
 Cases: `errors/refused-before-deploy-no-summary`, `errors/refusal-wording`, `notices/streaming`, `notices/severity`, `notices/deploy-sql-message-level`, `commands/verbose`, `terminal/colors`, `notices/summary-line`, `notices/secrets-redacted`, `execution/pgmi-test-without-tests`, `execution/setup-psql-fixture`, `terminal/no-color-words`.
 
@@ -1769,6 +1773,7 @@ release notes take their "Behaviour changes" section from this table.
 | A failure to connect to the maintenance database | `maintenance database: connect to "<db>": ...` | `connect to "<db>": ...`; exit codes unchanged | owner 2026-11-13 (PGMI-973): wording only, the line names the database |
 | Refusal order: a `pgmi.yaml` port that is not a number, or a quoted one, and no database | the port (`cannot unmarshal !!str ... into int`) | the missing database; with a database, `invalid port "x" from pgmi.yaml connection.port: want a number from 1 to 65535`, naming `PGPORT` instead when that variable wrote the port (a quoted number is accepted, row above); exit 10 both | owner 2026-11-13 (PGMI-973): wording only; the source named in PGMI-1100 |
 | A database name holding `"` or `\` in the `--overwrite` lines and the `does not exist; creating` line | Go-escaped (`"o2\"x"`) | as written between double quotes | owner 2026-11-13 (PGMI-973): wording only |
+| `metadata plan` and `metadata scaffold` on a terminal: a file name or sort key holding a control character or a bidirectional control | printed raw, so it can recolour the terminal or read backwards | escaped as on stderr (`\x1b`, `\u{202e}`); piped or redirected stdout keeps the names as they are, as in Go (case `terminal/metadata-names-escaped-on-a-terminal`) | agent 2026-11-21 (PGMI-1136) |
 | A project file over `PGMI_MAX_FILE_SIZE` | `failed to read ./lib/a.sql: file lib/a.sql is N bytes, ...` | `failed to read ./lib/a.sql: file a.sql is N bytes, ...`: the prefix names the path | owner 2026-11-13 (PGMI-973): wording only |
 
 No case of its own: each row's section above names its cases or its Rust unit

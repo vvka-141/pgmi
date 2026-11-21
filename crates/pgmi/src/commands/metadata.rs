@@ -1,5 +1,7 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -9,7 +11,7 @@ use crate::cli::{MetadataArgs, MetadataCommand, MetadataReport, ScaffoldArgs};
 use crate::config::edit::write_atomic;
 use crate::env::Env;
 use crate::error::{Error, Result};
-use crate::output::Reporter;
+use crate::output::{Reporter, printable};
 use crate::project::metadata::{self, Meta, MetaError};
 use crate::project::walk::{self, File, is_sql};
 
@@ -121,15 +123,26 @@ fn plan(r: &MetadataReport, env: &Env) -> Result<()> {
     if r.json {
         return json(&plan);
     }
+    stdout(&plan_table(&plan.plan, std::io::stdout().is_terminal()))
+}
+
+fn shown(text: &str, terminal: bool) -> Cow<'_, str> {
+    if terminal {
+        printable(text)
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
+fn plan_table(rows: &[Row], terminal: bool) -> String {
     let header = ["ORDER", "SORT KEY", "PATH"];
-    let cells: Vec<[String; 3]> = plan
-        .plan
+    let cells: Vec<[String; 3]> = rows
         .iter()
         .map(|r| {
             [
                 r.execution_order.to_string(),
-                r.sort_key.clone(),
-                r.path.clone(),
+                shown(&r.sort_key, terminal).into_owned(),
+                shown(&r.path, terminal).into_owned(),
             ]
         })
         .collect();
@@ -147,7 +160,7 @@ fn plan(r: &MetadataReport, env: &Env) -> Result<()> {
         "{:<w0$}{:<w1$}{:<w2$}IDEMPOTENT\n",
         header[0], header[1], header[2]
     );
-    for (c, row) in cells.iter().zip(&plan.plan) {
+    for (c, row) in cells.iter().zip(rows) {
         let note = if row.is_sql_file { "" } else { "  (not SQL)" };
         let _ = writeln!(
             text,
@@ -155,7 +168,7 @@ fn plan(r: &MetadataReport, env: &Env) -> Result<()> {
             c[0], c[1], c[2], row.idempotent
         );
     }
-    stdout(&text)
+    text
 }
 
 #[derive(Serialize)]
@@ -310,6 +323,20 @@ fn xml_escape(s: &str) -> String {
     out
 }
 
+fn scaffold_entry(
+    path: &str,
+    id: &str,
+    key: Option<&str>,
+    idempotent: bool,
+    terminal: bool,
+) -> String {
+    format!(
+        "  {}\n    ID: {id}\n    Sort key: {}\n    Idempotent: {idempotent}\n",
+        shown(path, terminal),
+        shown(key.unwrap_or("(none, path order)"), terminal)
+    )
+}
+
 /// A `<pgmi-meta>` block; without a key the file keeps its path order.
 pub(crate) fn block(id: &str, idempotent: bool, description: &str, key: Option<&str>) -> String {
     let keys = key.map_or_else(String::new, |k| {
@@ -418,13 +445,15 @@ fn scaffold(a: &ScaffoldArgs, env: &Env) -> Result<()> {
         "Found {} file(s) without metadata:\n\n",
         todo.len()
     ));
+    let terminal = std::io::stdout().is_terminal();
     for (f, key) in todo.iter().zip(&keys) {
         let id = uuid::Uuid::new_v4().hyphenated().to_string();
-        stdout(&format!(
-            "  {}\n    ID: {id}\n    Sort key: {}\n    Idempotent: {}\n",
-            f.path,
-            key.as_deref().unwrap_or("(none, path order)"),
-            a.idempotent
+        stdout(&scaffold_entry(
+            &f.path,
+            &id,
+            key.as_deref(),
+            a.idempotent,
+            terminal,
         ))?;
         if a.write {
             let file = root.join(f.path.trim_start_matches("./"));
@@ -458,6 +487,55 @@ fn with_block(file: &Path, block: &str, content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn row(path: &str, sort_key: &str) -> Row {
+        Row {
+            execution_order: 1,
+            path: path.into(),
+            sort_key: sort_key.into(),
+            id: "id".into(),
+            idempotent: true,
+            description: String::new(),
+            is_sql_file: true,
+        }
+    }
+
+    #[test]
+    fn names_on_a_terminal_are_escaped_in_the_scaffold_list_and_the_plan() {
+        let name = "./sub/a_esc\u{1b}[31mred_fi\u{202e}le.sql";
+        let entry = scaffold_entry(name, "id", Some("./k\u{1b}]0;t\u{7}"), true, true);
+        assert!(
+            !entry.contains(['\u{1b}', '\u{7}', '\u{202e}']),
+            "{entry:?}"
+        );
+        assert!(
+            entry.contains("a_esc\\x1b[31mred_fi\\u{202e}le.sql"),
+            "{entry:?}"
+        );
+        assert!(entry.contains("./k\\x1b]0;t\\x07"), "{entry:?}");
+        let table = plan_table(&[row(name, "./k\u{1b}]0;t\u{7}")], true);
+        assert!(
+            !table.contains(['\u{1b}', '\u{7}', '\u{202e}']),
+            "{table:?}"
+        );
+        assert!(
+            table.contains("a_esc\\x1b[31mred_fi\\u{202e}le.sql"),
+            "{table:?}"
+        );
+        assert!(table.contains("./k\\x1b]0;t\\x07"), "{table:?}");
+    }
+
+    #[test]
+    fn names_off_a_terminal_are_written_as_they_are() {
+        let name = "./sub/a_esc\u{1b}[31mred_fi\u{202e}le.sql";
+        let key = "./k\u{1b}]0;t\u{7}";
+        assert_eq!(
+            scaffold_entry(name, "id", Some(key), true, false),
+            format!("  {name}\n    ID: id\n    Sort key: {key}\n    Idempotent: true\n")
+        );
+        let table = plan_table(&[row(name, key)], false);
+        assert!(table.contains(name) && table.contains(key), "{table:?}");
+    }
 
     #[test]
     fn a_character_xml_forbids_becomes_the_replacement_character() {
