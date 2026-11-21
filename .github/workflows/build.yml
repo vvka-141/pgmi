@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'agent/sprint']
     paths: ['crates/**', 'fuzz/**', 'packaging/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'deny.toml', '.github/workflows/build.yml']
   workflow_dispatch:
 
