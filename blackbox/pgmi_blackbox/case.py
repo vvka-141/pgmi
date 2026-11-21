@@ -64,6 +64,7 @@ class Step:
     expect: Expect
     read_rate: float | None = None
     unset_env: tuple[str, ...] = ()
+    settle: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -420,6 +421,7 @@ def _step(r: _Reader, value: Any, field: str) -> Step:
             "binary",
             "tty",
             "read_rate",
+            "settle",
             "expect",
         },
     )
@@ -440,6 +442,9 @@ def _step(r: _Reader, value: Any, field: str) -> Step:
     read_rate = r.number(value["read_rate"], f"{field}.read_rate") if "read_rate" in value else None
     if read_rate is not None and (read_rate == 0 or value.get("tty") or args is None):
         raise r.fail(f"{field}.read_rate", "is a positive number of bytes per second, for a pgmi step without tty")
+    settle = r.number(value["settle"], f"{field}.settle") if "settle" in value else None
+    if settle == 0:
+        raise r.fail(f"{field}.settle", "is a positive number of seconds")
     return Step(
         args=args,
         sql=sql,
@@ -456,6 +461,7 @@ def _step(r: _Reader, value: Any, field: str) -> Step:
         expect=_expect(r, value.get("expect", {}), f"{field}.expect", pgmi=args is not None),
         read_rate=read_rate,
         unset_env=r.strings(value.get("unset_env", []), f"{field}.unset_env"),
+        settle=settle,
     )
 
 

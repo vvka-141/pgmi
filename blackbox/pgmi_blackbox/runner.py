@@ -143,6 +143,8 @@ def play(case: Case, ws: Workspace, observe: Callable[[str, Step, "Outcome | Non
             label = f"steps[{i}]"
             if step.delay:
                 time.sleep(step.delay)
+            if step.settle:
+                settle(ws, label, step.settle)
             if proxy:
                 proxy.step = i
             if step.sql is not None:
@@ -162,6 +164,30 @@ def play(case: Case, ws: Workspace, observe: Callable[[str, Step, "Outcome | Non
             proxy.stop()
         _unlock_dirs(case, ws)
         _drop(ws)
+
+
+def settle(ws: Workspace, label: str, seconds: float) -> None:
+    """Waits until no client session is connected to the case's database (PGMI-1138)."""
+    with ws.server.connect() as c:
+        left = wait_gone(
+            lambda: c.execute(
+                "SELECT pid, state, left(query, 200) FROM pg_stat_activity"
+                " WHERE datname = %s AND backend_type = 'client backend' AND pid <> pg_backend_pid()",
+                (ws.database,),
+            ).fetchall(),
+            seconds,
+        )
+    if left:
+        raise AssertionError(
+            f"{label}: settle: still connected to {ws.database} after {seconds}s:\n" + "\n".join(str(r) for r in left)
+        )
+
+
+def wait_gone(sessions: Callable[[], list], seconds: float, poll: float = 0.1) -> list:
+    deadline = time.monotonic() + seconds
+    while (left := sessions()) and time.monotonic() < deadline:
+        time.sleep(poll)
+    return left
 
 
 def _drop(ws: Workspace) -> None:

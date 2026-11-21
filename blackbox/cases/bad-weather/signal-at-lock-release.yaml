@@ -18,7 +18,7 @@ steps:
         - query: SELECT count(*) FROM marker
           rows: [[1]]
   - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
-    delay: 4
+    settle: 10
     expect:
       exit: 0
       sql:

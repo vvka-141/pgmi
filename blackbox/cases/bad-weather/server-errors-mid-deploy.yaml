@@ -33,7 +33,7 @@ steps:
           - query: SELECT to_regclass('marker') IS NULL
             rows: [[true]]
   - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
-    delay: 1
+    settle: 10
     expect:
       exit: 13
       stderr: ["ERROR: cannot execute INSERT in a read-only transaction \\(SQLSTATE 25006\\)"]

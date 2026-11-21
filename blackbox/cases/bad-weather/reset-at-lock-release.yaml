@@ -23,7 +23,7 @@ steps:
         - query: SELECT coalesce(string_agg(phase, ',' ORDER BY ctid), '') FROM marker
           rows: [["head,tail-1,tail-2"]]
   - pgmi: [deploy, "{project}", --connection, "{proxy_conn}", -d, "{db}"]
-    delay: 1
+    settle: 10
     expect:
       exit: 0
       sql:

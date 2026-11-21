@@ -248,3 +248,13 @@ def test_a_bad_fault_is_refused_by_field(rule, field):
 def test_a_proxy_plan_is_a_list():
     with pytest.raises(CaseError, match="proxy: must be a list"):
         parse_case("cases/x.yaml", {**MINIMAL, "proxy": {"at": "accept"}})
+
+
+def test_settle_is_a_positive_number_of_seconds():
+    doc = {**MINIMAL, "steps": [{"pgmi": ["deploy"], "settle": 10, "expect": {"exit": 0}}]}
+    assert parse_case("cases/x.yaml", doc).steps[0].settle == 10.0
+    assert parse_case("cases/x.yaml", MINIMAL).steps[0].settle is None
+    for bad in (0, -1, "10", True):
+        step = {"pgmi": ["deploy"], "settle": bad, "expect": {"exit": 0}}
+        with pytest.raises(CaseError, match=r"steps\[0\]\.settle:"):
+            parse_case("cases/x.yaml", {**MINIMAL, "steps": [step]})

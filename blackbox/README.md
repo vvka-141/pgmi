@@ -53,6 +53,8 @@ steps:
                                    # {text: "...", times: n} and {hex: "ff0a", times: n} (no newline added)
     cwd: "{project}"               # optional: working directory (default {workdir})
     delay: 0                       # optional: seconds to wait before starting
+    settle: 10                     # optional: then wait up to that many seconds until no client session
+                                   # is connected to {db} (an earlier step's killed or reset backend); fails if one stays
     background: false              # optional: true checks it after the last step
     signal: {name: SIGINT, after: 3}  # optional, tty too; or a list, each `after` counted from the start
     timeout: 120                   # optional: seconds before the step fails
@@ -150,7 +152,10 @@ step. The proxy answers an SSLRequest with `N` itself, or with the byte of an `a
 
 A server stays busy after its client vanishes until its statement ends: a
 case that resets a running statement sets `client_connection_check_interval`
-in `deploy.sql` so the orphan ends at once.
+in `deploy.sql` so the orphan ends at once. Even then it ends, and frees the
+deploy lock, only once the server notices, which under load can be after the
+next step starts: a deploy step after a reset, a FATAL or a signal sets
+`settle`, or it can exit 15.
 
 `COVERAGE.md` lists every behaviour and the case that checks it. A new case
 updates its row.
